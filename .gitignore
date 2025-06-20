@@ -1,0 +1,89 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Database files
+postgres-data/
+synapse-data/*.db
+synapse-data/*.db-shm
+synapse-data/*.db-wal
+synapse-data/homeserver.db*
+
+# Log files
+*.log
+*.log.*
+synapse-data/*.log
+synapse-data/*.log.*
+
+# Media store
+synapse-data/media_store/
+
+# Security sensitive files
+synapse-data/*.signing.key
+*.key
+*.pem
+*.crt
+
+# Session stores
+matrix_store/
+
+# Runtime data
+mcp_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker volumes (if needed)
+volumes/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

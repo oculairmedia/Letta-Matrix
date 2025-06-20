@@ -1,0 +1,14 @@
+id: gmessages
+url: http://mautrix-gmessages:29336
+as_token: TigM8WUqqeURX22h3QUITJuVFi7j2SySUzFT6zxj1dn0ASecNRrcoLgLXKu1sQmR
+hs_token: QDAS4U7p1jabcCCirJ5n8mvUkdozTWDEzK3KX6e93J9nv5DnbE5g0YbOBlTuecbn
+sender_localpart: OFIxWJm9uwgOfM4LAO96uoClVu3jrr9f
+rate_limited: false
+namespaces:
+    users:
+        - regex: ^@gmessagesbot:matrix\.oculair\.ca$
+          exclusive: true
+        - regex: ^@gmessages_.*:matrix\.oculair\.ca$
+          exclusive: true
+de.sorunome.msc2409.push_ephemeral: true
+receive_ephemeral: true

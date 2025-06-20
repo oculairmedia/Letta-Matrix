@@ -1,0 +1,36 @@
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libffi-dev \
+    libssl-dev \
+    libolm-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application files
+COPY custom_matrix_client.py .
+COPY matrix_auth.py .
+
+# Create directory for matrix store (session persistence)
+RUN mkdir -p /app/matrix_store
+
+# Set environment variables with defaults
+ENV MATRIX_HOMESERVER_URL=http://synapse:8008
+ENV MATRIX_USERNAME=@letta:matrix.oculair.ca
+ENV MATRIX_PASSWORD=letta
+ENV MATRIX_ROOM_ID=!LWmNEJcwPwVWlbmNqe:matrix.oculair.ca
+ENV LETTA_API_URL=https://letta.oculair.ca
+ENV LETTA_TOKEN=lettaSecurePass123
+ENV LETTA_AGENT_ID=agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444
+
+# Run the application
+CMD ["python", "custom_matrix_client.py"]

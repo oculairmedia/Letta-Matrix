@@ -1,0 +1,70 @@
+# Configuration file for Synapse.
+#
+# This is a YAML file: see [1] for a quick introduction. Note in particular
+# that *indentation is important*: all the elements of a list or dictionary
+# should have the same indentation.
+#
+# [1] https://docs.ansible.com/ansible/latest/reference_appendices/YAMLSyntax.html
+#
+# For more information on how to configure Synapse, including a complete accounting of
+# each option, go to docs/usage/configuration/config_documentation.md or
+# https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html
+server_name: "matrix.oculair.ca"
+pid_file: /data/homeserver.pid
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    resources:
+      - names: [client, federation]
+        compress: false
+database:
+  name: sqlite3
+  args:
+    database: /data/homeserver.db
+log_config: "/data/matrix.oculair.ca.log.config"
+media_store_path: /data/media_store
+registration_shared_secret: "-XBDVT.:eZhMLVM_#Jt*@WQhehHQvIWf^4+7XSA2v;J6Mp:GK@"
+report_stats: false
+macaroon_secret_key: "71ceZWcfFyDH.FO3Hzm78e6E#k#KGi*r+n7~iHOf..3=#;RvJ6"
+form_secret: "3JBV^nqBM#tIw@dN~FrzaX56z7HhOffCcdpBKE3fZrakb@6b;q"
+signing_key_path: "/data/matrix.oculair.ca.signing.key"
+trusted_key_servers:
+  - server_name: "matrix.org"
+
+# Application services
+app_service_config_files:
+  - /data/gmessages-registration.yaml
+
+# vim:ft=yaml
+enable_registration_without_verification: true
+
+# Rate limiting configuration
+rc_login:
+  # The rate limiting for login attempts
+  address:
+    per_second: 1  # Default is 0.003 (1 attempt per ~5 minutes)
+    burst_count: 10  # Default is 3
+  account:
+    per_second: 1  # Default is 0.003
+    burst_count: 10  # Default is 3
+  failed_attempts:
+    per_second: 0.5  # Default is 0.17
+    burst_count: 10  # Default is 3
+
+rc_registration:
+  per_second: 1  # Default is 0.17
+  burst_count: 5  # Default is 3
+
+rc_message:
+  per_second: 10  # Default is 0.2
+  burst_count: 50  # Default is 10
+
+rc_joins:
+  local:
+    per_second: 1  # Default is 0.1
+    burst_count: 10  # Default is 3
+  remote:
+    per_second: 1  # Default is 0.01
+    burst_count: 10  # Default is 3

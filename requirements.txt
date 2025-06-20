@@ -1,0 +1,20 @@
+# Matrix client dependencies
+matrix-nio[e2e]==0.20.2
+aiohttp==3.9.1
+
+# OpenWebUI API client
+requests>=2.31.0
+
+# Configuration management
+python-dotenv>=1.0.0
+
+# Additional dependencies that might be needed
+asyncio-mqtt==0.16.1
+
+# Letta SDK dependency - using latest available version
+letta-client==0.1.146
+
+# FastAPI dependencies for matrix-api
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic>=2.0.0
