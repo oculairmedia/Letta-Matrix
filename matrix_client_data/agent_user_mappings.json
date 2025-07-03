@@ -1,0 +1,38 @@
+{
+  "agent-a045de2a-9a2d-4626-bc96-e7f88b889dfb": {
+    "agent_id": "agent-a045de2a-9a2d-4626-bc96-e7f88b889dfb",
+    "agent_name": "scratch-agent-agent-1750962699328",
+    "matrix_user_id": "@scratch-agent-agent-1750962699328:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!jYyKTgDilZnRBnWJVb:matrix.oculair.ca",
+    "room_created": true
+  },
+  "agent-d55ba7a0-3069-4935-9532-73d1ea0ffced": {
+    "agent_id": "agent-d55ba7a0-3069-4935-9532-73d1ea0ffced",
+    "agent_name": "companion-agent-1750627149301-sleeptime",
+    "matrix_user_id": "@companion-agent-1750627149301-sleeptime:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!dTnywYeONAnPELoVlt:matrix.oculair.ca",
+    "room_created": true
+  },
+  "agent-e54fc601-4773-4116-9c6c-cf45da2e269e": {
+    "agent_id": "agent-e54fc601-4773-4116-9c6c-cf45da2e269e",
+    "agent_name": "Meridian",
+    "matrix_user_id": "@meridian:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!McvskatgCtMPkwQGsI:matrix.oculair.ca",
+    "room_created": true
+  },
+  "agent-82c1777f-03e0-4796-b734-9b597a743f7d": {
+    "agent_id": "agent-82c1777f-03e0-4796-b734-9b597a743f7d",
+    "agent_name": "character-roleplay-agent-agent-1751564119072",
+    "matrix_user_id": "@character-roleplay-agent-agent-1751564119072:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!jaPhmFMnoHvsJyexXA:matrix.oculair.ca",
+    "room_created": true
+  }
+}

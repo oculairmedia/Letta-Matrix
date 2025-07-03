@@ -19,9 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY custom_matrix_client.py .
 COPY matrix_auth.py .
+COPY agent_user_manager.py .
 
-# Create directory for matrix store (session persistence)
-RUN mkdir -p /app/matrix_store
+# Create directories for matrix store and agent mappings
+RUN mkdir -p /app/matrix_store /app/data
 
 # Set environment variables with defaults
 ENV MATRIX_HOMESERVER_URL=http://synapse:8008

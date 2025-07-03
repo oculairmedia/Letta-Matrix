@@ -1,7 +1,11 @@
 import asyncio
 import os
-# import aiohttp # No longer needed, SDK handles HTTP
-# import json # No longer needed, SDK handles JSON
+import logging
+import json
+import time
+import aiohttp
+from typing import Optional, Dict, Any
+from dataclasses import dataclass
 from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset
 from nio.responses import JoinError
 from nio.exceptions import RemoteProtocolError
@@ -13,99 +17,207 @@ from letta_client.core import ApiError # Corrected import for ApiError
 # Import our authentication manager
 from matrix_auth import MatrixAuthManager
 
-# Configuration from environment variables
-homeserver_url = os.getenv("MATRIX_HOMESERVER_URL", "http://localhost:8008")
-username = os.getenv("MATRIX_USERNAME", "@letta:matrix.oculair.ca")
-password = os.getenv("MATRIX_PASSWORD", "letta")
-room_to_join = os.getenv("MATRIX_ROOM_ID", "!LWmNEJcwPwVWlbmNqe:matrix.oculair.ca")
+# Import agent user manager
+from agent_user_manager import run_agent_sync
 
-async def send_to_letta_api(message_body, sender_id):
+# Custom exception classes
+class LettaApiError(Exception):
+    """Raised when Letta API calls fail"""
+    def __init__(self, message: str, status_code: Optional[int] = None, response_body: Optional[str] = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body
+
+class MatrixClientError(Exception):
+    """Raised when Matrix client operations fail"""
+    pass
+
+class ConfigurationError(Exception):
+    """Raised when configuration is invalid"""
+    pass
+
+# Configuration dataclass
+@dataclass
+class Config:
+    homeserver_url: str
+    username: str
+    password: str
+    room_id: str
+    letta_api_url: str
+    letta_token: str
+    letta_agent_id: str
+    log_level: str = "INFO"
+    
+    @classmethod
+    def from_env(cls) -> "Config":
+        """Load configuration from environment variables"""
+        try:
+            return cls(
+                homeserver_url=os.getenv("MATRIX_HOMESERVER_URL", "http://localhost:8008"),
+                username=os.getenv("MATRIX_USERNAME", "@letta:matrix.oculair.ca"),
+                password=os.getenv("MATRIX_PASSWORD", "letta"),
+                room_id=os.getenv("MATRIX_ROOM_ID", "!LWmNEJcwPwVWlbmNqe:matrix.oculair.ca"),
+                letta_api_url=os.getenv("LETTA_API_URL", "https://letta.oculair.ca"),
+                letta_token=os.getenv("LETTA_TOKEN", "lettaSecurePass123"),
+                letta_agent_id=os.getenv("LETTA_AGENT_ID", "agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444"),
+                log_level=os.getenv("LOG_LEVEL", "INFO")
+            )
+        except Exception as e:
+            raise ConfigurationError(f"Failed to load configuration: {e}")
+
+# Setup structured logging
+def setup_logging(config: Config) -> logging.Logger:
+    """Setup structured JSON logging"""
+    logger = logging.getLogger("matrix_client")
+    logger.setLevel(getattr(logging, config.log_level.upper()))
+    
+    # Remove existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    # Create console handler with JSON formatter
+    handler = logging.StreamHandler()
+    handler.setLevel(getattr(logging, config.log_level.upper()))
+    
+    class JSONFormatter(logging.Formatter):
+        def format(self, record):
+            log_entry = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime(record.created)),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+                "module": record.module,
+                "function": record.funcName,
+                "line": record.lineno
+            }
+            
+            # Add exception info if present
+            if record.exc_info:
+                log_entry["exception"] = self.formatException(record.exc_info)
+            
+            # Add extra fields
+            for key, value in record.__dict__.items():
+                if key not in ["name", "msg", "args", "levelname", "levelno", "pathname", "filename", 
+                              "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName", 
+                              "created", "msecs", "relativeCreated", "thread", "threadName", 
+                              "processName", "process", "getMessage"]:
+                    log_entry[key] = value
+            
+            return json.dumps(log_entry)
+    
+    handler.setFormatter(JSONFormatter())
+    logger.addHandler(handler)
+    
+    return logger
+
+# Global variables for backwards compatibility
+client = None
+auth_manager_global = None
+startup_time = None  # Track when the bot started to ignore old messages
+
+async def retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0, logger: Optional[logging.Logger] = None):
+    """
+    Retry a function with exponential backoff
+    """
+    for attempt in range(max_retries):
+        try:
+            return await func()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                if logger:
+                    logger.error("All retry attempts failed", extra={"attempts": max_retries, "error": str(e)})
+                raise
+            
+            delay = min(base_delay * (2 ** attempt), max_delay)
+            if logger:
+                logger.warning("Retry attempt failed, waiting before next try", 
+                             extra={"attempt": attempt + 1, "delay": delay, "error": str(e)})
+            await asyncio.sleep(delay)
+
+async def send_to_letta_api(message_body: str, sender_id: str, config: Config, logger: logging.Logger, room_id: str = None) -> str:
     """
     Sends a message to the Letta API using the letta-client SDK and returns the response.
     """
-    agent_id = os.getenv("LETTA_AGENT_ID", "agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444")
-    letta_token = os.getenv("LETTA_TOKEN", "lettaSecurePass123")
-    # The base_url for the SDK should be the root of the API
-    letta_base_url = os.getenv("LETTA_API_URL", "https://letta.oculair.ca")
-
     # Extract just the username from the Matrix user ID (remove @ and domain)
     if sender_id.startswith('@'):
         username = sender_id[1:].split(':')[0]  # Remove @ and take part before :
     else:
         username = sender_id
     
-    print(f"--- Sending to Letta API via SDK: '{message_body}' from {username} ---")
+    # Determine which agent to use based on room_id
+    agent_id_to_use = config.letta_agent_id  # Default to configured agent
+    
+    # Check if we have agent mappings to determine the right agent
+    if room_id and os.path.exists("/app/data/agent_user_mappings.json"):
+        try:
+            with open("/app/data/agent_user_mappings.json", 'r') as f:
+                mappings = json.load(f)
+                for agent_id, mapping in mappings.items():
+                    if mapping.get("room_id") == room_id:
+                        agent_id_to_use = agent_id
+                        logger.info(f"Found agent mapping for room {room_id}: {mapping.get('agent_name')} ({agent_id})")
+                        break
+        except Exception as e:
+            logger.warning(f"Could not load agent mappings: {e}")
+    
+    logger.info("Sending message to Letta API", extra={
+        "message_preview": message_body[:100] + "..." if len(message_body) > 100 else message_body,
+        "sender": username,
+        "agent_id": agent_id_to_use,
+        "room_id": room_id
+    })
 
-    try:
-        letta_sdk_client = AsyncLetta(token=letta_token, base_url=letta_base_url)
+    async def _send_to_letta():
+        """Inner function to handle the actual API call with retry logic"""
+        # Configure client with 3-minute timeout
+        letta_sdk_client = AsyncLetta(
+            token=config.letta_token, 
+            base_url=config.letta_api_url,
+            timeout=180.0  # 3 minutes timeout
+        )
         
         # First, let's try to list available agents to see if our agent exists
         try:
             agents = await letta_sdk_client.agents.list()
-            print(f"--- Available agents: {[agent.id for agent in agents]} ---")
+            agent_ids = [agent.id for agent in agents]
+            logger.debug("Listed available agents", extra={"agent_ids": agent_ids})
             
             # Check if our agent exists
-            agent_exists = any(agent.id == agent_id for agent in agents)
-            print(f"--- Agent {agent_id} exists: {agent_exists} ---")
+            agent_exists = any(agent.id == agent_id_to_use for agent in agents)
+            current_agent_id = agent_id_to_use
             
             if not agent_exists:
-                print(f"--- Agent {agent_id} not found, using first available agent ---")
+                logger.warning("Configured agent not found, using first available", 
+                             extra={"configured_agent": agent_id_to_use, "available_agents": agent_ids})
                 if agents:
-                    agent_id = agents[0].id
-                    print(f"--- Using agent: {agent_id} ---")
+                    current_agent_id = agents[0].id
+                    logger.info("Using fallback agent", extra={"agent_id": current_agent_id})
                 else:
-                    return "No agents available in Letta"
+                    raise LettaApiError("No agents available in Letta")
+            
         except Exception as e:
-            print(f"--- Error listing agents: {e} ---")
+            logger.error("Error listing agents", extra={"error": str(e)})
+            current_agent_id = agent_id_to_use  # Use determined agent anyway
         
-        # Construct payload as a list of dictionaries, matching the JSON structure
-        messages_payload = [
-            {
+        # Send message to Letta agent
+        response = await letta_sdk_client.agents.messages.create(
+            agent_id=current_agent_id,
+            messages=[{
                 "role": "user",
-                "content": message_body # API expects a string here for non-complex content
-            }
-        ]
-
-        # The create_stream method might take stream_steps and stream_tokens as kwargs
-        # if they are not default. For now, let's assume they are default or handled by the endpoint.
-        # If errors occur, we might need to add stream_steps=True, stream_tokens=True as kwargs.
-        # Try different API methods based on the SDK version
-        try:
-            # Method 1: Try the newer API structure
-            response = await letta_sdk_client.agents.messages.create(
-                agent_id=agent_id,
-                messages=[{
-                    "role": "user",
-                    "content": message_body
-                }]
-            )
-            print(f"--- Letta API response (create): {response} ---")
-        except Exception as e1:
-            print(f"--- create method failed: {e1} ---")
-            try:
-                # Method 2: Try the send_message API
-                response = await letta_sdk_client.agents.send_message(
-                    agent_id=agent_id,
-                    message=message_body,
-                    role="user"
-                )
-                print(f"--- Letta API response (send_message): {response} ---")
-            except Exception as e2:
-                print(f"--- send_message method failed: {e2} ---")
-                try:
-                    # Method 3: Try messages.send_message method
-                    response = await letta_sdk_client.agents.messages.send_message(
-                        agent_id=agent_id,
-                        message=message_body,
-                        role="user"
-                    )
-                    print(f"--- Letta API response (messages.send_message): {response} ---")
-                except Exception as e3:
-                    print(f"--- messages.send_message method failed: {e3} ---")
-                    raise Exception(f"All API methods failed: {e1}, {e2}, {e3}")
+                "content": message_body
+            }]
+        )
         
-        print(f"--- Send response type: {type(response)} ---")
-        print(f"--- Send response: {response} ---")
+        logger.debug("Received Letta API response", extra={
+            "response_type": type(response).__name__,
+            "has_messages": bool(response and response.messages)
+        })
+        
+        return response
+
+    try:
+        # Use retry logic for the API call
+        response = await retry_with_backoff(_send_to_letta, max_retries=3, logger=logger)
         
         # Extract assistant messages from the response
         if response and response.messages:
@@ -119,68 +231,200 @@ async def send_to_letta_api(message_body, sender_id):
             
             # If we found assistant messages, return them
             if assistant_messages:
-                return " ".join(assistant_messages)
+                result = " ".join(assistant_messages)
+                logger.info("Successfully processed Letta response", extra={
+                    "response_length": len(result),
+                    "message_count": len(assistant_messages)
+                })
+                return result
             else:
-                # Fallback: look for send_message tool calls in the detailed response
-                print("--- No direct assistant messages found, checking tool calls ---")
+                logger.warning("No assistant messages found in response")
                 return "Letta responded but no clear message content found."
         else:
+            logger.warning("Empty response from Letta API")
             return "Letta SDK connection successful, but no response content."
 
-        # The send method should return the response directly, no streaming needed
-
-    except ApiError as e: # Assuming ApiError is correctly imported
-        print(f"--- Letta SDK API Error: Status={e.status_code}, Body={e.body} ---")
-        return f"Letta API (SDK) returned error {e.status_code}: {str(e.body)[:200]}..."
+    except ApiError as e:
+        logger.error("Letta API error", extra={"status_code": e.status_code, "body": str(e.body)[:200]})
+        raise LettaApiError(f"Letta API returned error {e.status_code}", e.status_code, str(e.body)[:200])
     except Exception as e:
-        print(f"--- Unexpected error using Letta SDK: {e} ---")
-        import traceback
-        traceback.print_exc()
-        return f"An unexpected error occurred with the Letta SDK: {e}"
+        logger.error("Unexpected error in Letta API call", extra={"error": str(e)}, exc_info=True)
+        raise LettaApiError(f"An unexpected error occurred with the Letta SDK: {e}")
 
-async def message_callback(room, event):
+async def send_as_agent(room_id: str, message: str, config: Config, logger: logging.Logger) -> bool:
+    """Send a message as the agent user for this room"""
+    try:
+        # Load agent mappings to find which agent owns this room
+        mappings_file = "/app/data/agent_user_mappings.json"
+        if not os.path.exists(mappings_file):
+            logger.warning("No agent mappings file found")
+            return False
+            
+        with open(mappings_file, 'r') as f:
+            mappings = json.load(f)
+        
+        # Find the agent for this room
+        agent_mapping = None
+        for agent_id, mapping in mappings.items():
+            if mapping.get("room_id") == room_id:
+                agent_mapping = mapping
+                break
+        
+        if not agent_mapping:
+            logger.warning(f"No agent mapping found for room {room_id}")
+            return False
+        
+        # Login as the agent user
+        agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
+        agent_password = agent_mapping["matrix_password"]
+        
+        login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
+        login_data = {
+            "type": "m.login.password",
+            "user": agent_username,
+            "password": agent_password
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            # Login
+            async with session.post(login_url, json=login_data) as response:
+                if response.status != 200:
+                    logger.error(f"Failed to login as agent {agent_username}")
+                    return False
+                
+                auth_data = await response.json()
+                agent_token = auth_data.get("access_token")
+                
+                if not agent_token:
+                    logger.error(f"No token received for agent {agent_username}")
+                    return False
+            
+            # Send message as the agent
+            message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message"
+            headers = {
+                "Authorization": f"Bearer {agent_token}",
+                "Content-Type": "application/json"
+            }
+            
+            message_data = {
+                "msgtype": "m.text",
+                "body": message
+            }
+            
+            async with session.post(message_url, headers=headers, json=message_data) as response:
+                if response.status == 200:
+                    logger.info(f"Successfully sent message as agent {agent_username}")
+                    return True
+                else:
+                    logger.error(f"Failed to send message as agent: {response.status}")
+                    return False
+                    
+    except Exception as e:
+        logger.error(f"Error sending message as agent: {e}")
+        return False
+
+async def message_callback(room, event, config: Config, logger: logging.Logger):
     """Callback function for handling new text messages."""
     if isinstance(event, RoomMessageText):
         # Ignore messages from ourselves to prevent loops
         if event.sender == client.user_id:
             return
+        
+        # Ignore messages from before bot startup to prevent replaying old messages
+        if hasattr(event, 'server_timestamp') and startup_time and event.server_timestamp < startup_time:
+            logger.debug("Ignoring old message from before startup", extra={
+                "event_timestamp": event.server_timestamp,
+                "startup_time": startup_time,
+                "sender": event.sender,
+                "message": event.body[:50]
+            })
+            return
+        
+        # Check if the sender is an agent user - ignore messages from agent users
+        mappings_file = "/app/data/agent_user_mappings.json"
+        if os.path.exists(mappings_file):
+            with open(mappings_file, 'r') as f:
+                mappings = json.load(f)
+                # Check if sender is an agent user
+                for agent_id, mapping in mappings.items():
+                    if mapping.get("matrix_user_id") == event.sender:
+                        logger.debug(f"Ignoring message from agent user {event.sender}")
+                        return
 
-        print(f"Received message from {event.sender} in {room.display_name} ({room.room_id}): {event.body}")
+        logger.info("Received message from user", extra={
+            "sender": event.sender,
+            "room_name": room.display_name,
+            "room_id": room.room_id,
+            "message_preview": event.body[:100] + "..." if len(event.body) > 100 else event.body
+        })
 
         try:
             # Ensure we have a valid token before making API calls
             if 'auth_manager_global' in globals():
                 await auth_manager_global.ensure_valid_token(client)
             
-            # --- HERE IS WHERE YOU WOULD SEND THE MESSAGE TO LETTA ---
-            letta_response = await send_to_letta_api(event.body, event.sender)
-            if letta_response:
+            # Send the message to Letta with room context
+            letta_response = await send_to_letta_api(event.body, event.sender, config, logger, room.room_id)
+            
+            # Try to send as the agent user first
+            sent_as_agent = await send_as_agent(room.room_id, letta_response, config, logger)
+            
+            if not sent_as_agent:
+                # Fallback to sending as the main letta client if agent send fails
+                logger.warning("Failed to send as agent, falling back to main client")
                 await client.room_send(
                     room.room_id,
                     "m.room.message",
                     {"msgtype": "m.text", "body": letta_response}
                 )
-            else:
-                await client.room_send(
-                    room.room_id,
-                    "m.room.message",
-                    {"msgtype": "m.text", "body": "Sorry, I couldn't get a response from Letta right now."}
-                )
+            
+            logger.info("Successfully sent response to Matrix", extra={
+                "response_length": len(letta_response),
+                "room_id": room.room_id,
+                "sent_as_agent": sent_as_agent
+            })
+            
+        except LettaApiError as e:
+            logger.error("Letta API error in message callback", extra={
+                "error": str(e),
+                "status_code": e.status_code,
+                "sender": event.sender
+            })
+            error_message = f"Sorry, I encountered an error while processing your message: {str(e)[:100]}"
+            try:
+                # Try to send error as agent first
+                sent_as_agent = await send_as_agent(room.room_id, error_message, config, logger)
+                if not sent_as_agent:
+                    await client.room_send(
+                        room.room_id,
+                        "m.room.message",
+                        {"msgtype": "m.text", "body": error_message}
+                    )
+            except Exception as send_error:
+                logger.error("Failed to send error message", extra={"error": str(send_error)})
+                
         except Exception as e:
-            print(f"Error in message callback: {e}")
+            logger.error("Unexpected error in message callback", extra={
+                "error": str(e),
+                "sender": event.sender
+            }, exc_info=True)
+            
             # Try to send an error message if possible
             try:
-                await client.room_send(
-                    room.room_id,
-                    "m.room.message",
-                    {"msgtype": "m.text", "body": f"Error processing your message: {str(e)[:100]}"}
-                )
-            except:
-                pass  # If we can't send error message, just log it
+                error_msg = f"Sorry, I encountered an unexpected error: {str(e)[:100]}"
+                sent_as_agent = await send_as_agent(room.room_id, error_msg, config, logger)
+                if not sent_as_agent:
+                    await client.room_send(
+                        room.room_id,
+                        "m.room.message",
+                        {"msgtype": "m.text", "body": error_msg}
+                    )
+            except Exception as send_error:
+                logger.error("Failed to send error message", extra={"error": str(send_error)})
 
-async def create_room_if_needed(client_instance, room_name="Letta Bot Room"):
+async def create_room_if_needed(client_instance, logger: logging.Logger, room_name="Letta Bot Room"):
     """Create a new room and return its ID"""
-    print(f"Creating new room: {room_name}")
+    logger.info("Creating new room", extra={"room_name": room_name})
     try:
         # Create a public room that anyone can join
         response = await client_instance.room_create(
@@ -191,19 +435,17 @@ async def create_room_if_needed(client_instance, room_name="Letta Bot Room"):
         )
         
         if hasattr(response, 'room_id'):
-            print(f"Successfully created room: {response.room_id}")
+            logger.info("Successfully created room", extra={"room_id": response.room_id})
             return response.room_id
         else:
-            print(f"Failed to create room. Response: {response}")
+            logger.error("Failed to create room", extra={"response": str(response)})
             return None
     except Exception as e:
-        print(f"Error creating room: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Error creating room", extra={"error": str(e)}, exc_info=True)
         return None
 
-async def join_room_if_needed(client_instance, room_id_or_alias):
-    print(f"Attempting to join room: {room_id_or_alias}")
+async def join_room_if_needed(client_instance, room_id_or_alias, logger: logging.Logger):
+    logger.info("Attempting to join room", extra={"room": room_id_or_alias})
     try:
         response = await client_instance.join(room_id_or_alias)
 
@@ -211,77 +453,150 @@ async def join_room_if_needed(client_instance, room_id_or_alias):
             error_message = getattr(response, 'message', str(response)) # Human-readable message
             status_code = getattr(response, 'status_code', None) # Matrix error code like M_UNRECOGNIZED
 
-            print(f"Failed to join room {room_id_or_alias}. Error: {error_message} (Status Code: {status_code or 'N/A'})")
+            logger.error("Failed to join room", extra={
+                "room": room_id_or_alias,
+                "error_message": error_message,
+                "status_code": status_code
+            })
 
-            # If room doesn't exist, create a new one
+            # If room doesn't exist, log error but don't create a new one
             if status_code == "M_UNKNOWN" or "Can't join remote room" in error_message:
-                print("Room doesn't exist. Creating a new room...")
-                return await create_room_if_needed(client_instance)
+                logger.error("Configured room doesn't exist and auto-creation is disabled", extra={
+                    "room": room_id_or_alias,
+                    "suggestion": "Please ensure the room exists and the bot is invited, or update MATRIX_ROOM_ID in .env"
+                })
             elif status_code == "M_UNRECOGNIZED":
-                print(f"Details: The server did not recognize the join request for {room_id_or_alias}. This could be due to an invalid room alias or ID, or server-side issues.")
+                logger.warning("Server did not recognize the join request", extra={
+                    "room": room_id_or_alias,
+                    "details": "This could be due to an invalid room alias or ID, or server-side issues"
+                })
             elif status_code == "M_FORBIDDEN":
-                 print(f"Details: The bot may not be invited or allowed to join {room_id_or_alias}. Please check room permissions and invites.")
-            elif "M_UNRECOGNIZED" in error_message: # Fallback if status_code is not available or different
-                print(f"Details (fallback via message): The server did not recognize the join request for {room_id_or_alias}.")
-            elif "M_FORBIDDEN" in error_message: # Fallback
-                 print(f"Details (fallback via message): The bot may not be invited or allowed to join {room_id_or_alias}.")
+                logger.warning("Bot not allowed to join room", extra={
+                    "room": room_id_or_alias,
+                    "details": "The bot may not be invited or allowed to join. Please check room permissions and invites"
+                })
             return None
         elif hasattr(response, 'room_id') and response.room_id: # Successful join
-            print(f"Successfully joined room: {response.room_id}")
+            logger.info("Successfully joined room", extra={"room_id": response.room_id})
             return response.room_id
         else: # Other unexpected response type
-            print(f"Failed to join room {room_id_or_alias}. Unexpected response type or content: {response}")
+            logger.error("Unexpected response when joining room", extra={
+                "room": room_id_or_alias,
+                "response": str(response)
+            })
             return None
     except RemoteProtocolError as e: # Catches exceptions raised during the API call
         if "M_UNKNOWN_TOKEN" in str(e):
-            print(f"Error joining room {room_id_or_alias}: Invalid token. The client might not be logged in correctly or the session is invalid. {e}")
+            logger.error("Invalid token when joining room", extra={
+                "room": room_id_or_alias,
+                "error": str(e),
+                "details": "The client might not be logged in correctly or the session is invalid"
+            })
         elif "M_FORBIDDEN" in str(e):
-             print(f"Error joining room {room_id_or_alias}: Forbidden. The bot may not be invited or allowed to join. {e}")
+            logger.error("Forbidden when joining room", extra={
+                "room": room_id_or_alias,
+                "error": str(e),
+                "details": "The bot may not be invited or allowed to join"
+            })
         else:
-            print(f"Error joining room {room_id_or_alias} (RemoteProtocolError): {e}")
+            logger.error("Remote protocol error when joining room", extra={
+                "room": room_id_or_alias,
+                "error": str(e)
+            })
         return None
     except Exception as e:
-        print(f"An unexpected error occurred while joining room {room_id_or_alias}: {e}")
+        logger.error("Unexpected error when joining room", extra={
+            "room": room_id_or_alias,
+            "error": str(e)
+        }, exc_info=True)
         return None
 
+async def periodic_agent_sync(config, logger, interval=60):  # Default 60 seconds
+    """Periodically sync Letta agents to Matrix users"""
+    while True:
+        await asyncio.sleep(interval)
+        logger.info("Running periodic agent sync...")
+        try:
+            await run_agent_sync(config)
+            logger.info("Periodic agent sync completed successfully")
+        except Exception as e:
+            logger.error("Periodic agent sync failed", extra={"error": str(e)})
+
 async def main():
-    global client # Make client global so message_callback can access client.user_id
+    global client, startup_time # Make client and startup_time global
+    
+    # Set startup time to ignore old messages
+    startup_time = time.time() * 1000  # Convert to milliseconds for nio event timestamps
+    
+    # Load configuration
+    try:
+        config = Config.from_env()
+    except ConfigurationError as e:
+        print(f"Configuration error: {e}")
+        return
+    
+    # Setup logging
+    logger = setup_logging(config)
+    logger.info("Matrix client starting up", extra={"config": {
+        "homeserver_url": config.homeserver_url,
+        "username": config.username,
+        "room_id": config.room_id,
+        "letta_api_url": config.letta_api_url,
+        "agent_id": config.letta_agent_id,
+        "log_level": config.log_level
+    }})
     
     # Initialize Matrix authentication manager
-    auth_manager = MatrixAuthManager(homeserver_url, username, password, "CustomNioClientToken")
+    auth_manager = MatrixAuthManager(config.homeserver_url, config.username, config.password, "CustomNioClientToken")
+    
+    # Sync Letta agents to Matrix users (run this before main client setup)
+    logger.info("Syncing Letta agents to Matrix users...")
+    try:
+        agent_manager = await run_agent_sync(config)
+        logger.info("Agent-to-user sync completed successfully")
+    except Exception as e:
+        logger.error("Agent sync failed", extra={"error": str(e)})
+        # Continue with main client setup even if agent sync fails
+    
+    # Start periodic agent sync task
+    sync_task = asyncio.create_task(periodic_agent_sync(config, logger))
     
     # Get authenticated client
     client = await auth_manager.get_authenticated_client()
     if not client:
-        print("Failed to authenticate with Matrix server")
+        logger.error("Failed to authenticate with Matrix server")
         return
 
-    print("Client configured with authentication manager.")
-    print(f"User ID: {client.user_id}")
-    print(f"Device ID: {client.device_id}")
+    logger.info("Client authenticated successfully", extra={
+        "user_id": client.user_id,
+        "device_id": client.device_id
+    })
 
     # Join the specified room
-    joined_room_id = await join_room_if_needed(client, room_to_join)
+    joined_room_id = await join_room_if_needed(client, config.room_id, logger)
     if not joined_room_id:
-        print(f"Could not join room {room_to_join}. Exiting.")
+        logger.error("Could not join room, exiting", extra={"room_id": config.room_id})
         await client.close()
         return
-    print(f"Ready to interact in {joined_room_id}")
+    
+    logger.info("Ready to interact in room", extra={"room_id": joined_room_id})
     
     # If we created a new room, save its ID for future reference
-    if joined_room_id != room_to_join:
-        print(f"\n=== IMPORTANT: New room created! ===")
-        print(f"Room ID: {joined_room_id}")
-        print(f"Please update your .env file with this room ID:")
-        print(f"MATRIX_ROOM_ID={joined_room_id}")
-        print(f"===================================\n")
+    if joined_room_id != config.room_id:
+        logger.warning("New room created, please update configuration", extra={
+            "new_room_id": joined_room_id,
+            "original_room_id": config.room_id
+        })
 
-    # Add the callback for text messages
-    client.add_event_callback(message_callback, RoomMessageText)
+    # Add the callback for text messages with config and logger
+    async def callback_wrapper(room, event):
+        await message_callback(room, event, config, logger)
+    
+    client.add_event_callback(callback_wrapper, RoomMessageText)
 
-    print("Starting sync loop to listen for messages...")
+    logger.info("Starting sync loop to listen for messages")
     # Set sync_filter to only include room events for joined rooms to reduce data
-    sync_filter = {"room": {"timeline": {"limit": 10}}} # Only get last 10 messages on initial sync
+    sync_filter = {"room": {"timeline": {"limit": 0}}} # Don't fetch any historical messages on initial sync
     try:
         # Store auth manager globally so we can refresh tokens during sync
         global auth_manager_global
@@ -289,9 +604,9 @@ async def main():
         
         await client.sync_forever(timeout=30000, full_state=False, sync_filter=sync_filter) # Sync every 30 seconds
     except Exception as e:
-        print(f"Error during sync: {e}")
+        logger.error("Error during sync", extra={"error": str(e)}, exc_info=True)
     finally:
-        print("Closing client session...")
+        logger.info("Closing client session")
         await client.close()
 
 if __name__ == "__main__":
