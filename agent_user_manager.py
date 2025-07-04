@@ -7,12 +7,35 @@ import logging
 import os
 import json
 import aiohttp
+import random
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass
-from letta_client import AsyncLetta
-from letta_client.core import ApiError
+# Removed Letta client imports - now using OpenAI endpoint
 
 logger = logging.getLogger("matrix_client.agent_user_manager")
+
+# Global session with connection pooling for better performance
+connector = aiohttp.TCPConnector(
+    limit=100,  # Connection pool size
+    limit_per_host=50,  # Per-host connection limit
+    ttl_dns_cache=300,  # DNS cache timeout
+    keepalive_timeout=30,  # Keep connections alive
+    force_close=False
+)
+global_session = None
+
+# Default timeout for all requests
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
+
+async def get_global_session():
+    """Get or create global aiohttp session with connection pooling"""
+    global global_session
+    if global_session is None or global_session.closed:
+        global_session = aiohttp.ClientSession(
+            connector=connector
+            # Timeout will be set per-request to avoid the context manager error
+        )
+    return global_session
 
 @dataclass
 class AgentUserMapping:
@@ -82,27 +105,39 @@ class AgentUserManager:
             logger.error(f"Error saving mappings: {e}")
     
     async def get_letta_agents(self) -> List[dict]:
-        """Get all Letta agents"""
+        """Get all Letta agents from OpenAI endpoint"""
         try:
-            letta_client = AsyncLetta(
-                token=self.letta_token,
-                base_url=self.letta_api_url,
-                timeout=60.0
-            )
+            # Use OpenAI endpoint - each model is an agent
+            openai_endpoint = "http://192.168.50.90:1416/v1/models"
             
-            agents = await letta_client.agents.list()
-            agent_list = []
-            for agent in agents:
-                agent_list.append({
-                    "id": agent.id,
-                    "name": getattr(agent, 'name', f"agent-{agent.id[:8]}")
-                })
-            
-            logger.info(f"Found {len(agent_list)} Letta agents")
-            return agent_list
+            # Create a fresh session to avoid timeout context errors
+            async with aiohttp.ClientSession() as session:
+                async with session.get(openai_endpoint, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to get agents from OpenAI endpoint: {response.status}")
+                        return []
+                    
+                    data = await response.json()
+                    models = data.get("data", [])
+                    
+                    agent_list = []
+                    for model in models:
+                        # Extract agent ID from model id (format: "agent-{uuid}")
+                        model_id = model.get("id", "")
+                        if model_id.startswith("agent-"):
+                            agent_id = model_id
+                            agent_name = model.get("name", model_id)
+                            
+                            agent_list.append({
+                                "id": agent_id,
+                                "name": agent_name
+                            })
+                    
+                    logger.info(f"Found {len(agent_list)} Letta agents from OpenAI endpoint")
+                    return agent_list
             
         except Exception as e:
-            logger.error(f"Error getting Letta agents: {e}")
+            logger.error(f"Error getting Letta agents from OpenAI endpoint: {e}")
             return []
     
     async def get_admin_token(self) -> Optional[str]:
@@ -123,7 +158,7 @@ class AgentUserManager:
             logger.info(f"Attempting to get admin token for user: {username}")
             
             async with aiohttp.ClientSession() as session:
-                async with session.post(login_url, json=login_data) as response:
+                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         data = await response.json()
                         self.admin_token = data.get("access_token")
@@ -155,7 +190,7 @@ class AgentUserManager:
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         user_data = await response.json()
                         return not user_data.get("deactivated", True)  # User exists and is not deactivated
@@ -194,7 +229,7 @@ class AgentUserManager:
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json=data) as response:
+                async with session.put(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 201:
                         logger.info(f"Created Matrix user: @{username}:matrix.oculair.ca")
                         return True
@@ -211,18 +246,28 @@ class AgentUserManager:
             return False
     
     def generate_username(self, agent_name: str, agent_id: str) -> str:
-        """Generate a safe Matrix username from agent info"""
-        # Clean agent name for Matrix username (only lowercase, numbers, hyphens, periods, underscores)
+        """Generate a safe Matrix username from agent ID"""
+        # Use the agent ID as the base for the username
+        # This ensures the username is stable even if the agent is renamed
+        # Format: agent-{uuid} -> agent_{uuid with underscores}
         import re
-        clean_name = re.sub(r'[^a-zA-Z0-9\-\._]', '', agent_name.lower())
-        if not clean_name:
-            clean_name = f"agent-{agent_id[:8]}"
         
-        # Ensure it starts with a letter
-        if not clean_name[0].isalpha():
-            clean_name = f"letta-{clean_name}"
+        # Remove 'agent-' prefix if present and replace hyphens with underscores
+        if agent_id.startswith("agent-"):
+            clean_id = agent_id[6:]  # Remove 'agent-' prefix
+        else:
+            clean_id = agent_id
+            
+        # Replace hyphens with underscores for Matrix compatibility
+        clean_id = clean_id.replace('-', '_')
         
-        return clean_name
+        # Ensure it only contains valid characters
+        clean_id = re.sub(r'[^a-zA-Z0-9_]', '', clean_id)
+        
+        # Create username as 'agent_{id}'
+        username = f"agent_{clean_id}"
+        
+        return username
     
     def generate_password(self) -> str:
         """Generate a secure password for the Matrix user"""
@@ -266,6 +311,33 @@ class AgentUserManager:
                 print(f"[AGENT_SYNC] Agent {agent['name']} - created: {mapping.created if mapping else 'No mapping'}, room: {mapping.room_created if mapping else 'No room'}", flush=True)
                 
                 if mapping:
+                    # Check if agent name has changed
+                    if mapping.agent_name != agent['name']:
+                        logger.info(f"Agent name changed from '{mapping.agent_name}' to '{agent['name']}'")
+                        print(f"[AGENT_SYNC] Agent name changed from '{mapping.agent_name}' to '{agent['name']}'", flush=True)
+                        
+                        # Update the stored agent name
+                        old_name = mapping.agent_name
+                        mapping.agent_name = agent['name']
+                        
+                        # Update room name if room exists
+                        if mapping.room_id and mapping.room_created:
+                            logger.info(f"Updating room name for {mapping.room_id}")
+                            success = await self.update_room_name(mapping.room_id, agent['name'])
+                            if success:
+                                print(f"[AGENT_SYNC] Successfully updated room name from '{old_name}' to '{agent['name']}'", flush=True)
+                            else:
+                                print(f"[AGENT_SYNC] Failed to update room name", flush=True)
+                        
+                        # Update display name for the Matrix user
+                        if mapping.matrix_user_id:
+                            logger.info(f"Updating display name for {mapping.matrix_user_id}")
+                            display_success = await self.update_display_name(mapping.matrix_user_id, agent['name'])
+                            if display_success:
+                                print(f"[AGENT_SYNC] Successfully updated display name for '{mapping.matrix_user_id}' to '{agent['name']}'", flush=True)
+                            else:
+                                print(f"[AGENT_SYNC] Failed to update display name", flush=True)
+                    
                     # Retry user creation if failed
                     if not mapping.created:
                         logger.info(f"Retrying creation for existing agent {agent['name']} with failed status")
@@ -356,6 +428,14 @@ class AgentUserManager:
         
         if success:
             logger.info(f"Successfully created Matrix user {matrix_user_id} for agent {agent_name}")
+            
+            # Set the display name to the agent name
+            display_success = await self.update_display_name(matrix_user_id, agent_name)
+            if display_success:
+                logger.info(f"Successfully set display name to '{agent_name}' for {matrix_user_id}")
+            else:
+                logger.warning(f"Failed to set display name for {matrix_user_id}")
+            
             # Now create/update the room for this agent
             await self.create_or_update_agent_room(agent_id)
         else:
@@ -386,7 +466,7 @@ class AgentUserManager:
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         logger.info(f"Room {room_id} exists")
                         return True
@@ -405,8 +485,79 @@ class AgentUserManager:
             logger.error(f"Error checking if room {room_id} exists: {e}")
             return False
     
+    async def update_room_name(self, room_id: str, new_name: str) -> bool:
+        """Update the name of an existing room"""
+        try:
+            # Get admin token
+            admin_token = await self.get_admin_token()
+            if not admin_token:
+                logger.warning("Failed to get admin token, cannot update room name")
+                return False
+            
+            # Use the room state API to update room name
+            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.name"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json"
+            }
+            
+            room_name_data = {
+                "name": f"{new_name} - Letta Agent Chat"
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.put(url, headers=headers, json=room_name_data, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        logger.info(f"Successfully updated room name for {room_id} to '{new_name} - Letta Agent Chat'")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to update room name: {response.status} - {error_text}")
+                        return False
+                    
+        except Exception as e:
+            logger.error(f"Error updating room name for {room_id}: {e}")
+            return False
+    
+    async def update_display_name(self, user_id: str, display_name: str) -> bool:
+        """Update the display name of a Matrix user"""
+        try:
+            # Get admin token
+            admin_token = await self.get_admin_token()
+            if not admin_token:
+                logger.warning("Failed to get admin token, cannot update display name")
+                return False
+            
+            # Use the profile API to update display name
+            url = f"{self.homeserver_url}/_matrix/client/r0/profile/{user_id}/displayname"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json"
+            }
+            
+            display_name_data = {
+                "displayname": display_name
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.put(url, headers=headers, json=display_name_data, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        logger.info(f"Successfully updated display name for {user_id} to '{display_name}'")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to update display name: {response.status} - {error_text}")
+                        return False
+                    
+        except Exception as e:
+            logger.error(f"Error updating display name for {user_id}: {e}")
+            return False
+    
     async def find_existing_agent_room(self, agent_name: str) -> Optional[str]:
         """Find an existing room for an agent by searching room names"""
+        # TEMPORARY: Always return None to force creation of new rooms
+        return None
+        
         try:
             # Get admin token
             admin_token = await self.get_admin_token()
@@ -422,29 +573,29 @@ class AgentUserManager:
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status != 200:
                         logger.error(f"Failed to get joined rooms: {response.status}")
                         return None
                     
                     data = await response.json()
                     room_ids = data.get("joined_rooms", [])
-                    
-                    # Check each room to see if it matches our agent
-                    expected_name = f"{agent_name} - Letta Agent Chat"
-                    for room_id in room_ids:
-                        # Get room state to check name
-                        state_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.name"
-                        async with session.get(state_url, headers=headers) as state_response:
-                            if state_response.status == 200:
-                                state_data = await state_response.json()
-                                room_name = state_data.get("name", "")
-                                if room_name == expected_name:
-                                    logger.info(f"Found existing room for agent {agent_name}: {room_id}")
-                                    return room_id
-                    
-                    logger.info(f"No existing room found for agent {agent_name}")
-                    return None
+                
+                # Check each room to see if it matches our agent
+                expected_name = f"{agent_name} - Letta Agent Chat"
+                for room_id in room_ids:
+                    # Get room state to check name
+                    state_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.name"
+                    async with session.get(state_url, headers=headers) as state_response:
+                        if state_response.status == 200:
+                            state_data = await state_response.json()
+                            room_name = state_data.get("name", "")
+                            if room_name == expected_name:
+                                logger.info(f"Found existing room for agent {agent_name}: {room_id}")
+                                return room_id
+                
+                logger.info(f"No existing room found for agent {agent_name}")
+                return None
                     
         except Exception as e:
             logger.error(f"Error searching for agent room: {e}")
@@ -504,21 +655,21 @@ class AgentUserManager:
                     
                     agent_auth = await response.json()
                     agent_token = agent_auth.get("access_token")
-                    
-                    if not agent_token:
-                        logger.error(f"No access token received for agent user {agent_username}")
-                        return None
                 
-                # Now create the room as the agent user
+                if not agent_token:
+                    logger.error(f"No access token received for agent user {agent_username}")
+                    return None
+                
+                # Now create the room as the agent user (inside the session)
                 room_url = f"{self.homeserver_url}/_matrix/client/r0/createRoom"
-                
+            
                 # Define the users to invite: admin users and main letta bot
                 invites = [
                     "@admin:matrix.oculair.ca",  # Your actual admin account
                     self.admin_username,  # Admin user (matrixadmin) 
                     self.config.username  # Main Letta bot (@letta)
                 ]
-                
+            
                 room_data = {
                     "name": f"{mapping.agent_name} - Letta Agent Chat",
                     "topic": f"Private chat with Letta agent: {mapping.agent_name}",
@@ -538,15 +689,15 @@ class AgentUserManager:
                         }
                     ]
                 }
-                
+            
                 headers = {
                     "Authorization": f"Bearer {agent_token}",
                     "Content-Type": "application/json"
                 }
-                
+            
                 logger.info(f"Creating room as agent {agent_username} for {mapping.agent_name} with invites: {invites}")
                 
-                async with session.post(room_url, headers=headers, json=room_data) as response:
+                async with session.post(room_url, headers=headers, json=room_data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         data = await response.json()
                         room_id = data.get("room_id")
@@ -593,17 +744,17 @@ class AgentUserManager:
                 
                 async with aiohttp.ClientSession() as session:
                     # Login
-                    async with session.post(login_url, json=login_data) as response:
+                    async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
                         if response.status != 200:
                             logger.error(f"Failed to login as {username} to accept invitation")
                             continue
                         
                         auth_data = await response.json()
                         user_token = auth_data.get("access_token")
-                        
-                        if not user_token:
-                            logger.error(f"No token received for {username}")
-                            continue
+                    
+                    if not user_token:
+                        logger.error(f"No token received for {username}")
+                        continue
                     
                     # Accept the invitation
                     join_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/join"
@@ -612,7 +763,7 @@ class AgentUserManager:
                         "Content-Type": "application/json"
                     }
                     
-                    async with session.post(join_url, headers=headers, json={}) as response:
+                    async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
                         if response.status == 200:
                             logger.info(f"User {username} successfully joined room {room_id}")
                         else:
@@ -623,43 +774,74 @@ class AgentUserManager:
                 logger.error(f"Error accepting invitation for {username}: {e}")
     
     async def invite_admin_to_existing_rooms(self):
-        """Invite @admin:matrix.oculair.ca to all existing agent rooms"""
+        """Invite @admin:matrix.oculair.ca to all existing agent rooms with rate limiting protection"""
         admin_to_invite = "@admin:matrix.oculair.ca"
         
         for agent_id, mapping in self.mappings.items():
             if mapping.room_id and mapping.room_created:
-                try:
-                    # Get admin token to invite users
-                    admin_token = await self.get_admin_token()
-                    if not admin_token:
-                        logger.error("Cannot invite without admin token")
-                        continue
-                    
-                    # Invite the admin user
-                    invite_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{mapping.room_id}/invite"
-                    headers = {
-                        "Authorization": f"Bearer {admin_token}",
-                        "Content-Type": "application/json"
-                    }
-                    
-                    invite_data = {
-                        "user_id": admin_to_invite
-                    }
-                    
-                    async with aiohttp.ClientSession() as session:
-                        async with session.post(invite_url, headers=headers, json=invite_data) as response:
-                            if response.status == 200:
-                                logger.info(f"Successfully invited {admin_to_invite} to room {mapping.room_id} for agent {mapping.agent_name}")
+                await self._invite_user_with_retry(mapping.room_id, admin_to_invite, mapping.agent_name)
+    
+    async def _invite_user_with_retry(self, room_id: str, user_id: str, agent_name: str, max_retries: int = 5):
+        """Invite user to room with exponential backoff for rate limiting"""
+        for attempt in range(max_retries):
+            try:
+                # Get admin token to invite users
+                admin_token = await self.get_admin_token()
+                if not admin_token:
+                    logger.error("Cannot invite without admin token")
+                    return False
+                
+                # Invite the user
+                invite_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/invite"
+                headers = {
+                    "Authorization": f"Bearer {admin_token}",
+                    "Content-Type": "application/json"
+                }
+                
+                invite_data = {
+                    "user_id": user_id
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(invite_url, headers=headers, json=invite_data, timeout=DEFAULT_TIMEOUT) as response:
+                        if response.status == 200:
+                            logger.info(f"Successfully invited {user_id} to room {room_id} for agent {agent_name}")
+                            return True
+                        elif response.status == 429:  # Rate limited
+                            error_data = await response.json()
+                            retry_after = error_data.get('retry_after_ms', 1000) / 1000  # Convert to seconds
+                            
+                            # Add exponential backoff with jitter
+                            backoff_time = min(retry_after + (2 ** attempt) + random.uniform(0, 1), 300)  # Max 5 minutes
+                            
+                            logger.warning(f"Rate limited inviting {user_id} to room {room_id}. Retrying in {backoff_time:.1f}s (attempt {attempt + 1}/{max_retries})")
+                            await asyncio.sleep(backoff_time)
+                            continue
+                        else:
+                            error_text = await response.text()
+                            # Check if user is already in the room
+                            if "already in the room" in error_text:
+                                logger.info(f"User {user_id} is already in room {room_id}")
+                                return True
                             else:
-                                error_text = await response.text()
-                                # Check if user is already in the room
-                                if "already in the room" in error_text:
-                                    logger.info(f"User {admin_to_invite} is already in room {mapping.room_id}")
-                                else:
-                                    logger.warning(f"Failed to invite {admin_to_invite} to room {mapping.room_id}: {response.status} - {error_text}")
-                                    
-                except Exception as e:
-                    logger.error(f"Error inviting admin to room {mapping.room_id}: {e}")
+                                logger.warning(f"Failed to invite {user_id} to room {room_id}: {response.status} - {error_text}")
+                            if attempt < max_retries - 1:
+                                backoff_time = (2 ** attempt) + random.uniform(0, 1)
+                                logger.info(f"Retrying invitation in {backoff_time:.1f}s")
+                                await asyncio.sleep(backoff_time)
+                                continue
+                            return False
+                                
+            except Exception as e:
+                logger.error(f"Error inviting {user_id} to room {room_id} (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    backoff_time = (2 ** attempt) + random.uniform(0, 1)
+                    await asyncio.sleep(backoff_time)
+                    continue
+                return False
+        
+        logger.error(f"Failed to invite {user_id} to room {room_id} after {max_retries} attempts")
+        return False
 
 async def run_agent_sync(config):
     """Run the agent sync process"""

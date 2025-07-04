@@ -1,4 +1,11 @@
-# Matrix Synapse Deployment
+# Letta-Matrix Integration
+
+A comprehensive Matrix deployment with Letta AI bot integration and MCP (Model Context Protocol) server support.
+
+## Latest Updates (2025-01-04)
+- **Stable Agent Usernames**: Matrix usernames are now based on agent IDs instead of agent names, ensuring stability even when agents are renamed
+- **Fixed Session Management**: Resolved session scope issues in invitation handling  
+- **Improved Agent Sync**: All agent rooms are properly monitored and agents respond with their own Matrix identities
 
 A complete, self-contained Matrix Synapse server deployment with Element web client and Matrix bot integration.
 

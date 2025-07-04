@@ -1,0 +1,16 @@
+as_token: 0cc78705-425c-47c7-89c6-26371a7d78af
+hs_token: 9d58253c-5db9-45f7-b88f-9e7eca187216
+id: discord-bridge
+namespaces:
+  aliases:
+    - exclusive: true
+      regex: '^#_discord_.*:oculair\.ca$'
+  rooms: []
+  users:
+    - exclusive: true
+      regex: '^@_discord_.*:oculair\.ca$'
+protocols:
+  - discord
+rate_limited: false
+sender_localpart: _discord_bot
+url: 'http://discord-bridge:9005'

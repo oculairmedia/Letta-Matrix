@@ -59,128 +59,37 @@ class MCPTool:
         raise NotImplementedError
 
 
-class FileReadTool(MCPTool):
-    """Tool for reading files"""
-    def __init__(self):
-        super().__init__(
-            name="file_read",
-            description="Read contents of a file"
-        )
-        self.parameters = {
-            "path": {"type": "string", "description": "Path to the file to read"}
-        }
-    
-    async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            path = params.get("path")
-            if not path:
-                return {"error": "Path parameter is required"}
-            
-            # Security: Restrict to certain directories
-            allowed_dirs = ["/tmp", "/app/data", "/opt/stacks/matrix-synapse-deployment/matrix_store"]
-            if not any(path.startswith(d) for d in allowed_dirs):
-                return {"error": f"Access denied. Allowed directories: {allowed_dirs}"}
-            
-            with open(path, 'r') as f:
-                content = f.read()
-            
-            return {
-                "success": True,
-                "content": content,
-                "path": path
-            }
-        except FileNotFoundError:
-            return {"error": f"File not found: {path}"}
-        except Exception as e:
-            return {"error": f"Error reading file: {str(e)}"}
-
-
-class WebSearchTool(MCPTool):
-    """Tool for web searching"""
-    def __init__(self):
-        super().__init__(
-            name="web_search",
-            description="Search the web for information"
-        )
-        self.parameters = {
-            "query": {"type": "string", "description": "Search query"}
-        }
-    
-    async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        query = params.get("query")
-        if not query:
-            return {"error": "Query parameter is required"}
-        
-        # Placeholder for web search - in production, integrate with actual search API
-        return {
-            "success": True,
-            "query": query,
-            "results": [
-                {
-                    "title": f"Sample result for: {query}",
-                    "url": "https://example.com",
-                    "snippet": "This is a placeholder search result."
-                }
-            ]
-        }
-
-
-class CalculatorTool(MCPTool):
-    """Tool for mathematical calculations"""
-    def __init__(self):
-        super().__init__(
-            name="calculator",
-            description="Perform mathematical calculations"
-        )
-        self.parameters = {
-            "expression": {"type": "string", "description": "Mathematical expression to evaluate"}
-        }
-    
-    async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        expression = params.get("expression")
-        if not expression:
-            return {"error": "Expression parameter is required"}
-        
-        try:
-            # Safety: Only allow basic math operations
-            allowed_names = {
-                'abs': abs, 'round': round, 'min': min, 'max': max,
-                'sum': sum, 'pow': pow, 'sqrt': __import__('math').sqrt
-            }
-            
-            # Evaluate expression safely
-            result = eval(expression, {"__builtins__": {}}, allowed_names)
-            
-            return {
-                "success": True,
-                "expression": expression,
-                "result": result
-            }
-        except Exception as e:
-            return {"error": f"Calculation error: {str(e)}"}
-
 
 class MatrixSendMessageTool(MCPTool):
     """Tool for sending messages to Matrix rooms"""
-    def __init__(self, matrix_api_url: str):
+    def __init__(self, matrix_api_url: str, matrix_homeserver: str, letta_username: str, letta_password: str):
         super().__init__(
             name="matrix_send_message",
             description="Send a message to a Matrix room"
         )
         self.matrix_api_url = matrix_api_url
+        self.matrix_homeserver = matrix_homeserver
+        self.letta_username = letta_username
+        self.letta_password = letta_password
+        self.access_token = None  # Will be obtained on first use
         self.parameters = {
             "room_id": {"type": "string", "description": "The Matrix room ID (e.g., !abc123:matrix.org)"},
-            "message": {"type": "string", "description": "The message to send"},
-            "access_token": {"type": "string", "description": "Matrix access token for authentication"}
+            "message": {"type": "string", "description": "The message to send"}
         }
     
     async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         room_id = params.get("room_id")
         message = params.get("message")
-        access_token = params.get("access_token")
         
-        if not all([room_id, message, access_token]):
-            return {"error": "Missing required parameters: room_id, message, access_token"}
+        if not all([room_id, message]):
+            return {"error": "Missing required parameters: room_id, message"}
+        
+        # Get access token if we don't have one
+        if not self.access_token:
+            login_result = await self._login()
+            if "error" in login_result:
+                return login_result
+            self.access_token = login_result["access_token"]
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -188,7 +97,8 @@ class MatrixSendMessageTool(MCPTool):
                 payload = {
                     "room_id": room_id,
                     "message": message,
-                    "access_token": access_token
+                    "access_token": self.access_token,
+                    "homeserver": self.matrix_homeserver
                 }
                 
                 async with session.post(url, json=payload) as response:
@@ -206,89 +116,163 @@ class MatrixSendMessageTool(MCPTool):
                         }
         except Exception as e:
             return {"error": f"Error sending message: {str(e)}"}
+    
+    async def _login(self) -> Dict[str, Any]:
+        """Login to Matrix and get access token"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.matrix_api_url}/login"
+                payload = {
+                    "homeserver": self.matrix_homeserver,
+                    "user_id": self.letta_username,
+                    "password": self.letta_password,
+                    "device_name": "mcp_send_message"
+                }
+                
+                async with session.post(url, json=payload) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        return {"error": f"Login failed: {error_text}"}
+                    
+                    result = await response.json()
+                    if result.get("success"):
+                        return {
+                            "access_token": result.get("access_token"),
+                            "device_id": result.get("device_id")
+                        }
+                    else:
+                        return {"error": f"Login failed: {result.get('message', 'Unknown error')}"}
+        except Exception as e:
+            return {"error": f"Login error: {str(e)}"}
 
 
 class MatrixReadRoomTool(MCPTool):
     """Tool for reading messages from a Matrix room"""
-    def __init__(self, matrix_homeserver: str):
+    def __init__(self, matrix_api_url: str, matrix_homeserver: str, letta_username: str, letta_password: str):
         super().__init__(
             name="matrix_read_room",
             description="Read recent messages from a Matrix room"
         )
+        self.matrix_api_url = matrix_api_url
         self.matrix_homeserver = matrix_homeserver
+        self.letta_username = letta_username
+        self.letta_password = letta_password
+        self.access_token = None  # Will be obtained on first use
         self.parameters = {
             "room_id": {"type": "string", "description": "The Matrix room ID"},
-            "access_token": {"type": "string", "description": "Matrix access token"},
-            "limit": {"type": "integer", "description": "Number of messages to retrieve (default: 10)"}
+            "limit": {
+                "type": "integer", 
+                "description": "Number of messages to retrieve",
+                "default": 10
+            }
         }
     
     async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         room_id = params.get("room_id")
-        access_token = params.get("access_token")
         limit = params.get("limit", 10)
         
-        if not all([room_id, access_token]):
-            return {"error": "Missing required parameters: room_id, access_token"}
+        if not room_id:
+            return {"error": "Missing required parameter: room_id"}
+        
+        # Get access token if we don't have one
+        if not self.access_token:
+            login_result = await self._login()
+            if "error" in login_result:
+                return login_result
+            self.access_token = login_result["access_token"]
         
         try:
             async with aiohttp.ClientSession() as session:
-                # Get room messages
-                url = f"{self.matrix_homeserver}/_matrix/client/r0/rooms/{quote(room_id)}/messages"
-                headers = {"Authorization": f"Bearer {access_token}"}
-                params = {"limit": limit, "dir": "b"}  # b = backwards (most recent first)
+                # Use Matrix API service instead of direct homeserver call
+                url = f"{self.matrix_api_url}/messages/get"
+                payload = {
+                    "room_id": room_id,
+                    "access_token": self.access_token,
+                    "homeserver": self.matrix_homeserver,
+                    "limit": limit
+                }
                 
-                async with session.get(url, headers=headers, params=params) as response:
+                async with session.post(url, json=payload) as response:
                     if response.status == 200:
-                        data = await response.json()
-                        messages = []
-                        
-                        for event in data.get("chunk", []):
-                            if event.get("type") == "m.room.message":
-                                messages.append({
-                                    "sender": event.get("sender"),
-                                    "content": event.get("content", {}).get("body"),
-                                    "timestamp": event.get("origin_server_ts"),
-                                    "event_id": event.get("event_id")
-                                })
-                        
-                        return {
-                            "success": True,
-                            "room_id": room_id,
-                            "messages": messages,
-                            "count": len(messages)
-                        }
+                        result = await response.json()
+                        if result.get("success"):
+                            return {
+                                "success": True,
+                                "room_id": room_id,
+                                "messages": result.get("messages", []),
+                                "count": len(result.get("messages", []))
+                            }
+                        else:
+                            return {"error": f"Failed to read room: {result.get('message', 'Unknown error')}"}
                     else:
                         error_data = await response.text()
                         return {"error": f"Failed to read room: {response.status} - {error_data}"}
                         
         except Exception as e:
             return {"error": f"Error reading room: {str(e)}"}
+    
+    async def _login(self) -> Dict[str, Any]:
+        """Login to Matrix and get access token"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.matrix_api_url}/login"
+                payload = {
+                    "homeserver": self.matrix_homeserver,
+                    "user_id": self.letta_username,
+                    "password": self.letta_password,
+                    "device_name": "mcp_read_room"
+                }
+                
+                async with session.post(url, json=payload) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        return {"error": f"Login failed: {error_text}"}
+                    
+                    result = await response.json()
+                    if result.get("success"):
+                        return {
+                            "access_token": result.get("access_token"),
+                            "device_id": result.get("device_id")
+                        }
+                    else:
+                        return {"error": f"Login failed: {result.get('message', 'Unknown error')}"}
+        except Exception as e:
+            return {"error": f"Login error: {str(e)}"}
 
 
 class MatrixJoinRoomTool(MCPTool):
     """Tool for joining a Matrix room"""
-    def __init__(self, matrix_homeserver: str):
+    def __init__(self, matrix_api_url: str, matrix_homeserver: str, letta_username: str, letta_password: str):
         super().__init__(
             name="matrix_join_room",
             description="Join a Matrix room by ID or alias"
         )
+        self.matrix_api_url = matrix_api_url
         self.matrix_homeserver = matrix_homeserver
+        self.letta_username = letta_username
+        self.letta_password = letta_password
+        self.access_token = None  # Will be obtained on first use
         self.parameters = {
-            "room_id_or_alias": {"type": "string", "description": "Room ID (!abc:server) or alias (#room:server)"},
-            "access_token": {"type": "string", "description": "Matrix access token"}
+            "room_id_or_alias": {"type": "string", "description": "Room ID (!abc:server) or alias (#room:server)"}
         }
     
     async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         room_id_or_alias = params.get("room_id_or_alias")
-        access_token = params.get("access_token")
         
-        if not all([room_id_or_alias, access_token]):
-            return {"error": "Missing required parameters: room_id_or_alias, access_token"}
+        if not room_id_or_alias:
+            return {"error": "Missing required parameter: room_id_or_alias"}
+        
+        # Get access token if we don't have one
+        if not self.access_token:
+            login_result = await self._login()
+            if "error" in login_result:
+                return login_result
+            self.access_token = login_result["access_token"]
         
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"{self.matrix_homeserver}/_matrix/client/r0/join/{quote(room_id_or_alias)}"
-                headers = {"Authorization": f"Bearer {access_token}"}
+                headers = {"Authorization": f"Bearer {self.access_token}"}
                 
                 async with session.post(url, headers=headers, json={}) as response:
                     if response.status == 200:
@@ -304,36 +288,81 @@ class MatrixJoinRoomTool(MCPTool):
                         
         except Exception as e:
             return {"error": f"Error joining room: {str(e)}"}
+    
+    async def _login(self) -> Dict[str, Any]:
+        """Login to Matrix and get access token"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.matrix_api_url}/login"
+                payload = {
+                    "homeserver": self.matrix_homeserver,
+                    "user_id": self.letta_username,
+                    "password": self.letta_password,
+                    "device_name": "mcp_join_room"
+                }
+                
+                async with session.post(url, json=payload) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        return {"error": f"Login failed: {error_text}"}
+                    
+                    result = await response.json()
+                    if result.get("success"):
+                        return {
+                            "access_token": result.get("access_token"),
+                            "device_id": result.get("device_id")
+                        }
+                    else:
+                        return {"error": f"Login failed: {result.get('message', 'Unknown error')}"}
+        except Exception as e:
+            return {"error": f"Login error: {str(e)}"}
 
 
 class MatrixCreateRoomTool(MCPTool):
     """Tool for creating a new Matrix room"""
-    def __init__(self, matrix_homeserver: str):
+    def __init__(self, matrix_api_url: str, matrix_homeserver: str, letta_username: str, letta_password: str):
         super().__init__(
             name="matrix_create_room",
             description="Create a new Matrix room"
         )
+        self.matrix_api_url = matrix_api_url
         self.matrix_homeserver = matrix_homeserver
+        self.letta_username = letta_username
+        self.letta_password = letta_password
+        self.access_token = None  # Will be obtained on first use
         self.parameters = {
             "name": {"type": "string", "description": "Room name"},
-            "topic": {"type": "string", "description": "Room topic (optional)"},
-            "is_public": {"type": "boolean", "description": "Whether the room is public (default: false)"},
-            "access_token": {"type": "string", "description": "Matrix access token"}
+            "topic": {
+                "type": "string", 
+                "description": "Room topic (optional)",
+                "default": ""
+            },
+            "is_public": {
+                "type": "boolean", 
+                "description": "Whether the room is public",
+                "default": False
+            }
         }
     
     async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         name = params.get("name")
         topic = params.get("topic", "")
         is_public = params.get("is_public", False)
-        access_token = params.get("access_token")
         
-        if not all([name, access_token]):
-            return {"error": "Missing required parameters: name, access_token"}
+        if not name:
+            return {"error": "Missing required parameter: name"}
+        
+        # Get access token if we don't have one
+        if not self.access_token:
+            login_result = await self._login()
+            if "error" in login_result:
+                return login_result
+            self.access_token = login_result["access_token"]
         
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"{self.matrix_homeserver}/_matrix/client/r0/createRoom"
-                headers = {"Authorization": f"Bearer {access_token}"}
+                headers = {"Authorization": f"Bearer {self.access_token}"}
                 
                 payload = {
                     "name": name,
@@ -358,6 +387,151 @@ class MatrixCreateRoomTool(MCPTool):
                         
         except Exception as e:
             return {"error": f"Error creating room: {str(e)}"}
+    
+    async def _login(self) -> Dict[str, Any]:
+        """Login to Matrix and get access token"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.matrix_api_url}/login"
+                payload = {
+                    "homeserver": self.matrix_homeserver,
+                    "user_id": self.letta_username,
+                    "password": self.letta_password,
+                    "device_name": "mcp_create_room"
+                }
+                
+                async with session.post(url, json=payload) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        return {"error": f"Login failed: {error_text}"}
+                    
+                    result = await response.json()
+                    if result.get("success"):
+                        return {
+                            "access_token": result.get("access_token"),
+                            "device_id": result.get("device_id")
+                        }
+                    else:
+                        return {"error": f"Login failed: {result.get('message', 'Unknown error')}"}
+        except Exception as e:
+            return {"error": f"Login error: {str(e)}"}
+
+
+class MatrixListRoomsTool(MCPTool):
+    """Tool for listing Matrix rooms"""
+    def __init__(self, matrix_api_url: str, matrix_homeserver: str, letta_username: str, letta_password: str):
+        super().__init__(
+            name="matrix_list_rooms",
+            description="List all available Matrix rooms"
+        )
+        self.matrix_api_url = matrix_api_url
+        self.matrix_homeserver = matrix_homeserver
+        self.letta_username = letta_username
+        self.letta_password = letta_password
+        self.access_token = None  # Will be obtained on first use
+        self.debug_counter = 0  # For debugging
+        self.parameters = {
+            "include_members": {
+                "type": "boolean", 
+                "description": "Include member count for each room",
+                "default": False
+            }
+        }
+    
+    async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        self.debug_counter += 1
+        include_members = params.get("include_members", False)
+        
+        # Force debug log to ensure logging is working - write to stdout and stderr
+        debug_msg = f"MatrixListRoomsTool.execute #{self.debug_counter} called with params: {params}"
+        print(debug_msg, flush=True)
+        import sys
+        print(debug_msg, file=sys.stderr, flush=True)
+        logger.error(debug_msg)  # Using error level to ensure it shows
+        
+        # Clear access token to force fresh login each time for debugging
+        self.access_token = None
+        
+        # Get access token if we don't have one
+        if not self.access_token:
+            logger.error("No access token, attempting login")
+            login_result = await self._login()
+            if "error" in login_result:
+                logger.error(f"Login failed: {login_result}")
+                return login_result
+            self.access_token = login_result["access_token"]
+            logger.error(f"Login successful, got token: {self.access_token[:10]}...")
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Get joined rooms from Matrix API
+                url = f"{self.matrix_api_url}/rooms/list"
+                params_dict = {
+                    "access_token": self.access_token,
+                    "homeserver": self.matrix_homeserver
+                }
+                
+                logger.info(f"Making GET request to {url} with params: {params_dict}")
+                
+                async with session.get(url, params=params_dict) as response:
+                    actual_url = str(response.url)
+                    request_method = response.request_info.method
+                    logger.info(f"Actual request: {request_method} {actual_url}")
+                    logger.info(f"Response status: {response.status}")
+                    
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Error response: {error_text}")
+                        return {"error": f"Failed to list rooms: {error_text}"}
+                    
+                    result = await response.json()
+                    logger.info(f"Success response: {result}")
+                    
+                    if result.get("success"):
+                        return {
+                            "success": True,
+                            "rooms": result.get("rooms", [])
+                        }
+                    else:
+                        return {"error": f"Failed to list rooms: {result.get('message', 'Unknown error')}"}
+                        
+        except Exception as e:
+            logger.error(f"Exception in execute: {str(e)}")
+            return {"error": f"Error listing rooms: {str(e)}"}
+    
+    async def _login(self) -> Dict[str, Any]:
+        """Login to Matrix and get access token"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.matrix_api_url}/login"
+                payload = {
+                    "homeserver": self.matrix_homeserver,
+                    "user_id": self.letta_username,
+                    "password": self.letta_password,
+                    "device_name": "mcp_server"
+                }
+                
+                logger.info(f"Logging in to {url} with user {self.letta_username}")
+                
+                async with session.post(url, json=payload) as response:
+                    logger.info(f"Login response status: {response.status}")
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Login error response: {error_text}")
+                        return {"error": f"Login failed: {error_text}"}
+                    
+                    result = await response.json()
+                    logger.info(f"Login success response: {result}")
+                    if result.get("success"):
+                        return {
+                            "access_token": result.get("access_token"),
+                            "device_id": result.get("device_id")
+                        }
+                    else:
+                        return {"error": f"Login failed: {result.get('message', 'Unknown error')}"}
+        except Exception as e:
+            logger.error(f"Login exception: {str(e)}")
+            return {"error": f"Login error: {str(e)}"}
 
 
 class MCPHTTPServer:
@@ -369,6 +543,8 @@ class MCPHTTPServer:
         self.app = web.Application()
         self.matrix_api_url = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
         self.matrix_homeserver = os.getenv("MATRIX_HOMESERVER_URL", "http://synapse:8008")
+        self.letta_username = os.getenv("MATRIX_USERNAME", "@letta:matrix.oculair.ca")
+        self.letta_password = os.getenv("MATRIX_PASSWORD", "letta")
         
         # Register available tools
         self._register_tools()
@@ -378,16 +554,38 @@ class MCPHTTPServer:
     
     def _register_tools(self):
         """Register available MCP tools"""
-        # Basic tools
-        self.tools["file_read"] = FileReadTool()
-        self.tools["web_search"] = WebSearchTool()
-        self.tools["calculator"] = CalculatorTool()
-        
-        # Matrix tools
-        self.tools["matrix_send_message"] = MatrixSendMessageTool(self.matrix_api_url)
-        self.tools["matrix_read_room"] = MatrixReadRoomTool(self.matrix_homeserver)
-        self.tools["matrix_join_room"] = MatrixJoinRoomTool(self.matrix_homeserver)
-        self.tools["matrix_create_room"] = MatrixCreateRoomTool(self.matrix_homeserver)
+        # Matrix tools only - removed file_read, web_search, and calculator
+        # All tools now use pre-configured Letta credentials for consistency
+        self.tools["matrix_list_rooms"] = MatrixListRoomsTool(
+            self.matrix_api_url, 
+            self.matrix_homeserver,
+            self.letta_username,
+            self.letta_password
+        )
+        self.tools["matrix_send_message"] = MatrixSendMessageTool(
+            self.matrix_api_url,
+            self.matrix_homeserver,
+            self.letta_username,
+            self.letta_password
+        )
+        self.tools["matrix_read_room"] = MatrixReadRoomTool(
+            self.matrix_api_url,
+            self.matrix_homeserver,
+            self.letta_username,
+            self.letta_password
+        )
+        self.tools["matrix_join_room"] = MatrixJoinRoomTool(
+            self.matrix_api_url,
+            self.matrix_homeserver,
+            self.letta_username,
+            self.letta_password
+        )
+        self.tools["matrix_create_room"] = MatrixCreateRoomTool(
+            self.matrix_api_url,
+            self.matrix_homeserver,
+            self.letta_username,
+            self.letta_password
+        )
         
         logger.info(f"Registered {len(self.tools)} tools: {list(self.tools.keys())}")
     
@@ -482,12 +680,15 @@ class MCPHTTPServer:
         
         try:
             body = await request.json()
+            logger.info(f"Received request body: {body}")
             
             # Handle batch or single request
             if isinstance(body, list):
                 messages = body
             else:
                 messages = [body]
+            
+            logger.info(f"Processing {len(messages)} messages: {messages}")
             
             # Separate requests from notifications/responses
             requests = []
@@ -501,6 +702,8 @@ class MCPHTTPServer:
                     notifications.append(msg)
                 elif 'result' in msg or 'error' in msg:
                     responses.append(msg)
+            
+            logger.info(f"Separated - requests: {len(requests)}, notifications: {len(notifications)}, responses: {len(responses)}")
             
             # If only notifications/responses, return 202 Accepted
             if not requests:
@@ -660,6 +863,8 @@ class MCPHTTPServer:
         params = request.get('params', {})
         request_id = request.get('id')
         
+        logger.info(f"Processing request - method: {method}, params: {params}, id: {request_id}")
+        
         try:
             # Handle different methods
             if method == 'initialize':
@@ -669,14 +874,17 @@ class MCPHTTPServer:
             elif method == 'tools/list':
                 result = await self._handle_list_tools()
             elif method == 'tools/call':
+                logger.info(f"Handling tools/call with params: {params}")
                 result = await self._handle_tool_call(params)
             else:
+                logger.warning(f"Unknown method: {method}")
                 return {
                     "jsonrpc": "2.0",
                     "error": {"code": -32601, "message": f"Method not found: {method}"},
                     "id": request_id
                 }
             
+            logger.info(f"Request processed successfully for {method}")
             return {
                 "jsonrpc": "2.0",
                 "result": result,
@@ -730,13 +938,26 @@ class MCPHTTPServer:
         """Handle tools list request"""
         tools = []
         for name, tool in self.tools.items():
+            # Only include parameters without defaults as required
+            required_params = []
+            properties = {}
+            
+            for param_name, param_config in tool.parameters.items():
+                properties[param_name] = {
+                    "type": param_config["type"],
+                    "description": param_config["description"]
+                }
+                # Only add to required if no default is specified
+                if "default" not in param_config:
+                    required_params.append(param_name)
+            
             tools.append({
                 "name": name,
                 "description": tool.description,
                 "inputSchema": {
                     "type": "object",
-                    "properties": tool.parameters,
-                    "required": list(tool.parameters.keys())
+                    "properties": properties,
+                    "required": required_params
                 }
             })
         
@@ -747,11 +968,16 @@ class MCPHTTPServer:
         tool_name = params.get('name')
         tool_args = params.get('arguments', {})
         
+        logger.info(f"Tool call request: {tool_name} with args: {tool_args}")
+        
         if tool_name not in self.tools:
+            logger.error(f"Unknown tool: {tool_name}, available: {list(self.tools.keys())}")
             raise ValueError(f"Unknown tool: {tool_name}")
         
         tool = self.tools[tool_name]
+        logger.info(f"Executing tool {tool_name}")
         result = await tool.execute(tool_args)
+        logger.info(f"Tool {tool_name} result: {result}")
         
         return {
             "content": [

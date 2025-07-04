@@ -511,14 +511,14 @@ async def join_room_if_needed(client_instance, room_id_or_alias, logger: logging
         }, exc_info=True)
         return None
 
-async def periodic_agent_sync(config, logger, interval=60):  # Default 60 seconds
-    """Periodically sync Letta agents to Matrix users"""
+async def periodic_agent_sync(config, logger, interval=0.5):  # Reduced to 0.5 seconds for faster agent detection
+    """Periodically sync Letta agents to Matrix users via OpenAI endpoint"""
     while True:
         await asyncio.sleep(interval)
-        logger.info("Running periodic agent sync...")
+        logger.debug("Running periodic agent sync via OpenAI endpoint...")  # Changed to debug to reduce log noise
         try:
             await run_agent_sync(config)
-            logger.info("Periodic agent sync completed successfully")
+            logger.debug("Periodic agent sync completed successfully")
         except Exception as e:
             logger.error("Periodic agent sync failed", extra={"error": str(e)})
 
@@ -587,6 +587,29 @@ async def main():
             "new_room_id": joined_room_id,
             "original_room_id": config.room_id
         })
+    
+    # Join all agent rooms
+    logger.info("Joining agent rooms...")
+    agent_rooms_joined = 0
+    if os.path.exists("/app/data/agent_user_mappings.json"):
+        try:
+            with open("/app/data/agent_user_mappings.json", 'r') as f:
+                mappings = json.load(f)
+                for agent_id, mapping in mappings.items():
+                    room_id = mapping.get("room_id")
+                    agent_name = mapping.get("agent_name")
+                    if room_id:
+                        logger.info(f"Attempting to join room for agent {agent_name}")
+                        joined = await join_room_if_needed(client, room_id, logger)
+                        if joined:
+                            agent_rooms_joined += 1
+                            logger.info(f"Successfully joined room for agent {agent_name}: {room_id}")
+                        else:
+                            logger.warning(f"Failed to join room for agent {agent_name}: {room_id}")
+        except Exception as e:
+            logger.error(f"Error loading agent mappings: {e}")
+    
+    logger.info(f"Joined {agent_rooms_joined} agent rooms")
 
     # Add the callback for text messages with config and logger
     async def callback_wrapper(room, event):
@@ -595,14 +618,23 @@ async def main():
     client.add_event_callback(callback_wrapper, RoomMessageText)
 
     logger.info("Starting sync loop to listen for messages")
-    # Set sync_filter to only include room events for joined rooms to reduce data
-    sync_filter = {"room": {"timeline": {"limit": 0}}} # Don't fetch any historical messages on initial sync
+    # Set sync_filter with lazy loading and optimizations for performance
+    sync_filter = {
+        "room": {
+            "timeline": {"limit": 0},  # Don't fetch historical messages on initial sync
+            "state": {
+                "lazy_load_members": True  # Only load member info when needed
+            }
+        },
+        "presence": {"enabled": False},  # Disable presence updates to reduce data
+        "account_data": {"enabled": False}  # Disable account data sync
+    }
     try:
         # Store auth manager globally so we can refresh tokens during sync
         global auth_manager_global
         auth_manager_global = auth_manager
         
-        await client.sync_forever(timeout=30000, full_state=False, sync_filter=sync_filter) # Sync every 30 seconds
+        await client.sync_forever(timeout=5000, full_state=False, sync_filter=sync_filter) # Reduced to 5 seconds for faster response
     except Exception as e:
         logger.error("Error during sync", extra={"error": str(e)}, exc_info=True)
     finally:

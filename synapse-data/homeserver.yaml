@@ -36,35 +36,58 @@ trusted_key_servers:
 # Application services
 app_service_config_files:
   - /data/gmessages-registration.yaml
+  - /data/discord-registration.yaml
 
 # vim:ft=yaml
 enable_registration_without_verification: true
 
-# Rate limiting configuration
+# Rate limiting configuration - DISABLED for internal agent communication
+# Setting all rate limits to effectively unlimited values
 rc_login:
   # The rate limiting for login attempts
   address:
-    per_second: 1  # Default is 0.003 (1 attempt per ~5 minutes)
-    burst_count: 10  # Default is 3
+    per_second: 1000  # Effectively unlimited
+    burst_count: 10000
   account:
-    per_second: 1  # Default is 0.003
-    burst_count: 10  # Default is 3
+    per_second: 1000
+    burst_count: 10000
   failed_attempts:
-    per_second: 0.5  # Default is 0.17
-    burst_count: 10  # Default is 3
+    per_second: 1000
+    burst_count: 10000
 
 rc_registration:
-  per_second: 1  # Default is 0.17
-  burst_count: 5  # Default is 3
+  per_second: 1000  # Unlimited agent registration
+  burst_count: 10000
 
 rc_message:
-  per_second: 10  # Default is 0.2
-  burst_count: 50  # Default is 10
+  per_second: 10000  # Unlimited messaging for agent communication
+  burst_count: 100000
 
 rc_joins:
   local:
-    per_second: 1  # Default is 0.1
-    burst_count: 10  # Default is 3
+    per_second: 1000  # Unlimited room joins
+    burst_count: 10000
   remote:
-    per_second: 1  # Default is 0.01
-    burst_count: 10  # Default is 3
+    per_second: 1000
+    burst_count: 10000
+
+# Additional rate limiting settings to disable
+rc_admin_redaction:
+  per_second: 1000
+  burst_count: 10000
+
+rc_invites:
+  per_room:
+    per_second: 1000
+    burst_count: 10000
+  per_user:
+    per_second: 1000
+    burst_count: 10000
+
+rc_3pid_validation:
+  per_second: 1000
+  burst_count: 10000
+
+rc_key_requests:
+  per_second: 1000
+  burst_count: 10000

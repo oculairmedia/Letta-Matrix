@@ -15,6 +15,15 @@ from dotenv import load_dotenv
 import os
 import uvicorn
 
+# Import agent sync functionality
+try:
+    from agent_user_manager import run_agent_sync
+    from custom_matrix_client import Config
+    AGENT_SYNC_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Agent sync not available: {e}")
+    AGENT_SYNC_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -83,6 +92,15 @@ class ListRoomsResponse(BaseModel):
     success: bool
     rooms: List[RoomInfo] = []
     message: str
+
+class NewAgentNotification(BaseModel):
+    agent_id: str
+    timestamp: str
+
+class WebhookResponse(BaseModel):
+    success: bool
+    message: str
+    timestamp: str
 
 # Global Matrix client for the API
 class MatrixAPIClient:
@@ -397,13 +415,52 @@ async def get_recent_messages(homeserver: str, access_token: str, limit: int = 1
     except Exception as e:
         return {"success": False, "message": f"Error getting recent messages: {str(e)}"}
 
+@app.post("/webhook/new-agent", response_model=WebhookResponse)
+async def new_agent_webhook(notification: NewAgentNotification, background_tasks: BackgroundTasks):
+    """Webhook endpoint to receive new agent notifications from Letta webhook receiver."""
+    try:
+        logger.info(f"Received new agent notification: {notification.agent_id}")
+        
+        if not AGENT_SYNC_AVAILABLE:
+            return WebhookResponse(
+                success=False,
+                message="Agent sync functionality not available",
+                timestamp=datetime.now().isoformat()
+            )
+        
+        # Trigger immediate agent sync in background
+        async def trigger_agent_sync():
+            try:
+                config = Config.from_env()
+                await run_agent_sync(config)
+                logger.info(f"Successfully synced new agent: {notification.agent_id}")
+            except Exception as e:
+                logger.error(f"Failed to sync new agent {notification.agent_id}: {e}")
+        
+        background_tasks.add_task(trigger_agent_sync)
+        
+        return WebhookResponse(
+            success=True,
+            message=f"Triggered sync for new agent: {notification.agent_id}",
+            timestamp=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        logger.error(f"Error processing new agent webhook: {e}")
+        return WebhookResponse(
+            success=False,
+            message=f"Error: {str(e)}",
+            timestamp=datetime.now().isoformat()
+        )
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
         "authenticated": matrix_client.authenticated,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "agent_sync_available": AGENT_SYNC_AVAILABLE
     }
 
 if __name__ == "__main__":
