@@ -15,6 +15,13 @@ from dotenv import load_dotenv
 import os
 import uvicorn
 
+# Configure logging first
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 # Import agent sync functionality
 try:
     from agent_user_manager import run_agent_sync
@@ -23,13 +30,6 @@ try:
 except ImportError as e:
     logger.warning(f"Agent sync not available: {e}")
     AGENT_SYNC_AVAILABLE = False
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv('.env')

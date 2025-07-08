@@ -273,13 +273,26 @@ async def periodic_agent_sync(config, logger, interval=60):  # seconds
 
 ## Production Status
 
-The integration is **production-ready** with:
-- Full multi-agent support with individual identities
-- Automatic agent lifecycle management including name updates
-- Clean restart behavior without message replay
-- Persistent state management
-- Comprehensive error handling
-- Administrative oversight via MCP tools
-- Optimized for minimal latency (<1s typical response time)
+The integration is **partially operational** with the following status:
+
+### Working Features ✅
+- Multi-agent support with individual Matrix identities
+- Agent discovery via Letta proxy on port 1416
+- Message processing and agent responses
+- Persistent state management in JSON mappings
+- MCP tools for Matrix operations
+
+### Temporary Issues ⚠️
+- **Invitation Management**: Disabled due to permission errors (M_FORBIDDEN)
+- **Agent Synchronization**: Temporarily disabled to prioritize message processing
+- **Admin User Access**: Cannot auto-invite @admin to agent rooms
+
+### Recent Fixes (January 7, 2025)
+- Fixed agent discovery endpoint (port 8283 → 1416)
+- Cleaned up stale agent mappings
+- Enhanced message parsing for multiple response formats
+- Disabled blocking invitation loops
+
+See `MATRIX_FIXES_2025_01_07.md` for detailed information about recent fixes and current workarounds.
 
 This enables each Letta agent to participate as a unique Matrix user with their own identity, room, and conversational context, while maintaining centralized management through the @letta account and MCP tools.

@@ -17,6 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY matrix_api.py .
+COPY agent_user_manager.py .
+COPY custom_matrix_client.py .
 
 # Note: .env will be mounted as volume in docker-compose.yml
 # Create a placeholder .env for build context

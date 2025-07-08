@@ -223,11 +223,28 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
         if response and response.messages:
             assistant_messages = []
             
-            # Look for assistant messages in the response
+            # Debug: Log the response structure
+            logger.debug(f"Response has {len(response.messages)} messages")
+            for i, message in enumerate(response.messages):
+                logger.debug(f"Message {i}: type={getattr(message, 'message_type', 'unknown')}, "
+                           f"role={getattr(message, 'role', 'unknown')}, "
+                           f"content={getattr(message, 'content', 'none')[:100]}")
+            
+            # Look for assistant messages in the response - check multiple possible formats
             for message in response.messages:
+                message_content = None
+                
+                # Try different ways to identify assistant messages
                 if hasattr(message, 'message_type') and message.message_type == 'assistant_message':
-                    if hasattr(message, 'content') and message.content:
-                        assistant_messages.append(message.content)
+                    message_content = getattr(message, 'content', None)
+                elif hasattr(message, 'role') and message.role == 'assistant':
+                    message_content = getattr(message, 'content', None)
+                elif hasattr(message, 'content') and message.content:
+                    # If it has content but no clear role, assume it's an assistant message
+                    message_content = message.content
+                
+                if message_content:
+                    assistant_messages.append(str(message_content))
             
             # If we found assistant messages, return them
             if assistant_messages:
@@ -239,6 +256,7 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
                 return result
             else:
                 logger.warning("No assistant messages found in response")
+                logger.warning(f"Response structure: {[{k: getattr(msg, k, None) for k in ['message_type', 'role', 'content']} for msg in response.messages[:3]]}")
                 return "Letta responded but no clear message content found."
         else:
             logger.warning("Empty response from Letta API")
@@ -549,17 +567,17 @@ async def main():
     # Initialize Matrix authentication manager
     auth_manager = MatrixAuthManager(config.homeserver_url, config.username, config.password, "CustomNioClientToken")
     
-    # Sync Letta agents to Matrix users (run this before main client setup)
-    logger.info("Syncing Letta agents to Matrix users...")
-    try:
-        agent_manager = await run_agent_sync(config)
-        logger.info("Agent-to-user sync completed successfully")
-    except Exception as e:
-        logger.error("Agent sync failed", extra={"error": str(e)})
-        # Continue with main client setup even if agent sync fails
+    # Temporarily disabled agent sync to focus on message processing
+    logger.info("Skipping agent sync to prioritize message processing...")
+    # try:
+    #     agent_manager = await run_agent_sync(config)
+    #     logger.info("Agent-to-user sync completed successfully")
+    # except Exception as e:
+    #     logger.error("Agent sync failed", extra={"error": str(e)})
+    #     # Continue with main client setup even if agent sync fails
     
-    # Start periodic agent sync task
-    sync_task = asyncio.create_task(periodic_agent_sync(config, logger))
+    # Temporarily disable periodic agent sync to allow message processing
+    # sync_task = asyncio.create_task(periodic_agent_sync(config, logger))
     
     # Get authenticated client
     client = await auth_manager.get_authenticated_client()

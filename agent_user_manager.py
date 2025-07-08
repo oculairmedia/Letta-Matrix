@@ -105,39 +105,44 @@ class AgentUserManager:
             logger.error(f"Error saving mappings: {e}")
     
     async def get_letta_agents(self) -> List[dict]:
-        """Get all Letta agents from OpenAI endpoint"""
+        """Get all Letta agents from agents endpoint"""
         try:
-            # Use OpenAI endpoint - each model is an agent
-            openai_endpoint = "http://192.168.50.90:1416/v1/models"
+            # Use proper agents endpoint (port 1416 for models which represent agents)
+            agents_endpoint = "http://192.168.50.90:1416/v1/models"
+            
+            # Set up authentication headers
+            headers = {
+                "Authorization": "Bearer lettaSecurePass123",
+                "Content-Type": "application/json"
+            }
             
             # Create a fresh session to avoid timeout context errors
             async with aiohttp.ClientSession() as session:
-                async with session.get(openai_endpoint, timeout=DEFAULT_TIMEOUT) as response:
+                async with session.get(agents_endpoint, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status != 200:
-                        logger.error(f"Failed to get agents from OpenAI endpoint: {response.status}")
+                        logger.error(f"Failed to get agents from agents endpoint: {response.status}")
                         return []
                     
-                    data = await response.json()
-                    models = data.get("data", [])
+                    agents_data = await response.json()
                     
                     agent_list = []
-                    for model in models:
-                        # Extract agent ID from model id (format: "agent-{uuid}")
-                        model_id = model.get("id", "")
-                        if model_id.startswith("agent-"):
-                            agent_id = model_id
-                            agent_name = model.get("name", model_id)
-                            
+                    # Handle /v1/models response format with data array
+                    agents_array = agents_data.get("data", []) if isinstance(agents_data, dict) else agents_data
+                    for agent in agents_array:
+                        agent_id = agent.get("id", "")
+                        agent_name = agent.get("name", agent_id)
+                        
+                        if agent_id:
                             agent_list.append({
                                 "id": agent_id,
                                 "name": agent_name
                             })
                     
-                    logger.info(f"Found {len(agent_list)} Letta agents from OpenAI endpoint")
+                    logger.info(f"Found {len(agent_list)} Letta agents from agents endpoint")
                     return agent_list
             
         except Exception as e:
-            logger.error(f"Error getting Letta agents from OpenAI endpoint: {e}")
+            logger.error(f"Error getting Letta agents from agents endpoint: {e}")
             return []
     
     async def get_admin_token(self) -> Optional[str]:
@@ -350,8 +355,8 @@ class AgentUserManager:
                         await self.create_or_update_agent_room(agent["id"])
                     # If room exists, ensure invitations are accepted
                     elif mapping.created and mapping.room_created and mapping.room_id:
-                        logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
-                        await self.auto_accept_invitations(mapping.room_id)
+                        logger.info(f"Skipping invitation process for room {mapping.room_id} (temporarily disabled)")
+                        # await self.auto_accept_invitations(mapping.room_id)
         
         # TODO: Optionally handle removed agents (deactivate users?)
         removed_agents = existing_agent_ids - current_agent_ids
@@ -361,8 +366,9 @@ class AgentUserManager:
         # Save updated mappings
         await self.save_mappings()
         
-        # Ensure @admin:matrix.oculair.ca is invited to all rooms
-        await self.invite_admin_to_existing_rooms()
+        # Temporarily disabled to prevent blocking message processing
+        # TODO: Fix permission issues before re-enabling
+        # await self.invite_admin_to_existing_rooms()
         
         logger.info(f"Sync complete. Total mappings: {len(self.mappings)}")
     
@@ -766,6 +772,12 @@ class AgentUserManager:
                     async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
                         if response.status == 200:
                             logger.info(f"User {username} successfully joined room {room_id}")
+                        elif response.status == 403:
+                            error_text = await response.text()
+                            if "already in the room" in error_text or "already joined" in error_text:
+                                logger.info(f"User {username} is already in room {room_id}")
+                            else:
+                                logger.warning(f"User {username} forbidden from joining room {room_id}: {error_text}")
                         else:
                             error_text = await response.text()
                             logger.warning(f"User {username} could not join room {room_id}: {response.status} - {error_text}")
@@ -791,7 +803,18 @@ class AgentUserManager:
                     logger.error("Cannot invite without admin token")
                     return False
                 
-                # Invite the user
+                # First, check if the inviting user (admin) is in the room
+                inviting_user_id = self.admin_username
+                is_admin_in_room = await self._check_user_in_room(room_id, inviting_user_id, admin_token)
+                
+                if not is_admin_in_room:
+                    logger.info(f"Admin user {inviting_user_id} not in room {room_id}, attempting to join first")
+                    join_success = await self._join_room_as_admin(room_id, admin_token)
+                    if not join_success:
+                        logger.error(f"Failed to join room {room_id} as admin, cannot invite {user_id}")
+                        return False
+                
+                # Now invite the user
                 invite_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/invite"
                 headers = {
                     "Authorization": f"Bearer {admin_token}",
@@ -817,10 +840,24 @@ class AgentUserManager:
                             logger.warning(f"Rate limited inviting {user_id} to room {room_id}. Retrying in {backoff_time:.1f}s (attempt {attempt + 1}/{max_retries})")
                             await asyncio.sleep(backoff_time)
                             continue
+                        elif response.status == 403:  # Forbidden
+                            error_text = await response.text()
+                            logger.error(f"Forbidden error inviting {user_id} to room {room_id}: {error_text}")
+                            
+                            # Check if user is already in the room
+                            if "already in the room" in error_text or "already joined" in error_text:
+                                logger.info(f"User {user_id} is already in room {room_id}")
+                                return True
+                            elif "not in room" in error_text or "not joined" in error_text:
+                                logger.error(f"Admin user {inviting_user_id} lost access to room {room_id}, cannot invite")
+                                return False
+                            else:
+                                logger.error(f"Permission denied inviting {user_id} to room {room_id}")
+                                return False
                         else:
                             error_text = await response.text()
                             # Check if user is already in the room
-                            if "already in the room" in error_text:
+                            if "already in the room" in error_text or "already joined" in error_text:
                                 logger.info(f"User {user_id} is already in room {room_id}")
                                 return True
                             else:
@@ -842,6 +879,74 @@ class AgentUserManager:
         
         logger.error(f"Failed to invite {user_id} to room {room_id} after {max_retries} attempts")
         return False
+    
+    async def _check_user_in_room(self, room_id: str, user_id: str, admin_token: str) -> bool:
+        """Check if a user is in a specific room"""
+        try:
+            # Use the room members API to check if user is in the room
+            members_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/members"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json"
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(members_url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        chunk = data.get("chunk", [])
+                        
+                        # Check if user is in the member list with 'join' membership
+                        for member in chunk:
+                            if (member.get("state_key") == user_id and 
+                                member.get("content", {}).get("membership") == "join"):
+                                return True
+                        return False
+                    elif response.status == 403:
+                        # If we get 403, the admin user is not in the room
+                        logger.debug(f"Admin user not in room {room_id} (403 response)")
+                        return False
+                    else:
+                        logger.warning(f"Unexpected response checking membership in room {room_id}: {response.status}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"Error checking if user {user_id} is in room {room_id}: {e}")
+            return False
+    
+    async def _join_room_as_admin(self, room_id: str, admin_token: str) -> bool:
+        """Join a room as the admin user"""
+        try:
+            join_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/join"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json"
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        logger.info(f"Admin successfully joined room {room_id}")
+                        return True
+                    elif response.status == 403:
+                        error_text = await response.text()
+                        logger.error(f"Admin cannot join room {room_id}: {error_text}")
+                        
+                        # Check if it's because the room is invite-only
+                        if "invite" in error_text.lower():
+                            logger.info(f"Room {room_id} is invite-only, admin cannot join without invitation")
+                            return False
+                        else:
+                            logger.error(f"Admin user lacks permission to join room {room_id}")
+                            return False
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to join room {room_id} as admin: {response.status} - {error_text}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"Error joining room {room_id} as admin: {e}")
+            return False
 
 async def run_agent_sync(config):
     """Run the agent sync process"""
