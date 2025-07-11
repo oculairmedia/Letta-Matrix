@@ -46,6 +46,7 @@ class AgentUserMapping:
     created: bool = False
     room_id: Optional[str] = None
     room_created: bool = False
+    invitation_status: Optional[Dict[str, str]] = None  # user_id -> "invited"|"joined"|"failed"
 
 class AgentUserManager:
     """Manages Matrix users for Letta agents"""
@@ -76,6 +77,9 @@ class AgentUserManager:
                 with open(self.mappings_file, 'r') as f:
                     data = json.load(f)
                     for agent_id, mapping_data in data.items():
+                        # Handle backward compatibility for new invitation_status field
+                        if "invitation_status" not in mapping_data:
+                            mapping_data["invitation_status"] = None
                         self.mappings[agent_id] = AgentUserMapping(**mapping_data)
                 logger.info(f"Loaded {len(self.mappings)} existing agent-user mappings")
             else:
@@ -95,7 +99,8 @@ class AgentUserManager:
                     "matrix_password": mapping.matrix_password,
                     "created": mapping.created,
                     "room_id": mapping.room_id,
-                    "room_created": mapping.room_created
+                    "room_created": mapping.room_created,
+                    "invitation_status": mapping.invitation_status
                 }
             
             with open(self.mappings_file, 'w') as f:
@@ -713,11 +718,14 @@ class AgentUserManager:
                         mapping.room_id = room_id
                         mapping.room_created = True
                         
+                        # Initialize invitation status tracking
+                        mapping.invitation_status = {user_id: "invited" for user_id in invites}
+                        
                         # Save updated mappings
                         await self.save_mappings()
                         
                         # Now auto-accept the invitations for admin and letta users
-                        await self.auto_accept_invitations(room_id)
+                        await self.auto_accept_invitations_with_tracking(room_id, mapping)
                         
                         return room_id
                     else:
@@ -729,8 +737,8 @@ class AgentUserManager:
             logger.error(f"Error creating room for agent {agent_id}: {e}")
             return None
     
-    async def auto_accept_invitations(self, room_id: str):
-        """Auto-accept room invitations for admin and letta users"""
+    async def auto_accept_invitations_with_tracking(self, room_id: str, mapping: AgentUserMapping):
+        """Auto-accept room invitations for admin and letta users with status tracking"""
         users_to_accept = [
             (self.admin_username, self.admin_password),
             (self.config.username, self.config.password)
@@ -753,6 +761,8 @@ class AgentUserManager:
                     async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
                         if response.status != 200:
                             logger.error(f"Failed to login as {username} to accept invitation")
+                            if mapping.invitation_status:
+                                mapping.invitation_status[username] = "failed"
                             continue
                         
                         auth_data = await response.json()
@@ -760,6 +770,8 @@ class AgentUserManager:
                     
                     if not user_token:
                         logger.error(f"No token received for {username}")
+                        if mapping.invitation_status:
+                            mapping.invitation_status[username] = "failed"
                         continue
                     
                     # Accept the invitation
@@ -772,181 +784,34 @@ class AgentUserManager:
                     async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
                         if response.status == 200:
                             logger.info(f"User {username} successfully joined room {room_id}")
+                            if mapping.invitation_status:
+                                mapping.invitation_status[username] = "joined"
                         elif response.status == 403:
                             error_text = await response.text()
                             if "already in the room" in error_text or "already joined" in error_text:
                                 logger.info(f"User {username} is already in room {room_id}")
+                                if mapping.invitation_status:
+                                    mapping.invitation_status[username] = "joined"
                             else:
                                 logger.warning(f"User {username} forbidden from joining room {room_id}: {error_text}")
+                                if mapping.invitation_status:
+                                    mapping.invitation_status[username] = "failed"
                         else:
                             error_text = await response.text()
                             logger.warning(f"User {username} could not join room {room_id}: {response.status} - {error_text}")
+                            if mapping.invitation_status:
+                                mapping.invitation_status[username] = "failed"
                             
             except Exception as e:
                 logger.error(f"Error accepting invitation for {username}: {e}")
-    
-    async def invite_admin_to_existing_rooms(self):
-        """Invite @admin:matrix.oculair.ca to all existing agent rooms with rate limiting protection"""
-        admin_to_invite = "@admin:matrix.oculair.ca"
+                if mapping.invitation_status:
+                    mapping.invitation_status[username] = "failed"
         
-        for agent_id, mapping in self.mappings.items():
-            if mapping.room_id and mapping.room_created:
-                await self._invite_user_with_retry(mapping.room_id, admin_to_invite, mapping.agent_name)
+        # Save updated invitation status
+        await self.save_mappings()
     
-    async def _invite_user_with_retry(self, room_id: str, user_id: str, agent_name: str, max_retries: int = 5):
-        """Invite user to room with exponential backoff for rate limiting"""
-        for attempt in range(max_retries):
-            try:
-                # Get admin token to invite users
-                admin_token = await self.get_admin_token()
-                if not admin_token:
-                    logger.error("Cannot invite without admin token")
-                    return False
-                
-                # First, check if the inviting user (admin) is in the room
-                inviting_user_id = self.admin_username
-                is_admin_in_room = await self._check_user_in_room(room_id, inviting_user_id, admin_token)
-                
-                if not is_admin_in_room:
-                    logger.info(f"Admin user {inviting_user_id} not in room {room_id}, attempting to join first")
-                    join_success = await self._join_room_as_admin(room_id, admin_token)
-                    if not join_success:
-                        logger.error(f"Failed to join room {room_id} as admin, cannot invite {user_id}")
-                        return False
-                
-                # Now invite the user
-                invite_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/invite"
-                headers = {
-                    "Authorization": f"Bearer {admin_token}",
-                    "Content-Type": "application/json"
-                }
-                
-                invite_data = {
-                    "user_id": user_id
-                }
-                
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(invite_url, headers=headers, json=invite_data, timeout=DEFAULT_TIMEOUT) as response:
-                        if response.status == 200:
-                            logger.info(f"Successfully invited {user_id} to room {room_id} for agent {agent_name}")
-                            return True
-                        elif response.status == 429:  # Rate limited
-                            error_data = await response.json()
-                            retry_after = error_data.get('retry_after_ms', 1000) / 1000  # Convert to seconds
-                            
-                            # Add exponential backoff with jitter
-                            backoff_time = min(retry_after + (2 ** attempt) + random.uniform(0, 1), 300)  # Max 5 minutes
-                            
-                            logger.warning(f"Rate limited inviting {user_id} to room {room_id}. Retrying in {backoff_time:.1f}s (attempt {attempt + 1}/{max_retries})")
-                            await asyncio.sleep(backoff_time)
-                            continue
-                        elif response.status == 403:  # Forbidden
-                            error_text = await response.text()
-                            logger.error(f"Forbidden error inviting {user_id} to room {room_id}: {error_text}")
-                            
-                            # Check if user is already in the room
-                            if "already in the room" in error_text or "already joined" in error_text:
-                                logger.info(f"User {user_id} is already in room {room_id}")
-                                return True
-                            elif "not in room" in error_text or "not joined" in error_text:
-                                logger.error(f"Admin user {inviting_user_id} lost access to room {room_id}, cannot invite")
-                                return False
-                            else:
-                                logger.error(f"Permission denied inviting {user_id} to room {room_id}")
-                                return False
-                        else:
-                            error_text = await response.text()
-                            # Check if user is already in the room
-                            if "already in the room" in error_text or "already joined" in error_text:
-                                logger.info(f"User {user_id} is already in room {room_id}")
-                                return True
-                            else:
-                                logger.warning(f"Failed to invite {user_id} to room {room_id}: {response.status} - {error_text}")
-                            if attempt < max_retries - 1:
-                                backoff_time = (2 ** attempt) + random.uniform(0, 1)
-                                logger.info(f"Retrying invitation in {backoff_time:.1f}s")
-                                await asyncio.sleep(backoff_time)
-                                continue
-                            return False
-                                
-            except Exception as e:
-                logger.error(f"Error inviting {user_id} to room {room_id} (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    backoff_time = (2 ** attempt) + random.uniform(0, 1)
-                    await asyncio.sleep(backoff_time)
-                    continue
-                return False
-        
-        logger.error(f"Failed to invite {user_id} to room {room_id} after {max_retries} attempts")
-        return False
-    
-    async def _check_user_in_room(self, room_id: str, user_id: str, admin_token: str) -> bool:
-        """Check if a user is in a specific room"""
-        try:
-            # Use the room members API to check if user is in the room
-            members_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/members"
-            headers = {
-                "Authorization": f"Bearer {admin_token}",
-                "Content-Type": "application/json"
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(members_url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        chunk = data.get("chunk", [])
-                        
-                        # Check if user is in the member list with 'join' membership
-                        for member in chunk:
-                            if (member.get("state_key") == user_id and 
-                                member.get("content", {}).get("membership") == "join"):
-                                return True
-                        return False
-                    elif response.status == 403:
-                        # If we get 403, the admin user is not in the room
-                        logger.debug(f"Admin user not in room {room_id} (403 response)")
-                        return False
-                    else:
-                        logger.warning(f"Unexpected response checking membership in room {room_id}: {response.status}")
-                        return False
-                        
-        except Exception as e:
-            logger.error(f"Error checking if user {user_id} is in room {room_id}: {e}")
-            return False
-    
-    async def _join_room_as_admin(self, room_id: str, admin_token: str) -> bool:
-        """Join a room as the admin user"""
-        try:
-            join_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/join"
-            headers = {
-                "Authorization": f"Bearer {admin_token}",
-                "Content-Type": "application/json"
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Admin successfully joined room {room_id}")
-                        return True
-                    elif response.status == 403:
-                        error_text = await response.text()
-                        logger.error(f"Admin cannot join room {room_id}: {error_text}")
-                        
-                        # Check if it's because the room is invite-only
-                        if "invite" in error_text.lower():
-                            logger.info(f"Room {room_id} is invite-only, admin cannot join without invitation")
-                            return False
-                        else:
-                            logger.error(f"Admin user lacks permission to join room {room_id}")
-                            return False
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Failed to join room {room_id} as admin: {response.status} - {error_text}")
-                        return False
-                        
-        except Exception as e:
-            logger.error(f"Error joining room {room_id} as admin: {e}")
-            return False
+    # Removed problematic invitation functions that caused endless loops
+    # The agent-based invitation system in room creation is sufficient
 
 async def run_agent_sync(config):
     """Run the agent sync process"""

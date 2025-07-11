@@ -18,6 +18,12 @@ services:
       - db
     networks:
       - matrix-internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/_matrix/client/versions"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
   db:
     image: docker.io/postgres:15-alpine
     restart: unless-stopped
@@ -63,7 +69,12 @@ services:
     networks:
       - matrix-internal
     depends_on:
-      - synapse
+      synapse:
+        condition: service_healthy
+      matrix-api:
+        condition: service_started
+      mcp-server:
+        condition: service_started
     healthcheck:
       test:
         - CMD

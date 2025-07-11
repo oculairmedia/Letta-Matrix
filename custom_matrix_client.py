@@ -567,14 +567,14 @@ async def main():
     # Initialize Matrix authentication manager
     auth_manager = MatrixAuthManager(config.homeserver_url, config.username, config.password, "CustomNioClientToken")
     
-    # Temporarily disabled agent sync to focus on message processing
-    logger.info("Skipping agent sync to prioritize message processing...")
-    # try:
-    #     agent_manager = await run_agent_sync(config)
-    #     logger.info("Agent-to-user sync completed successfully")
-    # except Exception as e:
-    #     logger.error("Agent sync failed", extra={"error": str(e)})
-    #     # Continue with main client setup even if agent sync fails
+    # Run agent sync to create rooms for new agents
+    logger.info("Running agent sync to create rooms for any new agents...")
+    try:
+        agent_manager = await run_agent_sync(config)
+        logger.info("Agent-to-user sync completed successfully")
+    except Exception as e:
+        logger.error("Agent sync failed", extra={"error": str(e)})
+        # Continue with main client setup even if agent sync fails
     
     # Temporarily disable periodic agent sync to allow message processing
     # sync_task = asyncio.create_task(periodic_agent_sync(config, logger))
