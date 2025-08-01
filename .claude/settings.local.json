@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
       "Bash(docker-compose logs:*)",
@@ -28,7 +29,13 @@
       "Bash(cat:*)",
       "Bash(cp:*)",
       "Bash(chmod:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(ls:*)",
+      "Bash(sudo chown:*)",
+      "Bash(true)",
+      "Bash(git config:*)",
+      "mcp__context-7__resolve-library-id",
+      "mcp__context-7__get-library-docs"
     ],
     "deny": []
   }

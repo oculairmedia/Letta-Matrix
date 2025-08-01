@@ -37,6 +37,7 @@ trusted_key_servers:
 app_service_config_files:
   - /data/gmessages-registration.yaml
   - /data/discord-registration.yaml
+  - /data/meta-registration.yaml
 
 # vim:ft=yaml
 enable_registration_without_verification: true

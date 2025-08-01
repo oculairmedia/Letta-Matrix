@@ -54,6 +54,12 @@ services:
     depends_on:
       - synapse
       - element
+    labels:
+      - "homepage.group=Communication"
+      - "homepage.name=Matrix Homeserver"
+      - "homepage.icon=si-matrix"
+      - "homepage.href=http://matrix.oculair.ca"
+      - "homepage.description=Matrix homeserver with Element web client"
   matrix-client:
     build:
       context: .
@@ -100,6 +106,12 @@ services:
       - matrix-internal
     depends_on:
       - synapse
+    labels:
+      - "homepage.group=Communication"
+      - "homepage.name=Matrix API"
+      - "homepage.icon=si-api"
+      - "homepage.href=http://192.168.50.90:8004"
+      - "homepage.description=Matrix API server for automation"
   mcp-server:
     build:
       context: .
@@ -124,6 +136,12 @@ services:
       - matrix-api
     volumes:
       - ./mcp_data:/app/data
+    labels:
+      - "homepage.group=Communication"
+      - "homepage.name=Matrix MCP Server"
+      - "homepage.icon=si-websocket"
+      - "homepage.href=http://192.168.50.90:8016"
+      - "homepage.description=Matrix MCP server for Claude integration"
 networks:
   matrix-internal:
     driver: bridge

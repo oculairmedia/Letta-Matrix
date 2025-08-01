@@ -576,8 +576,8 @@ async def main():
         logger.error("Agent sync failed", extra={"error": str(e)})
         # Continue with main client setup even if agent sync fails
     
-    # Temporarily disable periodic agent sync to allow message processing
-    # sync_task = asyncio.create_task(periodic_agent_sync(config, logger))
+    # Enable periodic agent sync to detect new agents and create rooms
+    sync_task = asyncio.create_task(periodic_agent_sync(config, logger))
     
     # Get authenticated client
     client = await auth_manager.get_authenticated_client()
