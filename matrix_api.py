@@ -453,6 +453,68 @@ async def new_agent_webhook(notification: NewAgentNotification, background_tasks
             timestamp=datetime.now().isoformat()
         )
 
+@app.get("/agents/mappings")
+async def get_agent_mappings():
+    """Get all agent-to-room mappings."""
+    try:
+        mappings_file = "/app/data/agent_user_mappings.json"
+        if not os.path.exists(mappings_file):
+            return {
+                "success": False,
+                "message": "Agent mappings file not found",
+                "mappings": {}
+            }
+
+        with open(mappings_file, 'r') as f:
+            mappings = json.load(f)
+
+        return {
+            "success": True,
+            "message": f"Retrieved {len(mappings)} agent mappings",
+            "mappings": mappings
+        }
+    except Exception as e:
+        logger.error(f"Error reading agent mappings: {e}")
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "mappings": {}
+        }
+
+@app.get("/agents/{agent_id}/room")
+async def get_agent_room(agent_id: str):
+    """Get the Matrix room ID for a specific agent."""
+    try:
+        mappings_file = "/app/data/agent_user_mappings.json"
+        if not os.path.exists(mappings_file):
+            raise HTTPException(status_code=404, detail="Agent mappings file not found")
+
+        with open(mappings_file, 'r') as f:
+            mappings = json.load(f)
+
+        if agent_id not in mappings:
+            raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found in mappings")
+
+        mapping = mappings[agent_id]
+
+        if not mapping.get("room_created") or not mapping.get("room_id"):
+            raise HTTPException(status_code=404, detail=f"Agent {agent_id} does not have a room created yet")
+
+        return {
+            "success": True,
+            "agent_id": agent_id,
+            "agent_name": mapping.get("agent_name"),
+            "room_id": mapping.get("room_id"),
+            "matrix_user_id": mapping.get("matrix_user_id"),
+            "room_created": mapping.get("room_created"),
+            "invitation_status": mapping.get("invitation_status", {})
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting agent room for {agent_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""

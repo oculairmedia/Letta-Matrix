@@ -35,7 +35,9 @@
       "Bash(true)",
       "Bash(git config:*)",
       "mcp__context-7__resolve-library-id",
-      "mcp__context-7__get-library-docs"
+      "mcp__context-7__get-library-docs",
+      "Read(//opt/stacks/**)",
+      "mcp__test__Graphiti__get_episodes"
     ],
     "deny": []
   }
