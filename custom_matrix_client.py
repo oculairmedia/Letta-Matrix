@@ -569,13 +569,14 @@ async def main():
     
     # Run agent sync to create rooms for new agents
     logger.info("Running agent sync to create rooms for any new agents...")
+    agent_manager = None
     try:
         agent_manager = await run_agent_sync(config)
         logger.info("Agent-to-user sync completed successfully")
     except Exception as e:
         logger.error("Agent sync failed", extra={"error": str(e)})
         # Continue with main client setup even if agent sync fails
-    
+
     # Enable periodic agent sync to detect new agents and create rooms
     sync_task = asyncio.create_task(periodic_agent_sync(config, logger))
     
@@ -598,14 +599,27 @@ async def main():
         return
     
     logger.info("Ready to interact in room", extra={"room_id": joined_room_id})
-    
+
     # If we created a new room, save its ID for future reference
     if joined_room_id != config.room_id:
         logger.warning("New room created, please update configuration", extra={
             "new_room_id": joined_room_id,
             "original_room_id": config.room_id
         })
-    
+
+    # Join the Letta Agents space if it exists
+    if agent_manager:
+        space_id = agent_manager.get_space_id()
+        if space_id:
+            logger.info(f"Attempting to join Letta Agents space: {space_id}")
+            space_joined = await join_room_if_needed(client, space_id, logger)
+            if space_joined:
+                logger.info(f"Successfully joined Letta Agents space")
+            else:
+                logger.warning(f"Failed to join Letta Agents space")
+        else:
+            logger.info("No Letta Agents space found, skipping space join")
+
     # Join all agent rooms
     logger.info("Joining agent rooms...")
     agent_rooms_joined = 0

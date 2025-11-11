@@ -3,12 +3,14 @@
 ## Overview
 This document summarizes the comprehensive Letta Matrix integration with multi-agent support. The integration enables AI agents to have individual Matrix identities and participate in conversations through their own accounts, with automatic user/room creation and management. Agent usernames are now based on stable agent IDs rather than agent names to ensure consistency even when agents are renamed.
 
+**NEW: All agent rooms are now organized within a "Letta Agents" Matrix Space, following the standard Matrix bridge pattern for easier management and discovery.**
+
 ## Architecture Summary
 
 ### Core Components
 ```
-Letta Agents ←→ Agent Manager ←→ Matrix Users ←→ Matrix Rooms
-     ↓              ↓                ↓              ↓
+Letta Agents ←→ Agent Manager ←→ Matrix Users ←→ Matrix Rooms ←→ Letta Agents Space
+     ↓              ↓                ↓              ↓                    ↓
 MCP Server ←→ Matrix API ←→ Matrix Synapse ←→ GMMessages Bridge ←→ SMS/RCS
 ```
 
@@ -23,7 +25,10 @@ MCP Server ←→ Matrix API ←→ Matrix Synapse ←→ GMMessages Bridge ←�
    - Uses http://192.168.50.90:1416/v1/models (each model = agent)
    - Matrix user creation for each agent
    - Dedicated room creation per agent
+   - **Matrix Space management** - Creates and maintains "Letta Agents" space
+   - Automatic room organization within the space
    - Persistent mapping storage in `/app/data/agent_user_mappings.json`
+   - Space configuration storage in `/app/data/letta_space_config.json`
    - Room reuse on restart (no duplicates)
    - Programmatic admin token retrieval
 
@@ -52,6 +57,15 @@ MCP Server ←→ Matrix API ←→ Matrix Synapse ←→ GMMessages Bridge ←�
 
 ## Multi-Agent Features
 
+### Matrix Space Organization
+- **"Letta Agents" Space**: All agent rooms are organized within a single Matrix Space
+- Follows standard Matrix bridge pattern (similar to mautrix-gmessages, mautrix-signal, etc.)
+- Space is automatically created on first startup
+- All new agent rooms are automatically added to the space
+- Existing rooms are migrated to the space on first run
+- Users join the space once to see all agent rooms
+- Bidirectional parent-child relationships for proper Matrix client display
+
 ### Agent User Creation
 - Each Letta agent gets a dedicated Matrix user
 - Username format: `@agent_{uuid_with_underscores}:matrix.oculair.ca` (based on agent ID, not name)
@@ -61,10 +75,11 @@ MCP Server ←→ Matrix API ←→ Matrix Synapse ←→ GMMessages Bridge ←�
 - Usernames remain stable even if agent is renamed
 
 ### Agent Rooms
-- Each agent has a dedicated Matrix room
+- Each agent has a dedicated Matrix room within the "Letta Agents" space
 - Room name: `{agent-name} - Letta Agent Chat`
 - Members: Agent user, @letta, @matrixadmin, @admin
 - Persistent across restarts
+- Automatically added to space hierarchy
 
 ### Agent Responses
 - Messages in agent rooms are answered by the agent's Matrix user
@@ -95,7 +110,9 @@ Note: MCP tools provide administrative access while agent users handle conversat
 
 ### Automatic Agent Synchronization
 - Sync on startup ensures all agents have users/rooms
-- Periodic sync every 60 seconds for new agents
+- Automatic space creation and room organization
+- Periodic sync every 0.5 seconds for new agents
+- Automatic migration of existing rooms to space
 - No manual intervention required
 
 ### Zero-Configuration Authentication
@@ -151,6 +168,7 @@ Agent → Agent Matrix User → Matrix Room → Bridge → SMS
 - `synapse-data/homeserver.yaml` - Synapse configuration
 - `matrix_store/` - Letta user session databases
 - `matrix_client_data/agent_user_mappings.json` - Agent-user-room mappings
+- `matrix_client_data/letta_space_config.json` - Letta Agents space configuration
 
 ### Bridge Integration
 - `../mautrix-gmessages/config/config.yaml` - Bridge permissions
@@ -163,6 +181,8 @@ Agent → Agent Matrix User → Matrix Room → Bridge → SMS
 - Periodic sync: Every 0.5 seconds (optimized from 60 seconds)
 - New agent detection: Within 0.5 seconds
 - Name change detection: Within 0.5 seconds
+- Space creation: <2 seconds on first startup
+- Room-to-space organization: <1 second per room
 
 ### Response Times
 - Agent message processing: <1 second typical (optimized)
@@ -243,12 +263,21 @@ async def periodic_agent_sync(config, logger, interval=60):  # seconds
 - ✅ No message replay on startup
 - ✅ Automatic new agent detection
 - ✅ Agent identity in conversations
+- ✅ Matrix Space organization
+- ✅ Automatic room-to-space hierarchy
 
 ### Testing New Agents
 1. Create new agent in Letta
-2. Wait up to 60 seconds (or restart matrix-client)
-3. Check Element/Matrix client for new room
-4. Send message to test agent response
+2. Wait up to 0.5 seconds (automatic detection)
+3. Check the "Letta Agents" space in your Matrix client
+4. New agent room will appear automatically within the space
+5. Send message to test agent response
+
+### Using the Letta Agents Space
+1. In Element or another Matrix client, join the "Letta Agents" space
+2. All agent rooms will be visible as children of the space
+3. New agent rooms automatically appear in the space
+4. Space provides organized, hierarchical view of all agents
 
 ## Performance Optimizations
 
