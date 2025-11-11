@@ -10,13 +10,18 @@ from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset
 from nio.responses import JoinError
 from nio.exceptions import RemoteProtocolError
 
-# Imports for Letta SDK (v1.0)
-from letta import AsyncLetta
+# Imports for Letta SDK
 try:
-    from letta.core import ApiError
+    # Try v0.x SDK first (letta-client)
+    from letta_client import AsyncLetta
+    from letta_client.core import ApiError
 except ImportError:
-    # Fallback for different import path
-    from letta.client.exceptions import ApiError
+    # Fallback to v1.0 SDK
+    from letta import AsyncLetta
+    try:
+        from letta.core import ApiError
+    except ImportError:
+        from letta.client.exceptions import ApiError
 
 # Import our authentication manager
 from matrix_auth import MatrixAuthManager
@@ -173,12 +178,21 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
 
     async def _send_to_letta():
         """Inner function to handle the actual API call with retry logic"""
-        # Configure client with 3-minute timeout (v1.0 API)
-        letta_sdk_client = AsyncLetta(
-            api_key=config.letta_token,  # v1.0: token → api_key
-            base_url=config.letta_api_url,
-            timeout=180.0  # 3 minutes timeout
-        )
+        # Configure client with 3-minute timeout
+        # v0.x uses token=, v1.0 uses api_key=
+        try:
+            letta_sdk_client = AsyncLetta(
+                token=config.letta_token,  # v0.x SDK
+                base_url=config.letta_api_url,
+                timeout=180.0  # 3 minutes timeout
+            )
+        except TypeError:
+            # v1.0 SDK uses api_key instead of token
+            letta_sdk_client = AsyncLetta(
+                api_key=config.letta_token,
+                base_url=config.letta_api_url,
+                timeout=180.0
+            )
         
         # First, let's try to list available agents to see if our agent exists
         try:
