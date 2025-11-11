@@ -1,0 +1,79 @@
+# Git
+.git
+.gitignore
+.gitattributes
+.github
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+dist/
+build/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+!CLAUDE.md
+docs/
+
+# Testing
+tests/
+test_*.py
+integration_test_*.py
+TEST_README.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Data directories (these are mounted as volumes)
+matrix_store/
+matrix_client_data/
+synapse-data/
+postgres-data/
+element-config/
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

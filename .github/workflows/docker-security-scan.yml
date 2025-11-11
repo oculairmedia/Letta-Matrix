@@ -1,0 +1,63 @@
+name: Docker Security Scan
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'Dockerfile.*'
+      - 'requirements.txt'
+
+jobs:
+  scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dockerfile:
+          - Dockerfile.matrix-client
+          - Dockerfile.matrix-api
+          - Dockerfile.mcp-server
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build image for scanning
+        run: |
+          docker build -f ${{ matrix.dockerfile }} -t scan-target:latest .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: scan-target:latest
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Run Trivy vulnerability scanner (table output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: scan-target:latest
+          format: 'table'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate

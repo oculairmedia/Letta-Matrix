@@ -1,0 +1,77 @@
+name: Lint and Code Quality
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  python-lint:
+    name: Python Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install linting tools
+        run: |
+          pip install flake8 black isort mypy
+
+      - name: Run Black (formatting check)
+        run: |
+          black --check *.py || true
+
+      - name: Run isort (import sorting check)
+        run: |
+          isort --check-only *.py || true
+
+      - name: Run Flake8 (style guide enforcement)
+        run: |
+          flake8 *.py --max-line-length=120 --ignore=E501,W503,E203 || true
+
+      - name: Run MyPy (type checking)
+        run: |
+          mypy *.py --ignore-missing-imports || true
+
+  docker-lint:
+    name: Dockerfile Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.matrix-client
+          ignore: DL3008,DL3009
+
+      - name: Run Hadolint on matrix-api
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.matrix-api
+          ignore: DL3008,DL3009
+
+      - name: Run Hadolint on mcp-server
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.mcp-server
+          ignore: DL3008,DL3009
+
+  yaml-lint:
+    name: YAML Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run yamllint
+        run: |
+          pip install yamllint
+          yamllint .github/workflows/ || true
