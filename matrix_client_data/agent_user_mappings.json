@@ -40,5 +40,705 @@
       "@matrixadmin:matrix.oculair.ca": "joined",
       "@letta:matrix.oculair.ca": "joined"
     }
+  },
+  "agent-cc2aaa60-731d-41a8-99f4-de7154131a23": {
+    "agent_id": "agent-cc2aaa60-731d-41a8-99f4-de7154131a23",
+    "agent_name": "Huly - PhotoPrism MCP Server",
+    "matrix_user_id": "@agent_cc2aaa60_731d_41a8_99f4_de7154131a23:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!iTTJoSMSLjruBxMwsK:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-cd236f48-d3c5-482b-9225-b68e66335508": {
+    "agent_id": "agent-cd236f48-d3c5-482b-9225-b68e66335508",
+    "agent_name": "Huly - TurboMCP Studio",
+    "matrix_user_id": "@agent_cd236f48_d3c5_482b_9225_b68e66335508:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!zBGAzlhbNxTuFKLvWJ:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-9ea700d6-d533-401c-a820-62a415b4ee7a": {
+    "agent_id": "agent-9ea700d6-d533-401c-a820-62a415b4ee7a",
+    "agent_name": "Huly-PM-Control",
+    "matrix_user_id": "@agent_9ea700d6_d533_401c_a820_62a415b4ee7a:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!WclOaLOSdwCtIkukDl:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-22e8b386-7a9a-4a3f-94a9-7521f1b85315": {
+    "agent_id": "agent-22e8b386-7a9a-4a3f-94a9-7521f1b85315",
+    "agent_name": "Huly - OpenCode OpenAI Codex Auth",
+    "matrix_user_id": "@agent_22e8b386_7a9a_4a3f_94a9_7521f1b85315:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!cBGMsMFxExRIqxqKvs:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-491d3ba3-ca12-41ca-8921-571b7558eab5": {
+    "agent_id": "agent-491d3ba3-ca12-41ca-8921-571b7558eab5",
+    "agent_name": "Huly - Test Project",
+    "matrix_user_id": "@agent_491d3ba3_ca12_41ca_8921_571b7558eab5:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!JvdWwHMYpLWyFCeqoJ:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-9e926617-1e4e-45f6-b1be-427ba434fe87": {
+    "agent_id": "agent-9e926617-1e4e-45f6-b1be-427ba434fe87",
+    "agent_name": "Huly - SureFinance Rails",
+    "matrix_user_id": "@agent_9e926617_1e4e_45f6_b1be_427ba434fe87:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!yZpaUVCxNHwdujRXNT:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-0d969a5e-d464-4f4b-867d-aa55de76a93f": {
+    "agent_id": "agent-0d969a5e-d464-4f4b-867d-aa55de76a93f",
+    "agent_name": "Huly - SureFinance",
+    "matrix_user_id": "@agent_0d969a5e_d464_4f4b_867d_aa55de76a93f:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!LdqMFENgJdswdgPfNU:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-6b1d55d2-5102-4ae9-83b2-bed3a1e07e63": {
+    "agent_id": "agent-6b1d55d2-5102-4ae9-83b2-bed3a1e07e63",
+    "agent_name": "Huly - Serena",
+    "matrix_user_id": "@agent_6b1d55d2_5102_4ae9_83b2_bed3a1e07e63:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!btSdTlCJUYZELlrjtx:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-f4363380-9cce-4fa0-bb63-dfdac0ae10e5": {
+    "agent_id": "agent-f4363380-9cce-4fa0-bb63-dfdac0ae10e5",
+    "agent_name": "Huly - Rust Sync POC",
+    "matrix_user_id": "@agent_f4363380_9cce_4fa0_bb63_dfdac0ae10e5:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!LIMLOaouuNfxobyVnf:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-b6474606-59d6-4430-aa35-7df43d9720b6": {
+    "agent_id": "agent-b6474606-59d6-4430-aa35-7df43d9720b6",
+    "agent_name": "Huly - Radicale",
+    "matrix_user_id": "@agent_b6474606_59d6_4430_aa35_7df43d9720b6:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!ldItbCliBtDiiRcuzF:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-50c0dac2-ae74-4f38-8ad2-80600ded33ab": {
+    "agent_id": "agent-50c0dac2-ae74-4f38-8ad2-80600ded33ab",
+    "agent_name": "Huly - Postiz MCP",
+    "matrix_user_id": "@agent_50c0dac2_ae74_4f38_8ad2_80600ded33ab:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!LGWTuZreMFOncDXpkb:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-6abced97-c375-4c0b-9a66-c91e6ef9d1a7": {
+    "agent_id": "agent-6abced97-c375-4c0b-9a66-c91e6ef9d1a7",
+    "agent_name": "Huly - MetaMCP MCP Server",
+    "matrix_user_id": "@agent_6abced97_c375_4c0b_9a66_c91e6ef9d1a7:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!phlFxeTQwoTDbAcvUU:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-5c378827-3beb-4bde-b0c2-2d011bbdd747": {
+    "agent_id": "agent-5c378827-3beb-4bde-b0c2-2d011bbdd747",
+    "agent_name": "Huly - Meilisearch",
+    "matrix_user_id": "@agent_5c378827_3beb_4bde_b0c2_2d011bbdd747:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!wpCmRQQyHJlPyMADCi:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-fc4c89fa-5442-49b4-bb10-a35708ed3328": {
+    "agent_id": "agent-fc4c89fa-5442-49b4-bb10-a35708ed3328",
+    "agent_name": "Huly - MCP Playground",
+    "matrix_user_id": "@agent_fc4c89fa_5442_49b4_bb10_a35708ed3328:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!YCWAxvBrXfzOfagYMF:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-16579ae3-c4c0-4db5-b068-86fe9736ccdd": {
+    "agent_id": "agent-16579ae3-c4c0-4db5-b068-86fe9736ccdd",
+    "agent_name": "Huly - MCP Inspector",
+    "matrix_user_id": "@agent_16579ae3_c4c0_4db5_b068_86fe9736ccdd:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!AZIpJwMLSboYAkBAXu:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-6da1641b-fd6f-4f19-b54b-5c0458d98a82": {
+    "agent_id": "agent-6da1641b-fd6f-4f19-b54b-5c0458d98a82",
+    "agent_name": "Huly - Matrix Widget Toolkit",
+    "matrix_user_id": "@agent_6da1641b_fd6f_4f19_b54b_5c0458d98a82:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!nDJqZTxCEKwoMspUep:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-269fecac-8537-474d-bcbb-b95a7fbb5e04": {
+    "agent_id": "agent-269fecac-8537-474d-bcbb-b95a7fbb5e04",
+    "agent_name": "Huly - Matrix Appservice Discord",
+    "matrix_user_id": "@agent_269fecac_8537_474d_bcbb_b95a7fbb5e04:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!WSNjFoslsiLoZhGlen:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-870d3dfb-319f-4c52-91f1-72ab46d944a7": {
+    "agent_id": "agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
+    "agent_name": "Huly - Matrix Synapse Deployment",
+    "matrix_user_id": "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!apSJZEFbrOQixnwfYW:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-a202db1e-00c8-4915-8b6e-261ef12d8348": {
+    "agent_id": "agent-a202db1e-00c8-4915-8b6e-261ef12d8348",
+    "agent_name": "Huly - GPT Researcher",
+    "matrix_user_id": "@agent_a202db1e_00c8_4915_8b6e_261ef12d8348:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!XanZJflnqgQqfVvvQq:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-8fb03e45-9469-4058-84fb-e3e64fc31be6": {
+    "agent_id": "agent-8fb03e45-9469-4058-84fb-e3e64fc31be6",
+    "agent_name": "Huly - Letta Webhook Receiver",
+    "matrix_user_id": "@agent_8fb03e45_9469_4058_84fb_e3e64fc31be6:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!viCUXcupkRmcgXGNVU:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-79bebc40-d8e5-432c-898e-0f14715a0162": {
+    "agent_id": "agent-79bebc40-d8e5-432c-898e-0f14715a0162",
+    "agent_name": "Huly - Mautrix Manager",
+    "matrix_user_id": "@agent_79bebc40_d8e5_432c_898e_0f14715a0162:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!SosMuueHVTMlgBxmef:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-48d25d1f-1238-46d7-94a8-8b77afcf6a96": {
+    "agent_id": "agent-48d25d1f-1238-46d7-94a8-8b77afcf6a96",
+    "agent_name": "Huly - MetaMCP",
+    "matrix_user_id": "@agent_48d25d1f_1238_46d7_94a8_8b77afcf6a96:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!mGsmCPMVEkmzDDIiFK:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-b602a275-3ae1-401b-a31d-b2f1282a37c0": {
+    "agent_id": "agent-b602a275-3ae1-401b-a31d-b2f1282a37c0",
+    "agent_name": "Huly - TurboMCP",
+    "matrix_user_id": "@agent_b602a275_3ae1_401b_a31d_b2f1282a37c0:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!JhdUZraScbVwgVtdmr:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-a2b149bb-ba81-46de-b627-39b135e2670f": {
+    "agent_id": "agent-a2b149bb-ba81-46de-b627-39b135e2670f",
+    "agent_name": "Huly - Claude Code MCP",
+    "matrix_user_id": "@agent_a2b149bb_ba81_46de_b627_39b135e2670f:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!YZnraqkNDdeDqpXkjH:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-264173af-e5dd-4efa-9ac0-d6517285e01c": {
+    "agent_id": "agent-264173af-e5dd-4efa-9ac0-d6517285e01c",
+    "agent_name": "Huly - Claude Code UI",
+    "matrix_user_id": "@agent_264173af_e5dd_4efa_9ac0_d6517285e01c:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!sIHTRfdsGkdHdjquJw:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-a73a455c-80b3-4bbc-b6de-5bcc737aa911": {
+    "agent_id": "agent-a73a455c-80b3-4bbc-b6de-5bcc737aa911",
+    "agent_name": "Huly - Claude Graphiti Hook",
+    "matrix_user_id": "@agent_a73a455c_80b3_4bbc_b6de_5bcc737aa911:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!iJNfhVVJDQIGSCHAtZ:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-8b0dcbc4-0945-4668-a1d1-893346c57b34": {
+    "agent_id": "agent-8b0dcbc4-0945-4668-a1d1-893346c57b34",
+    "agent_name": "Huly - Context7",
+    "matrix_user_id": "@agent_8b0dcbc4_0945_4668_a1d1_893346c57b34:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!QMzhojbRAbaSRquMov:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-5a8ec754-6816-4972-b3a1-74c1cb36a6b9": {
+    "agent_id": "agent-5a8ec754-6816-4972-b3a1-74c1cb36a6b9",
+    "agent_name": "Huly - Augment MCP Tool",
+    "matrix_user_id": "@agent_5a8ec754_6816_4972_b3a1_74c1cb36a6b9:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!fBjmAbBksrFxIrZTJA:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-1790605d-434c-4aa6-ae29-6267c14549d8": {
+    "agent_id": "agent-1790605d-434c-4aa6-ae29-6267c14549d8",
+    "agent_name": "Huly - Claude Code X Letta",
+    "matrix_user_id": "@agent_1790605d_434c_4aa6_ae29_6267c14549d8:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!HGnoKfMoNtLqOspruw:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-b9e6baac-03c2-46d1-af00-b04f23412f90": {
+    "agent_id": "agent-b9e6baac-03c2-46d1-af00-b04f23412f90",
+    "agent_name": "Huly - Docling",
+    "matrix_user_id": "@agent_b9e6baac_03c2_46d1_af00_b04f23412f90:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!gnCPbfFLCaFPGRMznp:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-42f9b0c3-fbc0-48a3-af52-7c7aa903f759": {
+    "agent_id": "agent-42f9b0c3-fbc0-48a3-af52-7c7aa903f759",
+    "agent_name": "Huly - Claudia",
+    "matrix_user_id": "@agent_42f9b0c3_fbc0_48a3_af52_7c7aa903f759:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!gZSaqhdbftzgwgkKNI:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-5196f211-8196-4052-b0ee-f324ee321f41": {
+    "agent_id": "agent-5196f211-8196-4052-b0ee-f324ee321f41",
+    "agent_name": "Huly - Dockerfiles",
+    "matrix_user_id": "@agent_5196f211_8196_4052_b0ee_f324ee321f41:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!DLWvzUUoVdNGjFdLBz:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-fb4ce57f-ebc1-448f-a6ac-4c1600003ce8": {
+    "agent_id": "agent-fb4ce57f-ebc1-448f-a6ac-4c1600003ce8",
+    "agent_name": "Huly - Instabot",
+    "matrix_user_id": "@agent_fb4ce57f_ebc1_448f_a6ac_4c1600003ce8:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!sFVpZBGBSlZsPkRsWQ:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-42e6158d-b19d-4d23-a943-2e93cd7c1a2f": {
+    "agent_id": "agent-42e6158d-b19d-4d23-a943-2e93cd7c1a2f",
+    "agent_name": "Huly - Komodo MCP",
+    "matrix_user_id": "@agent_42e6158d_b19d_4d23_a943_2e93cd7c1a2f:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!JHuEJuORthNjMffPHm:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-a67871be-220f-4c19-88c9-7a6db15f3583": {
+    "agent_id": "agent-a67871be-220f-4c19-88c9-7a6db15f3583",
+    "agent_name": "Huly - Google Keep MCP",
+    "matrix_user_id": "@agent_a67871be_220f_4c19_88c9_7a6db15f3583:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!rIQSOWTlvhJfazOYlI:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-5a145be1-3c15-491e-b5a8-e9f3fe1e716e": {
+    "agent_id": "agent-5a145be1-3c15-491e-b5a8-e9f3fe1e716e",
+    "agent_name": "Huly - Letta Tools Selector",
+    "matrix_user_id": "@agent_5a145be1_3c15_491e_b5a8_e9f3fe1e716e:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!cjRpoeevzsUTdUnpkC:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-99db68c4-79d9-4a0a-9129-2432a6c72e1c": {
+    "agent_id": "agent-99db68c4-79d9-4a0a-9129-2432a6c72e1c",
+    "agent_name": "Huly - Vibe Kanban",
+    "matrix_user_id": "@agent_99db68c4_79d9_4a0a_9129_2432a6c72e1c:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!SAkSRCkQmDzJXYKAcB:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-0623f440-dc16-49ab-a5e6-c9ccb22fa726": {
+    "agent_id": "agent-0623f440-dc16-49ab-a5e6-c9ccb22fa726",
+    "agent_name": "Huly - Letta OpenCode Plugin",
+    "matrix_user_id": "@agent_0623f440_dc16_49ab_a5e6_c9ccb22fa726:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!pYBLaoVLkKlbHgsGAt:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-e4f3fcb4-8e7f-4bc1-817d-17ffa4220590": {
+    "agent_id": "agent-e4f3fcb4-8e7f-4bc1-817d-17ffa4220590",
+    "agent_name": "Huly - Huly MCP Server",
+    "matrix_user_id": "@agent_e4f3fcb4_8e7f_4bc1_817d_17ffa4220590:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!eLFjIPRooVgkUgOSwE:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-13eb4426-b06f-4d35-ae5a-5d6ca80409f5": {
+    "agent_id": "agent-13eb4426-b06f-4d35-ae5a-5d6ca80409f5",
+    "agent_name": "Huly - Letta MCP Server",
+    "matrix_user_id": "@agent_13eb4426_b06f_4d35_ae5a_5d6ca80409f5:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!MOTheJSISwtcpxOMmp:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-0f68f210-bdec-4fa0-a8de-939c3944f477": {
+    "agent_id": "agent-0f68f210-bdec-4fa0-a8de-939c3944f477",
+    "agent_name": "Huly - Default",
+    "matrix_user_id": "@agent_0f68f210_bdec_4fa0_a8de_939c3944f477:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!oXkZMZuPrIgahWFMXO:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-c8487d94-c01e-4bb8-be27-2d976bd735c1": {
+    "agent_id": "agent-c8487d94-c01e-4bb8-be27-2d976bd735c1",
+    "agent_name": "Huly - BookStack MCP",
+    "matrix_user_id": "@agent_c8487d94_c01e_4bb8_be27_2d976bd735c1:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!KgvJkUVmngnMooEXwr:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-ab7ad09a-b988-4184-94cc-7e99a3732d62": {
+    "agent_id": "agent-ab7ad09a-b988-4184-94cc-7e99a3732d62",
+    "agent_name": "Huly - SureFinance MCP Server",
+    "matrix_user_id": "@agent_ab7ad09a_b988_4184_94cc_7e99a3732d62:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!uJRpboeYAQWXxwqXJd:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-e3541d44-6ff7-465d-8e85-ddd24515bb6f": {
+    "agent_id": "agent-e3541d44-6ff7-465d-8e85-ddd24515bb6f",
+    "agent_name": "Huly - OpenCode Project",
+    "matrix_user_id": "@agent_e3541d44_6ff7_465d_8e85_ddd24515bb6f:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!YQZbUcSCZZvsNvbzYj:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-80ac3bb8-1087-412d-a19c-7c8c6aeb5916": {
+    "agent_id": "agent-80ac3bb8-1087-412d-a19c-7c8c6aeb5916",
+    "agent_name": "Huly - Graphiti Knowledge Graph Platform",
+    "matrix_user_id": "@agent_80ac3bb8_1087_412d_a19c_7c8c6aeb5916:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!kqzsjaszykLUWsdmEQ:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-4527bcab-1b11-47f4-bb5d-2a4f44ca9ca2": {
+    "agent_id": "agent-4527bcab-1b11-47f4-bb5d-2a4f44ca9ca2",
+    "agent_name": "Huly - Claude API Gateway",
+    "matrix_user_id": "@agent_4527bcab_1b11_47f4_bb5d_2a4f44ca9ca2:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!BLvFAuIMitsDUnGCNb:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-f17152eb-fc96-4e02-8e86-a583948eb70a": {
+    "agent_id": "agent-f17152eb-fc96-4e02-8e86-a583948eb70a",
+    "agent_name": "letta-cli-agent",
+    "matrix_user_id": "@agent_f17152eb_fc96_4e02_8e86_a583948eb70a:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!fXozVdGtsMALxQrgpL:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-c023a8d3-9ba3-4c62-9fb7-f039b4c455e0": {
+    "agent_id": "agent-c023a8d3-9ba3-4c62-9fb7-f039b4c455e0",
+    "agent_name": "letta-cli-agent",
+    "matrix_user_id": "@agent_c023a8d3_9ba3_4c62_9fb7_f039b4c455e0:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!bUspIBpZMyBERNyilM:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-9b398b63-6499-4548-b814-45904d07ae5a": {
+    "agent_id": "agent-9b398b63-6499-4548-b814-45904d07ae5a",
+    "agent_name": "gpt5-codex-test",
+    "matrix_user_id": "@agent_9b398b63_6499_4548_b814_45904d07ae5a:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!syfjukOAYgtFhFOyUT:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
+  },
+  "agent-0a2b4b2e-c578-4b04-93d6-00f0e1639507": {
+    "agent_id": "agent-0a2b4b2e-c578-4b04-93d6-00f0e1639507",
+    "agent_name": "Huly-PM-Control",
+    "matrix_user_id": "@agent_0a2b4b2e_c578_4b04_93d6_00f0e1639507:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!AqZZQdCkfrOHtSDBfl:matrix.oculair.ca",
+    "room_created": true,
+    "invitation_status": {
+      "@admin:matrix.oculair.ca": "invited",
+      "@matrixadmin:matrix.oculair.ca": "joined",
+      "@letta:matrix.oculair.ca": "joined"
+    }
   }
 }

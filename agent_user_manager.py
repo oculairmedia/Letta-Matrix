@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import json
+import time
 import aiohttp
 import random
 from typing import Dict, List, Optional, Set
@@ -141,8 +142,8 @@ class AgentUserManager:
     async def get_letta_agents(self) -> List[dict]:
         """Get all Letta agents from agents endpoint"""
         try:
-            # Use proper agents endpoint (port 1416 for models which represent agents)
-            agents_endpoint = "http://192.168.50.90:1416/v1/models"
+            # Use proper agents endpoint (port 8289 proxy with /v1/agents)
+            agents_endpoint = "http://192.168.50.90:8289/v1/agents"
             
             # Set up authentication headers
             headers = {
