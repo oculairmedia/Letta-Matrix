@@ -11,8 +11,9 @@ python-dotenv>=1.0.0
 # Additional dependencies that might be needed
 asyncio-mqtt==0.16.1
 
-# Letta SDK dependency - using latest available version
-letta-client==0.1.146
+# Letta SDK dependency - using v1.0
+# Migration guide: https://docs.letta.com/api-reference/sdk-migration-guide
+letta==1.0.0a10
 
 # FastAPI dependencies for matrix-api
 fastapi==0.104.1

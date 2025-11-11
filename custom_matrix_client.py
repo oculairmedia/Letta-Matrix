@@ -10,9 +10,13 @@ from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset
 from nio.responses import JoinError
 from nio.exceptions import RemoteProtocolError
 
-# Imports for Letta SDK
-from letta_client import AsyncLetta # MessageCreate and TextContent removed
-from letta_client.core import ApiError # Corrected import for ApiError
+# Imports for Letta SDK (v1.0)
+from letta import AsyncLetta
+try:
+    from letta.core import ApiError
+except ImportError:
+    # Fallback for different import path
+    from letta.client.exceptions import ApiError
 
 # Import our authentication manager
 from matrix_auth import MatrixAuthManager
@@ -169,16 +173,18 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
 
     async def _send_to_letta():
         """Inner function to handle the actual API call with retry logic"""
-        # Configure client with 3-minute timeout
+        # Configure client with 3-minute timeout (v1.0 API)
         letta_sdk_client = AsyncLetta(
-            token=config.letta_token, 
+            api_key=config.letta_token,  # v1.0: token → api_key
             base_url=config.letta_api_url,
             timeout=180.0  # 3 minutes timeout
         )
         
         # First, let's try to list available agents to see if our agent exists
         try:
-            agents = await letta_sdk_client.agents.list()
+            # v1.0: list() now returns a page object with .items property
+            agents_page = await letta_sdk_client.agents.list()
+            agents = agents_page.items if hasattr(agents_page, 'items') else agents_page
             agent_ids = [agent.id for agent in agents]
             logger.debug("Listed available agents", extra={"agent_ids": agent_ids})
             
