@@ -971,6 +971,15 @@ class AgentUserManager:
                         # Now auto-accept the invitations for admin and letta users
                         await self.auto_accept_invitations_with_tracking(room_id, mapping)
 
+                        # Import recent conversation history for UI continuity
+                        logger.info(f"Importing recent history for agent {mapping.agent_name}")
+                        await self.import_recent_history(
+                            agent_id=agent_id,
+                            agent_username=mapping.matrix_user_id,
+                            agent_password=mapping.matrix_password,
+                            room_id=room_id
+                        )
+
                         return room_id
                     else:
                         error_text = await response.text()
@@ -981,6 +990,123 @@ class AgentUserManager:
             logger.error(f"Error creating room for agent {agent_id}: {e}")
             return None
     
+    async def import_recent_history(
+        self,
+        agent_id: str,
+        agent_username: str,
+        agent_password: str,
+        room_id: str,
+        limit: int = 15
+    ):
+        """Import recent Letta conversation history for UI continuity
+
+        Args:
+            agent_id: The Letta agent ID
+            agent_username: Matrix username for the agent
+            agent_password: Matrix password for the agent
+            room_id: Matrix room ID to import messages into
+            limit: Number of recent messages to import (default: 15, like letta-code)
+        """
+        try:
+            # 1. Fetch recent messages from Letta proxy
+            messages_url = f"http://192.168.50.90:8289/v1/agents/{agent_id}/messages"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(messages_url, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status != 200:
+                        logger.warning(f"Could not fetch history for agent {agent_id}: {response.status}")
+                        return
+
+                    data = await response.json()
+                    # Handle both array and object responses
+                    if isinstance(data, dict):
+                        messages = data.get("items", [])
+                    else:
+                        messages = data
+
+            if not messages:
+                logger.info(f"No history to import for agent {agent_id}")
+                return
+
+            # 2. Take only last N messages (like letta-code does)
+            recent_messages = messages[-limit:] if len(messages) > limit else messages
+
+            # 3. Skip if starts with orphaned tool_return (incomplete turn)
+            if recent_messages and recent_messages[0].get("message_type") == "tool_return_message":
+                recent_messages = recent_messages[1:]
+
+            if not recent_messages:
+                logger.info(f"No valid history to import for agent {agent_id}")
+                return
+
+            # 4. Login as the agent to send historical messages
+            from nio import AsyncClient, LoginResponse
+            agent_client = AsyncClient(self.homeserver_url, agent_username)
+
+            try:
+                login_response = await agent_client.login(agent_password)
+
+                if not isinstance(login_response, LoginResponse):
+                    logger.error(f"Failed to login as {agent_username} for history import")
+                    await agent_client.close()
+                    return
+
+                # 5. Send each message with historical flag
+                imported_count = 0
+                for msg in recent_messages:
+                    msg_type = msg.get("message_type")
+
+                    # Only import user and assistant messages (skip tool calls, reasoning, etc.)
+                    if msg_type == "user_message":
+                        content = msg.get("content", "")
+                        if isinstance(content, list):
+                            # Handle content array format
+                            text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                            content = " ".join(text_parts)
+
+                        await agent_client.room_send(
+                            room_id=room_id,
+                            message_type="m.room.message",
+                            content={
+                                "msgtype": "m.text",
+                                "body": f"[History] {content}",
+                                "m.letta_historical": True,  # Flag to prevent processing
+                                "m.relates_to": {
+                                    "rel_type": "m.annotation"  # Mark as annotation
+                                }
+                            }
+                        )
+                        imported_count += 1
+
+                    elif msg_type == "assistant_message":
+                        content = msg.get("content", "")
+                        if isinstance(content, list):
+                            # Handle content array format
+                            text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                            content = " ".join(text_parts)
+
+                        await agent_client.room_send(
+                            room_id=room_id,
+                            message_type="m.room.message",
+                            content={
+                                "msgtype": "m.text",
+                                "body": content,
+                                "m.letta_historical": True,
+                                "m.relates_to": {
+                                    "rel_type": "m.annotation"
+                                }
+                            }
+                        )
+                        imported_count += 1
+
+                logger.info(f"Imported {imported_count} historical messages for agent {agent_id}")
+
+            finally:
+                await agent_client.close()
+
+        except Exception as e:
+            logger.error(f"Error importing history for agent {agent_id}: {e}")
+
     async def auto_accept_invitations_with_tracking(self, room_id: str, mapping: AgentUserMapping):
         """Auto-accept room invitations for admin and letta users with status tracking"""
         users_to_accept = [
