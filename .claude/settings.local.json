@@ -37,7 +37,11 @@
       "mcp__context-7__resolve-library-id",
       "mcp__context-7__get-library-docs",
       "Read(//opt/stacks/**)",
-      "mcp__test__Graphiti__get_episodes"
+      "mcp__test__Graphiti__get_episodes",
+      "Bash(docker-compose restart:*)",
+      "Bash(docker-compose stop:*)",
+      "Bash(docker-compose start:*)",
+      "Bash(git check-ignore:*)"
     ],
     "deny": []
   }

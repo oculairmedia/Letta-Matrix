@@ -367,7 +367,17 @@ async def message_callback(room, event, config: Config, logger: logging.Logger):
         # Ignore messages from ourselves to prevent loops
         if event.sender == client.user_id:
             return
-        
+
+        # Ignore historical messages imported from Letta (to prevent re-processing)
+        if hasattr(event, 'source') and isinstance(event.source, dict):
+            content = event.source.get("content", {})
+            if content.get("m.letta_historical"):
+                logger.debug("Ignoring historical message imported from Letta", extra={
+                    "sender": event.sender,
+                    "message": event.body[:50]
+                })
+                return
+
         # Ignore messages from before bot startup to prevent replaying old messages
         if hasattr(event, 'server_timestamp') and startup_time and event.server_timestamp < startup_time:
             logger.debug("Ignoring old message from before startup", extra={
