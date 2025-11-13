@@ -388,16 +388,28 @@ async def message_callback(room, event, config: Config, logger: logging.Logger):
             })
             return
         
-        # Check if the sender is an agent user - ignore messages from agent users
+        # Check if the sender is THIS room's agent - ignore only self-messages, not other agents
         mappings_file = "/app/data/agent_user_mappings.json"
         if os.path.exists(mappings_file):
             with open(mappings_file, 'r') as f:
                 mappings = json.load(f)
-                # Check if sender is an agent user
+                # Find the agent that owns this room
+                room_agent_user_id = None
                 for agent_id, mapping in mappings.items():
-                    if mapping.get("matrix_user_id") == event.sender:
-                        logger.debug(f"Ignoring message from agent user {event.sender}")
-                        return
+                    if mapping.get("room_id") == room.room_id:
+                        room_agent_user_id = mapping.get("matrix_user_id")
+                        break
+
+                # Only ignore messages from THIS room's own agent (prevent self-loops)
+                if room_agent_user_id and event.sender == room_agent_user_id:
+                    logger.debug(f"Ignoring message from room's own agent {event.sender}")
+                    return
+
+                # Allow messages from OTHER agents (inter-agent communication)
+                for agent_id, mapping in mappings.items():
+                    if mapping.get("matrix_user_id") == event.sender and event.sender != room_agent_user_id:
+                        logger.info(f"Received inter-agent message from {event.sender} in {room.display_name}")
+                        break
 
         logger.info("Received message from user", extra={
             "sender": event.sender,
