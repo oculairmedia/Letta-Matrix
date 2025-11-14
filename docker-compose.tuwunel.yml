@@ -2,7 +2,7 @@ services:
   # Tuwunel Matrix Homeserver (replacing Synapse)
   # Using custom-built image compatible with Docker 20.10.24
   tuwunel:
-    image: ghcr.io/oculairmedia/tuwunel-docker2010:latest
+    image: ghcr.io/oculairmedia/tuwunel-docker2010:feature-tuwunel-migration
     restart: unless-stopped
     environment:
       - TUWUNEL_SERVER_NAME=${MATRIX_SERVER_NAME:-matrix.oculair.ca}
