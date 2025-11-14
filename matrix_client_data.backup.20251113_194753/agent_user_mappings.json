@@ -8,9 +8,9 @@
     "room_id": "!rjXwIRfnLGYBbcUqyd:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-cc2aaa60-731d-41a8-99f4-de7154131a23": {
@@ -22,9 +22,9 @@
     "room_id": "!UPfqSDhVhFijoMtJug:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-cd236f48-d3c5-482b-9225-b68e66335508": {
@@ -36,9 +36,9 @@
     "room_id": "!mGaqUkySqYiEKMTuiM:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-9ea700d6-d533-401c-a820-62a415b4ee7a": {
@@ -50,9 +50,9 @@
     "room_id": "!snRLCWdSmnhLEQRDdE:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-22e8b386-7a9a-4a3f-94a9-7521f1b85315": {
@@ -64,9 +64,9 @@
     "room_id": "!RIqzjSWzECNpLyGOqz:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-491d3ba3-ca12-41ca-8921-571b7558eab5": {
@@ -78,9 +78,9 @@
     "room_id": "!tRNofRUlsjaICFRhMN:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-9e926617-1e4e-45f6-b1be-427ba434fe87": {
@@ -92,9 +92,9 @@
     "room_id": "!BaMJlJRjUnXsnqFIkt:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-0d969a5e-d464-4f4b-867d-aa55de76a93f": {
@@ -106,9 +106,9 @@
     "room_id": "!dyzXzTxRHdsDzOOMPd:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-6b1d55d2-5102-4ae9-83b2-bed3a1e07e63": {
@@ -120,9 +120,9 @@
     "room_id": "!UBjLYUdnMCUZBrJzNQ:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-f4363380-9cce-4fa0-bb63-dfdac0ae10e5": {
@@ -134,9 +134,9 @@
     "room_id": "!oQpwhaKQaQRyJXbdBD:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-b6474606-59d6-4430-aa35-7df43d9720b6": {
@@ -148,9 +148,9 @@
     "room_id": "!XLMaJyUrMLSvCpngqV:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-50c0dac2-ae74-4f38-8ad2-80600ded33ab": {
@@ -162,9 +162,9 @@
     "room_id": "!XDHyEDjzQThZLYTSnK:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-6abced97-c375-4c0b-9a66-c91e6ef9d1a7": {
@@ -176,9 +176,9 @@
     "room_id": "!SAmoXHudOzadLfZZGw:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-5c378827-3beb-4bde-b0c2-2d011bbdd747": {
@@ -190,9 +190,9 @@
     "room_id": "!vvMeBlkDBuLqZYJRbI:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-fc4c89fa-5442-49b4-bb10-a35708ed3328": {
@@ -204,9 +204,9 @@
     "room_id": "!qOlbsCGaDGOVfQlRhN:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-16579ae3-c4c0-4db5-b068-86fe9736ccdd": {
@@ -218,9 +218,9 @@
     "room_id": "!vWkZkYYoWssOqfZWLo:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-6da1641b-fd6f-4f19-b54b-5c0458d98a82": {
@@ -232,9 +232,9 @@
     "room_id": "!HKcNAIFmEgAuvSLDCf:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-269fecac-8537-474d-bcbb-b95a7fbb5e04": {
@@ -246,9 +246,9 @@
     "room_id": "!tqurkrLIGpCVPLvcPw:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-870d3dfb-319f-4c52-91f1-72ab46d944a7": {
@@ -260,9 +260,9 @@
     "room_id": "!rxEvPkqKDExwuXMlrm:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-a202db1e-00c8-4915-8b6e-261ef12d8348": {
@@ -274,9 +274,9 @@
     "room_id": "!ZqRulBRhSNveLyeJEA:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-8fb03e45-9469-4058-84fb-e3e64fc31be6": {
@@ -288,9 +288,9 @@
     "room_id": "!dEjwFTuisMdcIiFgSP:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-79bebc40-d8e5-432c-898e-0f14715a0162": {
@@ -302,9 +302,9 @@
     "room_id": "!jkNvQAdofBvqNUehEt:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-48d25d1f-1238-46d7-94a8-8b77afcf6a96": {
@@ -326,9 +326,9 @@
     "room_id": "!wlJjYWxODeHuVNEVmG:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-a2b149bb-ba81-46de-b627-39b135e2670f": {
@@ -340,9 +340,9 @@
     "room_id": "!PfSptEpnOliDhuBcrT:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-264173af-e5dd-4efa-9ac0-d6517285e01c": {
@@ -354,9 +354,9 @@
     "room_id": "!RpTjSfBZQumLxqRFbx:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-a73a455c-80b3-4bbc-b6de-5bcc737aa911": {
@@ -368,9 +368,9 @@
     "room_id": "!aXYYOyNCaTOAECqqtx:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-8b0dcbc4-0945-4668-a1d1-893346c57b34": {
@@ -382,9 +382,9 @@
     "room_id": "!QINGFXpgaUlfvMVFdX:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-5a8ec754-6816-4972-b3a1-74c1cb36a6b9": {
@@ -396,9 +396,9 @@
     "room_id": "!IurIRzTXmZjSGTcPse:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-1790605d-434c-4aa6-ae29-6267c14549d8": {
@@ -410,9 +410,9 @@
     "room_id": "!zmKZICfhVumflqvYee:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-b9e6baac-03c2-46d1-af00-b04f23412f90": {
@@ -424,9 +424,9 @@
     "room_id": "!wieMgicqBDeBxIkLLD:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-42f9b0c3-fbc0-48a3-af52-7c7aa903f759": {
@@ -438,9 +438,9 @@
     "room_id": "!RMpfTlViaHjNVcpPOP:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-5196f211-8196-4052-b0ee-f324ee321f41": {
@@ -452,9 +452,9 @@
     "room_id": "!OsPJaHETDpSaxfRodQ:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-fb4ce57f-ebc1-448f-a6ac-4c1600003ce8": {
@@ -466,9 +466,9 @@
     "room_id": "!qeSSguZoFsnzlraRgC:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-42e6158d-b19d-4d23-a943-2e93cd7c1a2f": {
@@ -480,9 +480,9 @@
     "room_id": "!GcAHaPQlulcRPTnDHj:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-a67871be-220f-4c19-88c9-7a6db15f3583": {
@@ -494,9 +494,9 @@
     "room_id": "!qXYVrOJoBOYrwefNEj:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-5a145be1-3c15-491e-b5a8-e9f3fe1e716e": {
@@ -518,9 +518,9 @@
     "room_id": "!DTmxLzREEaCBGABXDB:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-0623f440-dc16-49ab-a5e6-c9ccb22fa726": {
@@ -562,9 +562,9 @@
     "room_id": "!CFxmUBGrOSUAPhuAgC:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-c8487d94-c01e-4bb8-be27-2d976bd735c1": {
@@ -576,9 +576,9 @@
     "room_id": "!lgOBftsPXEYnHahbjB:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-ab7ad09a-b988-4184-94cc-7e99a3732d62": {
@@ -590,9 +590,9 @@
     "room_id": "!uIfFhyoFzPXYdlnSbF:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-e3541d44-6ff7-465d-8e85-ddd24515bb6f": {
@@ -614,9 +614,9 @@
     "room_id": "!GmJADFojijyOywdHwW:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-4527bcab-1b11-47f4-bb5d-2a4f44ca9ca2": {
@@ -628,9 +628,9 @@
     "room_id": "!rlpllWtuelIfPKvehm:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-f17152eb-fc96-4e02-8e86-a583948eb70a": {
@@ -642,9 +642,9 @@
     "room_id": "!qVmCbSdibUqDrDGvZI:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-c023a8d3-9ba3-4c62-9fb7-f039b4c455e0": {
@@ -656,9 +656,9 @@
     "room_id": "!qmGcaAcBfjswteuuXs:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-9b398b63-6499-4548-b814-45904d07ae5a": {
@@ -670,9 +670,9 @@
     "room_id": "!qazjlZkgrAakZGPqvN:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-0a2b4b2e-c578-4b04-93d6-00f0e1639507": {
@@ -684,9 +684,9 @@
     "room_id": "!pALvCKfkloZyHYPipc:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-750cab6e-2b66-456a-8fe1-7c8ea8350149": {
@@ -698,9 +698,9 @@
     "room_id": "!nvqXfWVAebuWDvnHpD:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-0b634ec8-f7bb-465a-b67c-a6c65194171e": {
@@ -712,9 +712,9 @@
     "room_id": "!ooksWSzbYpThXkijEk:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-fe8a9291-b49a-4fc1-94c3-1a23b86b6108": {
@@ -726,9 +726,9 @@
     "room_id": "!SOIAjsYoOXFkHJNESA:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-597b5756-2915-4560-ba6b-91005f085166": {
@@ -740,9 +740,9 @@
     "room_id": "!rhwbedxgTwXNmNjxBw:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   },
   "agent-f2fdf2aa-5b83-4c2d-a926-2e86e6793551": {
@@ -754,9 +754,9 @@
     "room_id": "!SUNuhvKyxnIKNcUJYV:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
-      "@admin:matrix.oculair.ca": "failed",
+      "@admin:matrix.oculair.ca": "invited",
       "@matrixadmin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "failed"
+      "@letta:matrix.oculair.ca": "joined"
     }
   }
 }

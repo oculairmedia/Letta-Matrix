@@ -1,0 +1,56 @@
+{
+  "agent-15a9957e-4173-4d23-9381-efeb24dc4fe1": {
+    "agent_id": "agent-15a9957e-4173-4d23-9381-efeb24dc4fe1",
+    "agent_name": "customer-support-agent-agent-1751616765884",
+    "matrix_user_id": "@agent_15a9957e_4173_4d23_9381_efeb24dc4fe1:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!GyRiFhfdpdtjqmukuV:matrix.oculair.ca",
+    "room_created": true
+  },
+  "agent-74275465-4eb6-417f-a8f4-c4d65b5740f9": {
+    "agent_id": "agent-74275465-4eb6-417f-a8f4-c4d65b5740f9",
+    "agent_name": "companion-agent-agent-1751615790562",
+    "matrix_user_id": "@agent_74275465_4eb6_417f_a8f4_c4d65b5740f9:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!rbcMYYliILdVSGjGeb:matrix.oculair.ca",
+    "room_created": true
+  },
+  "agent-f78c008d-c127-4a1a-9fd3-8bc953f67c5a": {
+    "agent_id": "agent-f78c008d-c127-4a1a-9fd3-8bc953f67c5a",
+    "agent_name": "bombastic",
+    "matrix_user_id": "@agent_f78c008d_c127_4a1a_9fd3_8bc953f67c5a:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!iiOFOuZftXddWVpYSU:matrix.oculair.ca",
+    "room_created": true
+  },
+  "agent-82c1777f-03e0-4796-b734-9b597a743f7d": {
+    "agent_id": "agent-82c1777f-03e0-4796-b734-9b597a743f7d",
+    "agent_name": "character-roleplay-agent-agent-1751564119072",
+    "matrix_user_id": "@agent_82c1777f_03e0_4796_b734_9b597a743f7d:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!jaPhmFMnoHvsJyexXA:matrix.oculair.ca",
+    "room_created": true
+  },
+  "agent-a045de2a-9a2d-4626-bc96-e7f88b889dfb": {
+    "agent_id": "agent-a045de2a-9a2d-4626-bc96-e7f88b889dfb",
+    "agent_name": "scratch-agent-agent-1750962699328",
+    "matrix_user_id": "@agent_a045de2a_9a2d_4626_bc96_e7f88b889dfb:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!jYyKTgDilZnRBnWJVb:matrix.oculair.ca",
+    "room_created": true
+  },
+  "agent-e54fc601-4773-4116-9c6c-cf45da2e269e": {
+    "agent_id": "agent-e54fc601-4773-4116-9c6c-cf45da2e269e",
+    "agent_name": "Meridian",
+    "matrix_user_id": "@agent_e54fc601_4773_4116_9c6c_cf45da2e269e:matrix.oculair.ca",
+    "matrix_password": "password",
+    "created": true,
+    "room_id": "!qUXoBCBVlIsQSCZioI:matrix.oculair.ca",
+    "room_created": true
+  }
+}

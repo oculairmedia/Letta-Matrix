@@ -1,0 +1,41 @@
+Docker Upgrade Attempt - Final Outcome
+==========================================
+Date: Thu Nov 13 08:16:36 PM EST 2025
+
+ATTEMPTED UPGRADE: Docker 20.10.24 → 28.5.2/29.0.0
+RESULT: ROLLBACK TO 20.10.24
+
+Issue Encountered:
+- Docker CE 29.0.0 and 28.5.2 include runc 1.3.3 + containerd 2.1.5
+- These versions have a known incompatibility with LXC environments
+- Error: "failed to create shim task: OCI runtime create failed: unable to start container process: error during container init: open sysctl net.ipv4.ip_unprivileged_port_start file: reopen fd 8: permission denied"
+- 93 of 95 containers failed to start with new Docker versions
+
+Resolution:
+- Rolled back to docker.io 20.10.24 + containerd 1.6.20 + runc 1.1.5
+- All 95 containers successfully restarted
+- System fully operational
+
+Current Versions:
+- Docker: 20.10.24+dfsg1
+- containerd: 1.6.20~ds1
+- runc: 1.1.5+ds1
+- Running containers: 95/95
+
+Impact on Tuwunel Migration:
+- Docker 20.10.24 does NOT support OCI image format used by Tuwunel
+- Tuwunel deployment blocked until:
+  Option 1: Build Tuwunel from source as standard Docker image
+  Option 2: Wait for Docker/runc fix for LXC compatibility
+  Option 3: Migrate to non-LXC environment
+
+Recommendation:
+- Stay on Docker 20.10.24 (stable, all containers working)
+- Use Option 1 (build Tuwunel from source) if migration needed
+- Monitor Docker/runc releases for LXC fix
+
+All services operational: ✅
+Dockge: ✅
+Letta: ✅
+Graphiti: ✅
+Portfolio: ✅
