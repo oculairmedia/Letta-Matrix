@@ -12,17 +12,21 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Tuwunel version to download
+# Tuwunel version to download (GitHub Actions can override via build-args)
 ARG TUWUNEL_VERSION=v1.4.6
-ARG TUWUNEL_VARIANT=release-all
-ARG TUWUNEL_ARCH=x86_64-v1-linux-gnu
 
 # Download and extract pre-built Tuwunel binary
-RUN curl -L "https://github.com/matrix-construct/tuwunel/releases/download/${TUWUNEL_VERSION}/${TUWUNEL_VERSION}-${TUWUNEL_VARIANT}-${TUWUNEL_ARCH}-tuwunel.zst" \
-    -o /tmp/tuwunel.zst && \
+# Use full URL to avoid variable expansion issues
+RUN set -ex && \
+    VERSION="${TUWUNEL_VERSION}" && \
+    echo "Downloading Tuwunel ${VERSION}" && \
+    curl -fSL "https://github.com/matrix-construct/tuwunel/releases/download/${VERSION}/${VERSION}-release-all-x86_64-v1-linux-gnu-tuwunel.zst" \
+        -o /tmp/tuwunel.zst && \
+    file /tmp/tuwunel.zst && \
     zstd -d /tmp/tuwunel.zst -o /usr/local/bin/tuwunel && \
     chmod +x /usr/local/bin/tuwunel && \
-    rm /tmp/tuwunel.zst
+    rm /tmp/tuwunel.zst && \
+    /usr/local/bin/tuwunel --version
 
 # Create tuwunel user
 RUN useradd -m -u 1000 -U -s /bin/sh -d /var/lib/tuwunel tuwunel
