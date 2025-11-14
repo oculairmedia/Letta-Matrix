@@ -1,0 +1,31 @@
+Docker Upgrade Backup - Thu Nov 13 07:57:58 PM EST 2025
+================================
+
+Pre-Upgrade State:
+- Docker Version: 20.10.24+dfsg1
+- Total Running Containers: 95
+- Total Networks: 36
+- Total Volumes: 53
+
+Critical Services:
+- Dockge: Up 3 hours (healthy)
+- Letta: Up 3 hours
+- Graphiti: Up 27 minutes (healthy)
+- Portfolio: Up 3 hours (healthy)
+
+Backup Files:
+- running-containers.txt: Full list of running containers
+- docker-version-before.txt: Current Docker version info
+- stacks-list.txt: All Dockge stacks
+- networks.txt: Docker networks
+- volumes.txt: Docker volumes
+
+Upgrade Target:
+- Docker CE: 28.5.2
+
+Backup Location: /opt/stacks/matrix-synapse-deployment/docker-upgrade-backup/
+
+Rollback Instructions:
+If needed, downgrade with:
+  sudo apt install docker.io=20.10.24+dfsg1-1+deb12u1
+  sudo systemctl restart docker

@@ -1,0 +1,95 @@
+ce1dc1548e1c	graphiti-init	alpine:latest	Up 29 seconds	
+0462f41a18b6	graphiti-graphiti-sync-rs-1	rust-sync-poc-rust-sync:latest	Up 31 seconds	0.0.0.0:18080->8080/tcp, :::18080->8080/tcp, 0.0.0.0:18081->8081/tcp, :::18081->8081/tcp
+100cef7f4ace	graphiti-falkordb-1	falkordb/falkordb:latest	Up About a minute (healthy)	0.0.0.0:6379->6379/tcp, :::6379->6379/tcp
+9c832d2f5287	graphiti-neo4j-1	neo4j:5.26.2	Up About a minute (healthy)	0.0.0.0:7474->7474/tcp, :::7474->7474/tcp, 7473/tcp, 0.0.0.0:7687->7687/tcp, :::7687->7687/tcp
+45d6525b1f63	graphiti-graphiti-mcp-1	ghcr.io/oculairmedia/graphiti-mcp:feature-chutes-ai-integration	Up 26 minutes	0.0.0.0:3010->3010/tcp, :::3010->3010/tcp, 8000/tcp
+4e95ffea7c83	graphiti-nginx-1	nginx:alpine	Up 26 minutes (healthy)	0.0.0.0:8088->80/tcp, :::8088->80/tcp, 0.0.0.0:8443->443/tcp, :::8443->443/tcp
+c8e6fadba830	graphiti-frontend-1	ghcr.io/oculairmedia/graphiti-frontend:feature-chutes-ai-integration	Up 26 minutes (healthy)	0.0.0.0:8085->80/tcp, :::8085->80/tcp
+f408d26bf326	graphiti-graph-1	ghcr.io/oculairmedia/graphiti-api:feature-chutes-ai-integration	Up 26 minutes (healthy)	0.0.0.0:8003->8000/tcp, :::8003->8000/tcp
+b399c1e74167	graphiti-graph-visualizer-rust-1	graphiti-rust-visualizer:incremental-updates	Up 26 minutes (healthy)	0.0.0.0:3000->3000/tcp, :::3000->3000/tcp
+845f543a2672	graphiti-graphiti-search-rs-1	ghcr.io/oculairmedia/graphiti-search-rs:feature-chutes-ai-integration	Up 27 minutes (healthy)	0.0.0.0:3004->3004/tcp, :::3004->3004/tcp
+1d39976af59c	graphiti-redis-exporter	oliver006/redis_exporter:latest	Up 27 minutes	0.0.0.0:9121->9121/tcp, :::9121->9121/tcp
+bc0a8f18ac17	graphiti-graphiti-centrality-rs-1	ghcr.io/oculairmedia/graphiti-centrality-rs:feature-chutes-ai-integration	Up 27 minutes (healthy)	0.0.0.0:3003->3003/tcp, :::3003->3003/tcp
+8a2b588b25a5	graphiti-grafana	grafana/grafana:latest	Up 27 minutes	0.0.0.0:3011->3000/tcp, :::3011->3000/tcp
+baa122c83992	graphiti-prometheus	prom/prometheus:latest	Up 27 minutes	0.0.0.0:9090->9090/tcp, :::9090->9090/tcp
+66c6f8620380	graphiti-graphiti-queued-1	ghcr.io/oculairmedia/graphiti-queued:main	Up 27 minutes (healthy)	0.0.0.0:8093->8080/tcp, :::8093->8080/tcp
+6ba23329a269	letta-proxy-letta-poller-1	ghcr.io/oculairmedia/letta-context-poller:latest	Up 2 hours	
+a0dcad065c17	letta-proxy-proxy-1	ghcr.io/oculairmedia/letta-webhook-proxy:latest	Up 2 hours	0.0.0.0:8289->8283/tcp, :::8289->8283/tcp
+58521c2a5c6a	postiz-mcp-postizmcp-1	ghcr.io/oculairmedia/postizz-mcp:latest	Up 3 hours (healthy)	0.0.0.0:3084->3084/tcp, :::3084->3084/tcp
+218e56e0ff67	portfolio-payload	personal-site-payload	Up 3 hours (healthy)	0.0.0.0:3006->3001/tcp, :::3006->3001/tcp
+2a3f822d67b9	portfolio-nginx	nginx:alpine	Up 3 hours	0.0.0.0:80->80/tcp, :::80->80/tcp, 0.0.0.0:443->443/tcp, :::443->443/tcp
+9fb3054dc7f5	portfolio-mongodb	mongo:7	Up 3 hours (healthy)	0.0.0.0:27018->27017/tcp, :::27018->27017/tcp
+ab0d19b43962	huly-vibe-sync-ui	ghcr.io/oculairmedia/huly-vibe-sync-ui:latest	Up 3 hours (healthy)	0.0.0.0:3101->3000/tcp, :::3101->3000/tcp
+52bca5b13ed1	huly-vibe-sync	ghcr.io/oculairmedia/huly-vibe-sync:latest	Up 3 hours (healthy)	
+af5219dd566d	fastmcp-cms-server-v2	fastmcp-cms-server-fastmcp-cms-v2	Up 3 hours (unhealthy)	0.0.0.0:8050->8050/tcp, :::8050->8050/tcp
+df2c9fa5754b	surefinance-mcp-server-surefinance-mcp-1	surefinance-mcp-server-surefinance-mcp	Up 2 hours (healthy)	0.0.0.0:4332->3500/tcp, :::4332->3500/tcp
+42e0d52caf80	letta-letta-1	letta/letta:latest	Up 2 hours	4317-4318/tcp, 5432/tcp, 0.0.0.0:8283->8283/tcp, :::8283->8283/tcp
+c134dd3c3092	letta-postgres-1	pgvector/pgvector:pg15	Up 2 hours (healthy)	0.0.0.0:5432->5432/tcp, :::5432->5432/tcp
+9fe31d0d09ab	letta-anthropic-proxy-1	nginx:alpine	Up 2 hours	80/tcp
+2054e011378d	letta-redis-1	redis:7-alpine	Up 2 hours (healthy)	6379/tcp
+563c8b549ce1	photoprism-mcp	photoprism-mcp-photoprism-mcp	Up 3 hours	0.0.0.0:3005->3005/tcp, :::3005->3005/tcp
+4eb5ba1c3990	huly-huly-mcp-1	huly-huly-mcp	Up 3 hours (healthy)	0.0.0.0:3457->3000/tcp, :::3457->3000/tcp
+1230d4e5381f	huly-huly-rest-api-1	huly-huly-rest-api	Up 3 hours (healthy)	0.0.0.0:3458->3458/tcp, :::3458->3458/tcp
+2f285f3b78b3	huly-transactor-1	ghcr.io/oculairmedia/transactor-webhook:latest	Up 3 hours	8080/tcp
+a1d205ea212f	huly-front-1	hardcoreeng/front:v0.6.501	Up 3 hours	8080/tcp
+724e4a313b60	huly-account-1	hardcoreeng/account:v0.6.501	Up 3 hours	3000/tcp
+8278137593a4	huly-nginx-1	nginx:1.21.3	Up 3 hours	0.0.0.0:8101->80/tcp, :::8101->80/tcp
+10be621b19aa	letta-mcp-nginx	5e7abcdd2021	Up 3 hours (unhealthy)	80/tcp, 0.0.0.0:3001->3001/tcp, :::3001->3001/tcp
+7f947490f099	letta-mcp-rust	letta-mcp-rust:latest	Up 3 hours (healthy)	0.0.0.0:6507->6507/tcp, :::6507->6507/tcp
+6819ffc83413	huly-collaborator-1	hardcoreeng/collaborator:v0.6.501	Up 3 hours	3078/tcp
+2631dd7bbd15	huly-fulltext-1	hardcoreeng/fulltext:v0.6.501	Up 3 hours	4700/tcp
+2ef25aa9486a	huly-github-1	hardcoreeng/github:v0.6.501	Up 3 hours	3078/tcp
+3a0473c51057	huly-elastic-1	elasticsearch:7.14.2	Up 3 hours (healthy)	9200/tcp, 9300/tcp
+e4f6be17e408	huly-minio-1	minio/minio	Up 3 hours	9000/tcp
+e7404b3e6b0e	huly-rekoni-1	hardcoreeng/rekoni-service:v0.6.501	Up 3 hours	4004/tcp
+c1fa766edd32	huly-workspace-1	hardcoreeng/workspace:v0.6.501	Up 3 hours	
+0caadd32a483	huly-mongodb-1	mongo:7-jammy	Up 3 hours	27017/tcp
+13fcceb8a429	huly-stats-1	hardcoreeng/stats:v0.6.501	Up 3 hours	4900/tcp
+e3d23997a992	komodo-mcp-server	komodo-mcp-komodo-mcp	Up 3 hours (unhealthy)	0.0.0.0:9716->9716/tcp, :::9716->9716/tcp
+be7cad4f483d	opencode-server	ghcr.io/oculairmedia/letta-opencode-plugin-opencode-server:latest	Up 3 hours (healthy)	0.0.0.0:3100->3100/tcp, :::3100->3100/tcp
+1b77a1889dc4	letta-opencode-plugin	ghcr.io/oculairmedia/letta-opencode-plugin:latest	Up 3 hours (healthy)	0.0.0.0:3500->3500/tcp, :::3500->3500/tcp
+508b2fffeb90	mcp-inspector	mcp-inspector:local	Up 3 hours	
+68805988e136	keep-rest-api	googlekeepmcp-keep-rest-api	Up 3 hours (healthy)	8000/tcp, 0.0.0.0:8001->8001/tcp, :::8001->8001/tcp
+18ac6dcfa39e	keep-mcp-server	googlekeepmcp-keep-mcp	Up 3 hours (unhealthy)	0.0.0.0:8000->8000/tcp, :::8000->8000/tcp
+07512fae3888	resume-mcp-mcp_server-1	oculair/resumexrmcp:1.0.12	Up 3 hours (healthy)	0.0.0.0:9722->3001/tcp, :::9722->3001/tcp
+bf15b356f447	sure-finance-web-1	sure-finance:local	Up 3 hours	0.0.0.0:3200->3000/tcp, :::3200->3000/tcp
+97e16434a7ab	sure-finance-worker-1	sure-finance:local	Up 3 hours	3000/tcp
+13a5a825d909	sure-finance-redis-1	redis:latest	Up 3 hours (healthy)	6379/tcp
+86721a521a11	sure-finance-db-1	postgres:16	Up 3 hours (healthy)	5432/tcp
+6acd06cd827e	metamcp-server	ghcr.io/metatool-ai/metamcp:latest	Up 3 hours (unhealthy)	0.0.0.0:12006->12006/tcp, :::12006->12006/tcp, 12008/tcp
+2bf504cdc1ef	metamcp	ghcr.io/metatool-ai/metamcp:latest	Up 3 hours (healthy)	0.0.0.0:12008-12009->12008-12009/tcp, :::12008-12009->12008-12009/tcp
+7684efdb1e34	metamcp-pg	postgres:16-alpine	Up 3 hours (healthy)	0.0.0.0:9433->5432/tcp, :::9433->5432/tcp
+80ec42a39f6c	resume-nginx-1	5e7abcdd2021	Up 3 hours	0.0.0.0:3050->80/tcp, :::3050->80/tcp
+296f7b30e732	resume-app-1	amruthpillai/reactive-resume:latest	Up 3 hours	3000/tcp
+59459a36a1ee	resume-postgres-1	postgres:16-alpine	Up 3 hours (healthy)	5432/tcp
+cff0345f2fef	resume-minio-1	minio/minio:latest	Up 3 hours	0.0.0.0:9000->9000/tcp, :::9000->9000/tcp
+797a5c79fdf9	litellm	ghcr.io/berriai/litellm:main-latest	Up 3 hours	0.0.0.0:4001->4000/tcp, :::4001->4000/tcp
+41d79a9018c3	crawl4ai-mco-lettatools-mcp-1	oculair/crawl4ai-mcp:20250408	Up 3 hours (unhealthy)	0.0.0.0:9221->3001/tcp, :::9221->3001/tcp
+41513acd0b88	audiobookshelf-audiobookshelf-1	ghcr.io/advplyr/audiobookshelf:latest	Up 3 hours	0.0.0.0:13378->80/tcp, :::13378->80/tcp
+a2056fb09239	bookstack-mcp-bookstackmcp-1	bookstackmcp:http	Up 3 hours (unhealthy)	0.0.0.0:3054->3054/tcp, :::3054->3054/tcp
+0a402162f55f	augment-mcp-tool-augment-mcp-1	ghcr.io/oculairmedia/augment-mcp:latest	Up 3 hours	0.0.0.0:503->503/tcp, :::503->503/tcp, 8000/tcp
+f573193c021b	letta-toolselector-frontend	ghcr.io/oculairmedia/letta-toolselector-frontend:main	Up 3 hours (healthy)	0.0.0.0:8406->80/tcp, :::8406->80/tcp
+470f903aba98	letta-toolselector-dashboard-backend	ghcr.io/oculairmedia/letta-toolselector-dashboard-backend:main	Up 3 hours (healthy)	0.0.0.0:8030->8030/tcp, :::8030->8030/tcp
+146e87c12fa9	weaviate-tools-sync	ghcr.io/oculairmedia/letta-toolselector-sync-service:main	Up 3 hours	3001/tcp
+74fefa8e94ee	letta-toolselector-worker	lettatoolsselector-worker-service	Up 3 hours (healthy)	0.0.0.0:3021->3021/tcp, :::3021->3021/tcp
+6d92aea58bb2	toolselector-mcp	ghcr.io/oculairmedia/letta-toolselector-mcp-server:main	Up 3 hours (healthy)	0.0.0.0:3020->3020/tcp, :::3020->3020/tcp
+035defe2dcd2	weaviate-tools-api	ghcr.io/oculairmedia/letta-toolselector-api-server:main	Up 3 hours	0.0.0.0:8020->3001/tcp, :::8020->3001/tcp
+b3f2f36ed1bb	ollama-reranker-adapter	ghcr.io/oculairmedia/letta-toolselector-reranker-adapter:main	Up 3 hours (healthy)	0.0.0.0:8091->8080/tcp, :::8091->8080/tcp
+e6a8a635b067	searxng_app	searxng/searxng:latest	Up 3 hours (healthy)	8080/tcp
+aa8b6da62a43	searxng_caddy	caddy:2-alpine	Up 3 hours	80/tcp, 443/tcp, 2019/tcp, 443/udp, 0.0.0.0:8287->8287/tcp, :::8287->8287/tcp
+915f00145534	searxng_redis	valkey/valkey:8-alpine	Up 3 hours	0.0.0.0:8284->6379/tcp, :::8284->6379/tcp
+64878b41c8f4	claude-code-ui	claudecodeui-claude-code-ui	Up 3 hours (unhealthy)	0.0.0.0:3012->3012/tcp, :::3012->3012/tcp, 0.0.0.0:3014->3014/tcp, :::3014->3014/tcp
+8217a0457e58	bookstack-graphiti-webhook	ghcr.io/oculairmedia/bookstack-graphiti-integration-bookstack-graphiti:latest	Up 3 hours (healthy)	8004/tcp, 0.0.0.0:8005->8005/tcp, :::8005->8005/tcp
+01e9b8dc0283	jobspy-jobspy_mcp_server-1	oculair/jobspy-mcp:latest	Up 3 hours (healthy)	0.0.0.0:9232->3001/tcp, :::9232->3001/tcp
+50f524da955e	meilisearch	getmeili/meilisearch:v1.11	Up 3 hours (healthy)	0.0.0.0:7700->7700/tcp, :::7700->7700/tcp
+668ad89211de	mautrix-meta	dock.mau.dev/mautrix/meta:latest	Up 3 hours	
+6501654deb76	mautrix-meta-db	postgres:15-alpine	Up 3 hours	5432/tcp
+dbc37130a8aa	resume-chrome-1	ghcr.io/browserless/chromium:v2.18.0	Up 3 hours	
+a9f2e2143442	mautrix-gmessages	dock.mau.dev/mautrix/gmessages:latest	Up 3 hours	
+320bdd088907	postgres-gmessages	postgres:15-alpine	Up 3 hours	5432/tcp
+bb5da66a514c	discord-bridge	halfshot/matrix-appservice-discord:latest	Up 3 hours	0.0.0.0:9005->9005/tcp, :::9005->9005/tcp
+09e12951689d	mcp-filesystem-http	mcp-filesystem-server:latest	Up 3 hours	8080/tcp, 8443/tcp, 0.0.0.0:8100->8100/tcp, :::8100->8100/tcp
+21615191d383	ghost-mcp-ghostmcp-1	oculair/ghost-mcp:latest	Up 3 hours (unhealthy)	3001/tcp, 0.0.0.0:3064->3064/tcp, :::3064->3064/tcp
+2868fd79df0e	docling-server	docling-docling	Up 3 hours (healthy)	
+daf9c5a7c8a5	context7-mcp	context7-context7	Up 3 hours	0.0.0.0:8081->8080/tcp, :::8081->8080/tcp
+a2a8cc8be8a8	dockge-dockge-1	louislam/dockge:1	Up 3 hours (healthy)	0.0.0.0:5001->5001/tcp, :::5001->5001/tcp
