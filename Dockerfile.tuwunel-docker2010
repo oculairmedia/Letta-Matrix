@@ -1,0 +1,77 @@
+# Tuwunel Dockerfile for Docker 20.10.24 compatibility
+# This builds a standard Docker image instead of OCI format
+# Based on the official Tuwunel source build process
+
+# Build stage
+FROM rust:1.83-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    clang \
+    libclang-dev \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /usr/src/tuwunel
+
+# Clone the repository
+ARG TUWUNEL_VERSION=main
+RUN git clone https://github.com/matrix-construct/tuwunel.git . && \
+    git checkout ${TUWUNEL_VERSION} && \
+    git submodule update --init --recursive
+
+# Build Tuwunel with optimizations
+ENV CARGO_TARGET_DIR=/usr/src/tuwunel/target
+ENV ROCKSDB_INCLUDE_DIR=/usr/include
+ENV ROCKSDB_LIB_DIR=/usr/lib
+
+RUN cargo build --release --locked
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create tuwunel user
+RUN useradd -m -u 1000 -U -s /bin/sh -d /var/lib/tuwunel tuwunel
+
+# Copy the binary from builder
+COPY --from=builder /usr/src/tuwunel/target/release/tuwunel /usr/local/bin/tuwunel
+
+# Set permissions
+RUN chmod +x /usr/local/bin/tuwunel
+
+# Create data directory
+RUN mkdir -p /var/lib/tuwunel && \
+    chown -R tuwunel:tuwunel /var/lib/tuwunel
+
+# Switch to tuwunel user
+USER tuwunel
+WORKDIR /var/lib/tuwunel
+
+# Expose ports
+EXPOSE 6167 8448
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=60s \
+    CMD wget --spider -q http://localhost:6167/_matrix/client/versions || exit 1
+
+# Volume for data
+VOLUME ["/var/lib/tuwunel"]
+
+# Set environment defaults
+ENV TUWUNEL_SERVER_NAME=localhost
+ENV TUWUNEL_DATABASE_PATH=/var/lib/tuwunel
+ENV TUWUNEL_LOG=info
+
+# Run Tuwunel
+ENTRYPOINT ["/usr/local/bin/tuwunel"]
