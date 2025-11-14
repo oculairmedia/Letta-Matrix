@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     zstd \
     wget \
+    file \
     && rm -rf /var/lib/apt/lists/*
 
 # Tuwunel version to download (GitHub Actions can override via build-args)
