@@ -1,4 +1,4 @@
-# Tuwunel OCI Image Compatibility Issue
+# Tuwunel OCI Image Compatibility Issue - RESOLVED
 
 ## Problem
 
@@ -13,6 +13,7 @@ unsupported manifest media type: application/vnd.oci.image.manifest.v1+json
 - Tuwunel uses OCI image format (not Docker format)
 - Docker 20.10.24 has incomplete OCI support
 - Requires Docker 23+ or Podman for full OCI compatibility
+- Docker upgrade to 23+ blocked by LXC/runc incompatibility
 
 **Current Docker Version:**
 ```
@@ -20,7 +21,45 @@ Docker version: 20.10.24+dfsg1
 containerd: 1.6.20~ds1
 ```
 
-## Solutions
+## ✅ IMPLEMENTED SOLUTION: Custom Docker Build
+
+We've implemented a custom Docker build pipeline that produces standard Docker images compatible with Docker 20.10.24.
+
+### Implementation Details
+
+**Repository**: https://github.com/oculairmedia/Letta-Matrix  
+**Branch**: `feature/tuwunel-migration`  
+**Custom Image**: `ghcr.io/oculairmedia/tuwunel-docker2010:latest`
+
+**Files Created:**
+1. `Dockerfile.tuwunel-docker2010` - Builds from Tuwunel source
+2. `.github/workflows/docker-build-tuwunel.yml` - Automated CI/CD
+3. Updated `docker-compose.tuwunel.yml` - Uses custom image
+
+**Build Process:**
+- GitHub Actions automatically builds on push to main/feature branches
+- Uses official Rust 1.83 compiler
+- Compiles Tuwunel from source
+- Produces standard Docker image format
+- Pushes to GHCR (GitHub Container Registry)
+
+**Deployment:**
+```bash
+# Wait for build to complete
+gh run watch --repo oculairmedia/Letta-Matrix
+
+# Pull custom image
+docker pull ghcr.io/oculairmedia/tuwunel-docker2010:latest
+
+# Deploy
+docker-compose -f docker-compose.tuwunel.yml up -d
+```
+
+### Build Status
+
+Check current build: https://github.com/oculairmedia/Letta-Matrix/actions/workflows/docker-build-tuwunel.yml
+
+## Alternative Solutions (Not Implemented)
 
 ### Option 1: Upgrade Docker (Recommended)
 
