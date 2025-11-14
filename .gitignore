@@ -31,6 +31,20 @@ matrix_store/
 # Runtime data
 mcp_data/
 
+# Tuwunel RocksDB database files
+tuwunel-data/*.sst
+tuwunel-data/*.log
+tuwunel-data/MANIFEST-*
+tuwunel-data/OPTIONS-*
+tuwunel-data/CURRENT
+tuwunel-data/LOCK
+tuwunel-data/IDENTITY
+tuwunel-data/archive/
+
+# Matrix client data backups
+matrix_client_data/*.backup*
+matrix_client_data/*.old
+
 # Python
 __pycache__/
 *.py[cod]
