@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     libclang-dev \
     pkg-config \
     libssl-dev \
+    librocksdb-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -38,6 +39,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    librocksdb8.11 \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
