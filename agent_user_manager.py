@@ -15,22 +15,30 @@ from dataclasses import dataclass
 logger = logging.getLogger("matrix_client.agent_user_manager")
 
 # Global session with connection pooling for better performance
-connector = aiohttp.TCPConnector(
-    limit=100,  # Connection pool size
-    limit_per_host=50,  # Per-host connection limit
-    ttl_dns_cache=300,  # DNS cache timeout
-    keepalive_timeout=30,  # Keep connections alive
-    force_close=False
-)
+_connector = None
 global_session = None
 
 # Default timeout for all requests
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
+def _get_connector():
+    """Lazily create connector to avoid event loop issues at import time"""
+    global _connector
+    if _connector is None:
+        _connector = aiohttp.TCPConnector(
+            limit=100,  # Connection pool size
+            limit_per_host=50,  # Per-host connection limit
+            ttl_dns_cache=300,  # DNS cache timeout
+            keepalive_timeout=30,  # Keep connections alive
+            force_close=False
+        )
+    return _connector
+
 async def get_global_session():
     """Get or create global aiohttp session with connection pooling"""
     global global_session
     if global_session is None or global_session.closed:
+        connector = _get_connector()
         global_session = aiohttp.ClientSession(
             connector=connector
             # Timeout will be set per-request to avoid the context manager error
