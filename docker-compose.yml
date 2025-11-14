@@ -75,6 +75,7 @@ services:
       - ./custom_matrix_client.py:/app/custom_matrix_client.py:ro
       - ./agent_user_manager.py:/app/agent_user_manager.py:ro
       - ./matrix_auth.py:/app/matrix_auth.py:ro
+      - ./event_dedupe_store.py:/app/event_dedupe_store.py:ro
     networks:
       - matrix-internal
     depends_on:

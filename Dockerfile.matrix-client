@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY custom_matrix_client.py .
 COPY matrix_auth.py .
 COPY agent_user_manager.py .
+COPY event_dedupe_store.py .
 
 # Create directories for matrix store and agent mappings
 RUN mkdir -p /app/matrix_store /app/data
