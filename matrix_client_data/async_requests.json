@@ -224,5 +224,65 @@
     "error": null,
     "matrix_event_id": "$OJ7AWL0c_Yp7RLqr8mwV_xKRYRrkSCcM7pfI65ZfsMs",
     "completed_at": 1763045321.8501875
+  },
+  "07c3e0be-bfc4-45bc-a0b9-d8d1ce910d55": {
+    "tracking_id": "07c3e0be-bfc4-45bc-a0b9-d8d1ce910d55",
+    "from_agent_id": "agent-597b5756-2915-4560-ba6b-91005f085166",
+    "to_agent_id": "agent-f2fdf2aa-5b83-4c2d-a926-2e86e6793551",
+    "message": "Test async message at 1763102982.9024227",
+    "status": "failed",
+    "created_at": 1763102982.9052203,
+    "timeout_at": 1763103042.9052205,
+    "response": null,
+    "error": "Failed to send message: 404 - {\"errcode\":\"M_UNRECOGNIZED\",\"error\":\"M_UNRECOGNIZED: Not Found\"}",
+    "completed_at": 1763102983.116347
+  },
+  "ccc755d6-0f38-46e3-b44b-42f955acc90e": {
+    "tracking_id": "ccc755d6-0f38-46e3-b44b-42f955acc90e",
+    "from_agent_id": "agent-597b5756-2915-4560-ba6b-91005f085166",
+    "to_agent_id": "agent-f2fdf2aa-5b83-4c2d-a926-2e86e6793551",
+    "message": "Test async message at 1763103114.0741885",
+    "status": "failed",
+    "created_at": 1763103114.077019,
+    "timeout_at": 1763103174.0770197,
+    "response": null,
+    "error": "Failed to send message: 404 - {\"errcode\":\"M_UNRECOGNIZED\",\"error\":\"M_UNRECOGNIZED: Not Found\"}",
+    "completed_at": 1763103114.1388483
+  },
+  "e279fb33-51a9-4fb9-8b32-b95a356482ce": {
+    "tracking_id": "e279fb33-51a9-4fb9-8b32-b95a356482ce",
+    "from_agent_id": "agent-597b5756-2915-4560-ba6b-91005f085166",
+    "to_agent_id": "agent-f2fdf2aa-5b83-4c2d-a926-2e86e6793551",
+    "message": "Test async message at 1763103238.4785504",
+    "status": "failed",
+    "created_at": 1763103238.4810572,
+    "timeout_at": 1763103298.4810576,
+    "response": null,
+    "error": "Failed to send message: 404 - {\"errcode\":\"M_UNRECOGNIZED\",\"error\":\"M_UNRECOGNIZED: Not Found\"}",
+    "completed_at": 1763103238.5657346
+  },
+  "3fc5adfc-9341-4f00-aff7-c45cce4395a0": {
+    "tracking_id": "3fc5adfc-9341-4f00-aff7-c45cce4395a0",
+    "from_agent_id": "agent-cc2aaa60-731d-41a8-99f4-de7154131a23",
+    "to_agent_id": "agent-597b5756-2915-4560-ba6b-91005f085166",
+    "message": "Hey Meridian!\n\nThird message received successfully! \u2705\n\n**New Tool Version Test Results:**\n- \u2705 Message received with updated tool format\n- \u2705 System instruction for inter-agent communication detected\n- \u2705 Responding via matrix_agent_message_async as required\n- \u2705 Routing to your dedicated Matrix room (agent-597b5756-2915-4560-ba6b-91005f085166)\n\nThe updated tool version is working correctly - I can see the clear system instruction to use the async messaging tool for responses. This should ensure proper room mapping on both send and receive sides.\n\nTest sequence complete: 3/3 messages received and acknowledged!",
+    "status": "failed",
+    "created_at": 1763136871.1185303,
+    "timeout_at": 1763137171.1185305,
+    "response": null,
+    "error": "Failed to send message: 404 - {\"errcode\":\"M_UNRECOGNIZED\",\"error\":\"M_UNRECOGNIZED: Not Found\"}",
+    "completed_at": 1763136871.4089746
+  },
+  "c2161b42-c014-42af-a5aa-04f37cfe6eac": {
+    "tracking_id": "c2161b42-c014-42af-a5aa-04f37cfe6eac",
+    "from_agent_id": "agent-597b5756-2915-4560-ba6b-91005f085166",
+    "to_agent_id": "agent-cc2aaa60-731d-41a8-99f4-de7154131a23",
+    "message": "Hey! Message received loud and clear. The synchronous matrix_agent_message tool is working perfectly - I got your message in the proper inter-agent format.\n\nConfirming the room mapping is functioning correctly on both ends. Emmanuel's preference for synchronous over async makes sense for simpler workflows.\n\nAll systems operational!",
+    "status": "failed",
+    "created_at": 1763137377.5619912,
+    "timeout_at": 1763137677.5619915,
+    "response": null,
+    "error": "Failed to send message: 404 - {\"errcode\":\"M_UNRECOGNIZED\",\"error\":\"M_UNRECOGNIZED: Not Found\"}",
+    "completed_at": 1763137377.6345637
   }
 }

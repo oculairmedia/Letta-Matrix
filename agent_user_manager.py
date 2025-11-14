@@ -142,9 +142,9 @@ class AgentUserManager:
     async def get_letta_agents(self) -> List[dict]:
         """Get all Letta agents from agents endpoint with pagination support"""
         try:
-            # Use direct Letta API endpoint (port 8283) with trailing slash for proper parameter handling
-            # Note: Port 8289 proxy has caching/limiting issues, so we use 8283 directly
-            base_endpoint = "http://192.168.50.90:8283/v1/agents/"
+            # Use Letta proxy endpoint (port 8289) as recommended
+            # The proxy provides better stability and performance improvements
+            base_endpoint = "http://192.168.50.90:8289/v1/agents"
             
             # Set up authentication headers
             headers = {
@@ -173,7 +173,8 @@ class AgentUserManager:
                     
                     async with session.get(agents_endpoint, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
                         if response.status != 200:
-                            logger.error(f"Failed to get agents from agents endpoint: {response.status}")
+                            error_body = await response.text()
+                            logger.error(f"Failed to get agents from agents endpoint: {response.status} - {error_body[:500]}")
                             break
                         
                         agents_data = await response.json()
@@ -277,30 +278,37 @@ class AgentUserManager:
             return None
     
     async def check_user_exists(self, username: str) -> bool:
-        """Check if a Matrix user already exists"""
+        """Check if a Matrix user exists (Tuwunel compatible)"""
         try:
-            # Use Synapse admin API to check if user exists
-            url = f"{self.homeserver_url}/_synapse/admin/v2/users/@{username}:matrix.oculair.ca"
+            # Try to login - if it fails with wrong password, user exists
+            # If it fails with unknown user, user doesn't exist
+            url = f"{self.homeserver_url}/_matrix/client/v3/login"
             
-            admin_token = await self.get_admin_token()
-            if not admin_token:
-                logger.warning("Failed to get admin token, cannot check user existence")
-                return False
+            headers = {"Content-Type": "application/json"}
             
-            headers = {
-                "Authorization": f"Bearer {admin_token}",
-                "Content-Type": "application/json"
+            # Use a dummy password - we're just checking existence
+            data = {
+                "type": "m.login.password",
+                "identifier": {
+                    "type": "m.id.user",
+                    "user": f"@{username}:matrix.oculair.ca"
+                },
+                "password": "dummy_check_password_12345"
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                async with session.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
-                        user_data = await response.json()
-                        return not user_data.get("deactivated", True)  # User exists and is not deactivated
+                        # Somehow logged in with dummy password (shouldn't happen)
+                        return True
+                    elif response.status == 403:
+                        # Wrong password = user exists
+                        return True
                     elif response.status == 404:
-                        return False  # User doesn't exist
+                        # User not found
+                        return False
                     else:
-                        logger.warning(f"Unexpected response checking user {username}: {response.status}")
+                        # Assume user doesn't exist for other errors
                         return False
                         
         except Exception as e:
@@ -308,37 +316,43 @@ class AgentUserManager:
             return False
 
     async def create_matrix_user(self, username: str, password: str, display_name: str) -> bool:
-        """Create a new Matrix user via admin API"""
+        """Create a new Matrix user via registration API (Tuwunel compatible)"""
         try:
-            # Use Synapse admin API to create user
-            url = f"{self.homeserver_url}/_synapse/admin/v2/users/@{username}:matrix.oculair.ca"
-
-            # Get admin access token programmatically
-            admin_token = await self.get_admin_token()
-            if not admin_token:
-                logger.warning("Failed to get admin token, user creation will fail")
-                return False
+            # Use standard Matrix registration API (works with both Synapse and Tuwunel)
+            url = f"{self.homeserver_url}/_matrix/client/v3/register"
 
             headers = {
-                "Authorization": f"Bearer {admin_token}",
                 "Content-Type": "application/json"
             }
 
             data = {
+                "username": username,
                 "password": password,
-                "displayname": display_name,
-                "admin": False,
-                "deactivated": False
+                "auth": {"type": "m.login.dummy"}
             }
 
             async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 201:
+                async with session.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
                         logger.info(f"Created Matrix user: @{username}:matrix.oculair.ca")
+                        
+                        # Set display name after registration
+                        result = await response.json()
+                        user_token = result.get("access_token")
+                        if user_token:
+                            await self.set_user_display_name(f"@{username}:matrix.oculair.ca", display_name, user_token)
+                        
                         return True
-                    elif response.status == 200:
-                        logger.info(f"Matrix user already exists: @{username}:matrix.oculair.ca")
-                        return True
+                    elif response.status == 400:
+                        error_data = await response.json()
+                        # User already exists
+                        if error_data.get("errcode") == "M_USER_IN_USE":
+                            logger.info(f"Matrix user already exists: @{username}:matrix.oculair.ca")
+                            return True
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"Failed to create user {username}: {response.status} - {error_text}")
+                            return False
                     else:
                         error_text = await response.text()
                         logger.error(f"Failed to create user {username}: {response.status} - {error_text}")
@@ -346,6 +360,28 @@ class AgentUserManager:
 
         except Exception as e:
             logger.error(f"Error creating Matrix user {username}: {e}")
+            return False
+    
+    async def set_user_display_name(self, user_id: str, display_name: str, access_token: str) -> bool:
+        """Set display name for a user"""
+        try:
+            url = f"{self.homeserver_url}/_matrix/client/v3/profile/{user_id}/displayname"
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+            data = {"displayname": display_name}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.put(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        logger.info(f"Set display name for {user_id}: {display_name}")
+                        return True
+                    else:
+                        logger.warning(f"Failed to set display name: {response.status}")
+                        return False
+        except Exception as e:
+            logger.error(f"Error setting display name: {e}")
             return False
 
     async def create_letta_agents_space(self) -> Optional[str]:

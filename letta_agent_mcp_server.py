@@ -70,7 +70,7 @@ class MCPTool:
         self.description = description
         self.parameters = {}
 
-    async def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def execute(self, params: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Execute the tool with given parameters"""
         raise NotImplementedError
 
@@ -120,7 +120,7 @@ class MatrixAgentMessageTool(MCPTool):
             }
         }
 
-    async def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def execute(self, params: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Execute inter-agent message sending with comprehensive error handling"""
         try:
             logger.info(f"Inter-agent message request: {params}")
@@ -142,15 +142,30 @@ class MatrixAgentMessageTool(MCPTool):
             # 3. ROOM RESOLUTION with on-demand creation
             target_room = await self._ensure_agent_room(to_agent)
 
-            # 4. ADMIN AUTHENTICATION (more reliable than agent auth)
-            if not self.admin_token:
-                self.admin_token = await self._get_admin_token()
+            # 4. AGENT AUTHENTICATION (send as the from_agent, not admin)
+            # Get the sending agent's token so message appears with their identity
+            if from_agent_id == "system":
+                # For system messages, use admin token
+                if not self.admin_token:
+                    self.admin_token = await self._get_admin_token()
+                sender_token = self.admin_token
+            else:
+                # For agent messages, authenticate as that agent
+                sender_token = await self._get_agent_token(from_agent)
+                
+                # 4b. Ensure sender is in the target room (join if needed)
+                await self._ensure_agent_in_room(
+                    from_agent["matrix_user_id"],
+                    target_room,
+                    sender_token
+                )
 
             # 5. SEND WITH METADATA
             result = await self._send_inter_agent_message(
                 from_agent=from_agent,
                 to_room=target_room,
-                message=message
+                message=message,
+                sender_token=sender_token  # Pass the sender's token
             )
 
             # 6. VERIFY DELIVERY (optional)
@@ -193,7 +208,7 @@ class MatrixAgentMessageTool(MCPTool):
                 "fallback_available": True
             }
 
-    def _resolve_sender(self, context: Dict, params: Dict) -> str:
+    def _resolve_sender(self, context: Optional[Dict], params: Dict) -> str:
         """Extract sender with multiple fallbacks"""
         # Priority: header > parameter > system default
 
@@ -241,6 +256,7 @@ class MatrixAgentMessageTool(MCPTool):
             "agent_id": agent_id,
             "agent_name": matrix_info.get("agent_name", "Unknown"),
             "matrix_user_id": matrix_info.get("matrix_user_id"),
+            "matrix_password": matrix_info.get("matrix_password"),  # Include password for authentication
             "room_id": matrix_info.get("room_id")
         }
 
@@ -385,9 +401,10 @@ class MatrixAgentMessageTool(MCPTool):
         self,
         from_agent: Dict,
         to_room: str,
-        message: str
+        message: str,
+        sender_token: str
     ) -> Dict:
-        """Send message with proper formatting and metadata"""
+        """Send message with proper formatting and metadata AS the sending agent"""
 
         # Format message with sender info
         formatted_text = f"[Inter-Agent Message from {from_agent['agent_name']}]\n{message}"
@@ -400,7 +417,7 @@ class MatrixAgentMessageTool(MCPTool):
                 payload = {
                     "room_id": to_room,
                     "message": formatted_text,
-                    "access_token": self.admin_token,
+                    "access_token": sender_token,  # Use sender's token, not admin
                     "homeserver": self.matrix_homeserver,
                     "inter_agent_metadata": {
                         "from_agent_id": from_agent["agent_id"],
@@ -434,7 +451,7 @@ class MatrixAgentMessageTool(MCPTool):
         logger.info(f"Delivery verification requested for {event_id} (not yet implemented)")
         return True
 
-    async def _fallback_send(self, params: Dict, context: Dict, error: str) -> Dict:
+    async def _fallback_send(self, params: Dict, context: Optional[Dict], error: str) -> Dict:
         """Fallback sending mechanism if primary fails"""
         logger.warning(f"Primary send failed: {error}, trying fallback")
 
@@ -446,6 +463,63 @@ class MatrixAgentMessageTool(MCPTool):
             "fallback": "not_implemented",
             "message": "Primary send failed. Message queuing not yet implemented."
         }
+    
+    async def _ensure_agent_in_room(self, agent_user_id: str, room_id: str, agent_token: str):
+        """Ensure an agent is a member of a room, join if not"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Try to join the room (idempotent - no-op if already member)
+                url = f"{self.matrix_homeserver}/_matrix/client/r0/rooms/{room_id}/join"
+                headers = {
+                    "Authorization": f"Bearer {agent_token}",
+                    "Content-Type": "application/json"
+                }
+
+                async with session.post(url, headers=headers, json={}) as resp:
+                    if resp.status in [200, 201]:
+                        logger.info(f"Agent {agent_user_id} successfully joined/is in room {room_id}")
+                    elif resp.status == 403:
+                        # Not invited, need admin to invite first
+                        logger.info(f"Agent not invited to room, using admin to invite")
+                        await self._invite_agent_to_room(agent_user_id, room_id)
+
+                        # Retry join after invitation
+                        async with session.post(url, headers=headers, json={}) as retry_resp:
+                            if retry_resp.status in [200, 201]:
+                                logger.info(f"Agent {agent_user_id} joined room after invitation")
+                            else:
+                                logger.warning(f"Failed to join after invite: {await retry_resp.text()}")
+                    else:
+                        logger.warning(f"Unexpected status joining room: {resp.status}")
+
+        except Exception as e:
+            logger.error(f"Error ensuring agent in room: {e}")
+    
+    async def _invite_agent_to_room(self, agent_user_id: str, room_id: str):
+        """Invite an agent to a room using admin privileges"""
+        try:
+            if not self.admin_token:
+                self.admin_token = await self._get_admin_token()
+
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.matrix_homeserver}/_matrix/client/r0/rooms/{room_id}/invite"
+                headers = {
+                    "Authorization": f"Bearer {self.admin_token}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "user_id": agent_user_id
+                }
+
+                async with session.post(url, headers=headers, json=payload) as resp:
+                    if resp.status in [200, 201]:
+                        logger.info(f"Successfully invited {agent_user_id} to room {room_id}")
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"Failed to invite agent: {error_text}")
+
+        except Exception as e:
+            logger.error(f"Error inviting agent to room: {e}")
 
 
 class MatrixAgentMessageAsyncTool(MCPTool):
@@ -492,7 +566,7 @@ class MatrixAgentMessageAsyncTool(MCPTool):
             }
         }
 
-    async def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def execute(self, params: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Execute async inter-agent message sending"""
         try:
             tracking_id = str(uuid.uuid4())
@@ -541,7 +615,7 @@ class MatrixAgentMessageAsyncTool(MCPTool):
                 "error_type": "async_send_failed"
             }
 
-    def _resolve_sender(self, context: Dict, params: Dict) -> str:
+    def _resolve_sender(self, context: Optional[Dict], params: Dict) -> str:
         """Extract sender with fallbacks"""
         if context and context.get("agentId"):
             return context["agentId"]
@@ -677,7 +751,9 @@ class MatrixAgentMessageAsyncTool(MCPTool):
                 target_room,
                 message,  # Send the message directly, no special formatting
                 tracking_id,
-                sender_token  # Authenticate as sending agent
+                sender_token,  # Authenticate as sending agent
+                from_agent_id=from_agent_id,  # Include sender agent ID
+                from_agent_name=from_agent.get("agent_name", "Unknown Agent")  # Include sender name
             )
 
             logger.info(f"Sent Matrix message as {from_agent['matrix_user_id']} for {tracking_id}, event_id: {event_id}")
@@ -747,33 +823,6 @@ class MatrixAgentMessageAsyncTool(MCPTool):
 
         raise AgentNotFoundError(f"Agent {agent_id} not found in mappings")
 
-    async def _get_admin_token(self) -> str:
-        """Get admin access token"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.matrix_api_url}/login"
-                payload = {
-                    "homeserver": self.matrix_homeserver,
-                    "user_id": self.admin_username,
-                    "password": self.admin_password,
-                    "device_name": "letta_agent_mcp_async"
-                }
-
-                async with session.post(url, json=payload) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise MatrixAuthError(f"Admin login failed: {error_text}")
-
-                    result = await response.json()
-                    if result.get("success"):
-                        return result.get("access_token")
-                    else:
-                        raise MatrixAuthError(f"Admin login failed: {result.get('message', 'Unknown error')}")
-
-        except Exception as e:
-            logger.error(f"Admin authentication error: {e}")
-            raise MatrixAuthError(f"Failed to authenticate as admin: {e}")
-
     async def _ensure_agent_in_room(self, agent_user_id: str, room_id: str, agent_token: str):
         """Ensure an agent is a member of a room, join if not"""
         try:
@@ -831,7 +880,7 @@ class MatrixAgentMessageAsyncTool(MCPTool):
         except Exception as e:
             logger.error(f"Error inviting agent to room: {e}")
 
-    async def _send_matrix_message(self, room_id: str, message: str, tracking_id: str, access_token: str) -> str:
+    async def _send_matrix_message(self, room_id: str, message: str, tracking_id: str, access_token: str, from_agent_id: Optional[str] = None, from_agent_name: Optional[str] = None) -> str:
         """Send message directly to Matrix room as the authenticated user"""
         try:
             async with aiohttp.ClientSession() as session:
@@ -842,12 +891,14 @@ class MatrixAgentMessageAsyncTool(MCPTool):
                     "Content-Type": "application/json"
                 }
 
-                # Standard Matrix message format
+                # Standard Matrix message format with sender metadata
                 payload = {
                     "msgtype": "m.text",
                     "body": message,
                     "m.letta.tracking_id": tracking_id,  # Add tracking as custom field
-                    "m.letta.type": "async_inter_agent_request"
+                    "m.letta.type": "async_inter_agent_request",
+                    "m.letta.from_agent_id": from_agent_id,  # Sender agent ID
+                    "m.letta.from_agent_name": from_agent_name  # Sender agent name
                 }
 
                 async with session.post(url, json=payload, headers=headers) as resp:
@@ -913,7 +964,7 @@ class MatrixAgentMessageAsyncTool(MCPTool):
         logger.info(f"Response monitoring timed out for {target_agent_user_id}")
         return None
 
-    async def _get_recent_room_messages(self, room_id: str, limit: int = 20, access_token: str = None) -> List[Dict]:
+    async def _get_recent_room_messages(self, room_id: str, limit: int = 20, access_token: Optional[str] = None) -> List[Dict]:
         """Get recent messages directly from Matrix room"""
         try:
             # Use provided token or fall back to admin token
@@ -969,7 +1020,7 @@ class MatrixAgentMessageAsyncTool(MCPTool):
         except Exception as e:
             logger.error(f"Failed to update request field: {e}")
 
-    async def _update_request_status(self, tracking_id: str, status: str, response: str = None, error: str = None):
+    async def _update_request_status(self, tracking_id: str, status: str, response: Optional[str] = None, error: Optional[str] = None):
         """Update async request status"""
         try:
             if not os.path.exists(self.requests_file):
@@ -1009,7 +1060,7 @@ class MatrixAgentMessageStatusTool(MCPTool):
             }
         }
 
-    async def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def execute(self, params: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Check status of async request"""
         try:
             tracking_id = params.get("tracking_id")
@@ -1084,7 +1135,7 @@ class MatrixAgentMessageResultTool(MCPTool):
             }
         }
 
-    async def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def execute(self, params: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Retrieve result of async request"""
         try:
             tracking_id = params.get("tracking_id")
@@ -1171,20 +1222,21 @@ class LettaAgentMCPServer:
             self.admin_password
         )
 
+        # ASYNC TOOLS COMMENTED OUT - Using only synchronous messaging
         # Async inter-agent communication (for long-running tasks)
-        self.tools["matrix_agent_message_async"] = MatrixAgentMessageAsyncTool(
-            self.matrix_api_url,
-            self.matrix_homeserver,
-            self.letta_api_url,
-            self.admin_username,
-            self.admin_password
-        )
+        # self.tools["matrix_agent_message_async"] = MatrixAgentMessageAsyncTool(
+        #     self.matrix_api_url,
+        #     self.matrix_homeserver,
+        #     self.letta_api_url,
+        #     self.admin_username,
+        #     self.admin_password
+        # )
 
         # Status checking for async messages
-        self.tools["matrix_agent_message_status"] = MatrixAgentMessageStatusTool()
+        # self.tools["matrix_agent_message_status"] = MatrixAgentMessageStatusTool()
 
         # Result retrieval for async messages
-        self.tools["matrix_agent_message_result"] = MatrixAgentMessageResultTool()
+        # self.tools["matrix_agent_message_result"] = MatrixAgentMessageResultTool()
 
         logger.info(f"Registered {len(self.tools)} tools: {list(self.tools.keys())}")
 
@@ -1272,7 +1324,7 @@ class LettaAgentMCPServer:
         """Handle GET requests (SSE support - minimal implementation)"""
         return web.Response(text="Use POST for MCP requests", status=405)
 
-    async def _process_request(self, session: Session, request: Dict[str, Any]) -> Dict[str, Any]:
+    async def _process_request(self, session: Optional[Session], request: Dict[str, Any]) -> Dict[str, Any]:
         """Process a single JSON-RPC request"""
         method = request.get('method')
         params = request.get('params', {})
@@ -1309,7 +1361,7 @@ class LettaAgentMCPServer:
                 "id": request_id
             }
 
-    async def _handle_initialize(self, session: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_initialize(self, session: Optional[Session], params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle initialization request"""
         return {
             "protocolVersion": "2025-03-26",
