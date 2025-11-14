@@ -41,7 +41,9 @@
       "Bash(docker-compose restart:*)",
       "Bash(docker-compose stop:*)",
       "Bash(docker-compose start:*)",
-      "Bash(git check-ignore:*)"
+      "Bash(git check-ignore:*)",
+      "Bash(jq:*)",
+      "Bash(matrix_client_data/agent_user_mappings.json.tmp)"
     ],
     "deny": []
   }

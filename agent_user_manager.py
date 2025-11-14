@@ -140,10 +140,11 @@ class AgentUserManager:
             logger.error(f"Error saving mappings: {e}")
     
     async def get_letta_agents(self) -> List[dict]:
-        """Get all Letta agents from agents endpoint"""
+        """Get all Letta agents from agents endpoint with pagination support"""
         try:
-            # Use proper agents endpoint (port 8289 proxy with /v1/agents)
-            agents_endpoint = "http://192.168.50.90:8289/v1/agents"
+            # Use direct Letta API endpoint (port 8283) with trailing slash for proper parameter handling
+            # Note: Port 8289 proxy has caching/limiting issues, so we use 8283 directly
+            base_endpoint = "http://192.168.50.90:8283/v1/agents/"
             
             # Set up authentication headers
             headers = {
@@ -151,30 +152,92 @@ class AgentUserManager:
                 "Content-Type": "application/json"
             }
             
+            agent_list = []
+            seen_agent_ids = set()
+            after_cursor = None
+            page_count = 0
+            max_pages = 10  # Safety limit to prevent infinite loops (56 agents / 50 per page = ~2 pages needed)
+            last_cursor = None  # Track if cursor is changing
+            
             # Create a fresh session to avoid timeout context errors
             async with aiohttp.ClientSession() as session:
-                async with session.get(agents_endpoint, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status != 200:
-                        logger.error(f"Failed to get agents from agents endpoint: {response.status}")
-                        return []
+                while page_count < max_pages:
+                    page_count += 1
+                    # Build URL with pagination cursor if available
+                    if after_cursor:
+                        agents_endpoint = f"{base_endpoint}?after={after_cursor}&limit=100"
+                    else:
+                        agents_endpoint = f"{base_endpoint}?limit=100"
                     
-                    agents_data = await response.json()
+                    logger.info(f"Fetching agents page {page_count} from: {agents_endpoint}")
                     
-                    agent_list = []
-                    # Handle /v1/models response format with data array
-                    agents_array = agents_data.get("data", []) if isinstance(agents_data, dict) else agents_data
-                    for agent in agents_array:
-                        agent_id = agent.get("id", "")
-                        agent_name = agent.get("name", agent_id)
+                    async with session.get(agents_endpoint, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                        if response.status != 200:
+                            logger.error(f"Failed to get agents from agents endpoint: {response.status}")
+                            break
                         
-                        if agent_id:
-                            agent_list.append({
-                                "id": agent_id,
-                                "name": agent_name
-                            })
-                    
-                    logger.info(f"Found {len(agent_list)} Letta agents from agents endpoint")
-                    return agent_list
+                        agents_data = await response.json()
+                        
+                        # Handle /v1/agents response format (returns array directly)
+                        agents_array = agents_data.get("data", []) if isinstance(agents_data, dict) else agents_data
+                        
+                        if not agents_array:
+                            logger.info(f"No more agents found on page {page_count}, ending pagination")
+                            break
+                        
+                        logger.info(f"Page {page_count}: Received {len(agents_array)} agents from API")
+                        
+                        # Track new agents added this page
+                        new_agents_this_page = 0
+                        first_agent_id = None
+                        last_agent_id = None
+                        
+                        for agent in agents_array:
+                            agent_id = agent.get("id", "")
+                            agent_name = agent.get("name", agent_id)
+                            
+                            if not first_agent_id:
+                                first_agent_id = agent_id
+                            last_agent_id = agent_id
+                            
+                            if agent_id and agent_id not in seen_agent_ids:
+                                seen_agent_ids.add(agent_id)
+                                agent_list.append({
+                                    "id": agent_id,
+                                    "name": agent_name
+                                })
+                                new_agents_this_page += 1
+                        
+                        logger.info(f"Page {page_count}: Added {new_agents_this_page} new unique agents (total so far: {len(agent_list)})")
+                        logger.debug(f"Page {page_count}: First agent: {first_agent_id}, Last agent: {last_agent_id}")
+                        
+                        # If we got less than 50 agents, this is the last page
+                        if len(agents_array) < 50:
+                            logger.info(f"Page {page_count} has {len(agents_array)} agents (less than 50), this is the last page")
+                            break
+                        
+                        # If cursor hasn't changed, we're in an infinite loop
+                        if last_cursor == last_agent_id:
+                            logger.warning(f"Cursor hasn't changed from {last_cursor}, stopping to prevent infinite loop")
+                            break
+                        
+                        # If no new agents were found and we got a full page, we might be seeing duplicates
+                        if new_agents_this_page == 0 and len(agents_array) >= 50:
+                            logger.warning(f"No new agents on page {page_count} but got full page - possible API pagination issue")
+                            break
+                        
+                        # Use the last agent ID as the cursor for the next page
+                        after_cursor = last_agent_id
+                        last_cursor = last_agent_id
+                        
+                        if not after_cursor:
+                            logger.warning("No ID found for last agent, stopping pagination")
+                            break
+                        
+                        logger.info(f"Next page will use cursor: {after_cursor}")
+                
+                logger.info(f"Found {len(agent_list)} Letta agents across {page_count} pages from agents endpoint")
+                return agent_list
             
         except Exception as e:
             logger.error(f"Error getting Letta agents from agents endpoint: {e}")
@@ -587,8 +650,8 @@ class AgentUserManager:
                         await self.create_or_update_agent_room(agent["id"])
                     # If room exists, ensure invitations are accepted
                     elif mapping.created and mapping.room_created and mapping.room_id:
-                        logger.info(f"Skipping invitation process for room {mapping.room_id} (temporarily disabled)")
-                        # await self.auto_accept_invitations(mapping.room_id)
+                        logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
+                        await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
         
         # TODO: Optionally handle removed agents (deactivate users?)
         removed_agents = existing_agent_ids - current_agent_ids
@@ -861,7 +924,7 @@ class AgentUserManager:
             if room_exists:
                 logger.info(f"Room already exists for agent {mapping.agent_name}: {mapping.room_id}")
                 # Ensure invitations are accepted
-                await self.auto_accept_invitations(mapping.room_id)
+                await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
                 return
             else:
                 logger.warning(f"Room {mapping.room_id} in mapping doesn't exist on server, checking for existing rooms")
@@ -877,7 +940,7 @@ class AgentUserManager:
             mapping.room_created = True
             await self.save_mappings()
             # Ensure invitations are accepted
-            await self.auto_accept_invitations(existing_room_id)
+            await self.auto_accept_invitations_with_tracking(existing_room_id, mapping)
             return
         
         try:

@@ -86,4 +86,4 @@ temp/
 
 # OS files
 .DS_Store
-Thumbs.db
+Thumbs.dbpostgres-data.backup.*/
