@@ -16,10 +16,7 @@ from matrix_auth import MatrixAuthManager
 
 # Import agent user manager
 from agent_user_manager import run_agent_sync
-
-# Track processed event IDs to prevent duplicates
-processed_event_ids = set()
-MAX_PROCESSED_EVENTS = 10000  # Limit set size to prevent memory issues
+from event_dedupe_store import is_duplicate_event
 
 # Custom exception classes
 class LettaApiError(Exception):
@@ -356,23 +353,10 @@ async def send_as_agent(room_id: str, message: str, config: Config, logger: logg
 async def message_callback(room, event, config: Config, logger: logging.Logger, client: Optional[AsyncClient] = None):
     """Callback function for handling new text messages."""
     if isinstance(event, RoomMessageText):
-        # Check for duplicate events
+        # Check for duplicate events via shared dedupe store
         event_id = getattr(event, 'event_id', None)
-        if event_id:
-            if event_id in processed_event_ids:
-                logger.debug(f"Skipping duplicate event {event_id}")
-                return
-            
-            # Add to processed events set
-            processed_event_ids.add(event_id)
-            
-            # Prevent unbounded growth of the set
-            if len(processed_event_ids) > MAX_PROCESSED_EVENTS:
-                # Remove oldest entries (convert to list, remove first 1000, convert back)
-                events_list = list(processed_event_ids)
-                processed_event_ids.clear()
-                processed_event_ids.update(events_list[-5000:])  # Keep last 5000
-                logger.debug(f"Trimmed processed events set to {len(processed_event_ids)} entries")
+        if event_id and is_duplicate_event(event_id, logger):
+            return
         
         # Ignore messages from ourselves to prevent loops
         if client and event.sender == client.user_id:

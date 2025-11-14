@@ -13,6 +13,9 @@ from nio import AsyncClient, RoomMessageText, LoginError
 import websockets
 from dotenv import load_dotenv
 
+from event_dedupe_store import is_duplicate_event
+
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -93,12 +96,18 @@ class MatrixMCPBridge:
         # Ignore our own messages
         if event.sender == self.matrix_client.user_id:
             return
+
+        # Drop duplicate events using shared store
+        event_id = getattr(event, "event_id", None)
+        if event_id and is_duplicate_event(event_id, logger):
+            return
         
         # Check if room is allowed (if restrictions are set)
         if self.allowed_rooms and room.room_id not in self.allowed_rooms:
             return
         
         message = event.body
+
         match = self.command_pattern.match(message)
         
         if match:
