@@ -98,7 +98,7 @@ class TestCreateUserForAgent:
 
     @pytest.mark.asyncio
     async def test_create_user_for_agent_creates_mapping_even_without_token(self, mock_config):
-        """Test user creation creates mapping structure even when token unavailable"""
+        """Test user creation creates mapping structure even when user creation fails"""
         with patch('agent_user_manager.logging.getLogger'):
             with patch('agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
@@ -109,7 +109,8 @@ class TestCreateUserForAgent:
                     "created_at": 1234567890
                 }
 
-                with patch.object(manager, 'get_admin_token', return_value=None):
+                # Mock create_matrix_user to fail
+                with patch.object(manager, 'create_matrix_user', return_value=False):
                     await manager.create_user_for_agent(agent)
 
                     # Mapping is created but marked as failed

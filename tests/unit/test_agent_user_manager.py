@@ -337,10 +337,12 @@ class TestAgentDiscovery:
         mock_response.__aexit__ = AsyncMock(return_value=None)
 
         mock_aiohttp_session.get = Mock(return_value=mock_response)
+        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
         manager = AgentUserManager(mock_config)
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('aiohttp.ClientSession', return_value=mock_aiohttp_session):
             agents = await manager.get_letta_agents()
 
         assert len(agents) == 0
@@ -355,10 +357,12 @@ class TestAgentDiscovery:
         mock_response.__aexit__ = AsyncMock(return_value=None)
 
         mock_aiohttp_session.get = Mock(return_value=mock_response)
+        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
         manager = AgentUserManager(mock_config)
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('aiohttp.ClientSession', return_value=mock_aiohttp_session):
             agents = await manager.get_letta_agents()
 
         assert agents == []
