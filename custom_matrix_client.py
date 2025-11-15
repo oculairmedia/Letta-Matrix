@@ -112,7 +112,6 @@ def setup_logging(config: Config) -> logging.Logger:
 # Global variables for backwards compatibility
 client = None
 auth_manager_global = None
-startup_time = None  # Track when the bot started to ignore old messages
 
 async def retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0, logger: Optional[logging.Logger] = None):
     """
@@ -372,16 +371,6 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                     "message": event.body[:50]
                 })
                 return
-
-        # Ignore messages from before bot startup to prevent replaying old messages
-        if hasattr(event, 'server_timestamp') and startup_time and event.server_timestamp < startup_time:
-            logger.debug("Ignoring old message from before startup", extra={
-                "event_timestamp": event.server_timestamp,
-                "startup_time": startup_time,
-                "sender": event.sender,
-                "message": event.body[:50]
-            })
-            return
         
         # Check if the sender is THIS room's agent - ignore only self-messages, not other agents
         mappings_file = "/app/data/agent_user_mappings.json"
@@ -667,11 +656,8 @@ async def periodic_agent_sync(config, logger, interval=0.5):  # Reduced to 0.5 s
             logger.error("Periodic agent sync failed", extra={"error": str(e)})
 
 async def main():
-    global client, startup_time # Make client and startup_time global
-    
-    # Set startup time to ignore old messages
-    startup_time = time.time() * 1000  # Convert to milliseconds for nio event timestamps
-    
+    global client  # Make client global
+
     # Load configuration
     try:
         config = Config.from_env()
