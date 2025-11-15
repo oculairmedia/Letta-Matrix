@@ -260,7 +260,7 @@ class TestSendMessageEndpoint:
         mock_session.return_value = mock_session_instance
 
         # Make request
-        response = client.post("/send_message", json={
+        response = client.post("/messages/send", json={
             "room_id": "!room:matrix.test",
             "message": "Test message",
             "access_token": "token123",
@@ -274,7 +274,7 @@ class TestSendMessageEndpoint:
 
     def test_send_message_validation(self, client):
         """Test send message with invalid data"""
-        response = client.post("/send_message", json={
+        response = client.post("/messages/send", json={
             "room_id": "!room:matrix.test",
             # Missing required fields
         })
@@ -317,7 +317,7 @@ class TestGetMessagesEndpoint:
         mock_session.return_value = mock_session_instance
 
         # Make request
-        response = client.post("/get_messages", json={
+        response = client.post("/messages/get", json={
             "room_id": "!room:matrix.test",
             "access_token": "token123",
             "homeserver": "http://test:8008",
@@ -372,11 +372,8 @@ class TestListRoomsEndpoint:
 
         mock_session.return_value = mock_session_instance
 
-        # Make request
-        response = client.post("/list_rooms", json={
-            "access_token": "token123",
-            "homeserver": "http://test:8008"
-        })
+        # Make request - /rooms/list is a GET endpoint
+        response = client.get("/rooms/list?access_token=token123&homeserver=http://test:8008")
 
         assert response.status_code == 200
         data = response.json()
@@ -393,7 +390,7 @@ class TestWebhookEndpoint:
 
     def test_webhook_new_agent(self, client):
         """Test webhook receives new agent notification"""
-        response = client.post("/webhook/new_agent", json={
+        response = client.post("/webhook/new-agent", json={
             "agent_id": "agent-123",
             "timestamp": "2025-01-01T00:00:00Z"
         })
@@ -403,7 +400,7 @@ class TestWebhookEndpoint:
 
     def test_webhook_validation(self, client):
         """Test webhook validation"""
-        response = client.post("/webhook/new_agent", json={
+        response = client.post("/webhook/new-agent", json={
             # Missing required fields
         })
 
@@ -438,8 +435,11 @@ class TestErrorHandling:
             "password": "test_pass"
         })
 
-        # Should handle error gracefully
-        assert response.status_code in [500, 503]
+        # Should handle error gracefully with 200 but success=False
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "Error" in data["message"] or "error" in data["message"].lower()
 
     def test_invalid_json_handling(self, client):
         """Test handling of invalid JSON"""

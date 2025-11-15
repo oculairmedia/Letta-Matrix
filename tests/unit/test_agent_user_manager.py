@@ -378,23 +378,25 @@ class TestUsernameGeneration:
         manager = AgentUserManager(mock_config)
 
         # Test with standard UUID format
-        agent = {"id": "agent-12345678-1234-1234-1234-123456789abc", "name": "TestAgent"}
-        username = manager._generate_matrix_username(agent)
+        agent_name = "TestAgent"
+        agent_id = "agent-12345678-1234-1234-1234-123456789abc"
+        username = manager.generate_username(agent_name, agent_id)
 
         # Should convert hyphens to underscores and use agent ID
-        assert username.startswith("@agent_")
+        assert username.startswith("agent_")
         assert "12345678_1234" in username
-        assert username.endswith(":matrix.test")
+        # Note: generate_username returns just the localpart without @, domain
 
     def test_generate_matrix_username_stability(self, mock_config):
         """Test that username generation is stable across renames"""
         manager = AgentUserManager(mock_config)
 
-        agent_v1 = {"id": "agent-001", "name": "OriginalName"}
-        agent_v2 = {"id": "agent-001", "name": "NewName"}
+        agent_id = "agent-001"
+        agent_name_v1 = "OriginalName"
+        agent_name_v2 = "NewName"
 
-        username1 = manager._generate_matrix_username(agent_v1)
-        username2 = manager._generate_matrix_username(agent_v2)
+        username1 = manager.generate_username(agent_name_v1, agent_id)
+        username2 = manager.generate_username(agent_name_v2, agent_id)
 
         # Username should be the same despite name change
         assert username1 == username2
