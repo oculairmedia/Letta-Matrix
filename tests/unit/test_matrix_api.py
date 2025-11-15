@@ -253,7 +253,8 @@ class TestSendMessageEndpoint:
         mock_response.__aexit__ = AsyncMock(return_value=None)
 
         mock_session_instance = AsyncMock()
-        mock_session_instance.post = Mock(return_value=mock_response)
+        # send_message uses PUT not POST
+        mock_session_instance.put = Mock(return_value=mock_response)
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock(return_value=None)
 
@@ -299,6 +300,7 @@ class TestGetMessagesEndpoint:
         mock_response.json = AsyncMock(return_value={
             "chunk": [
                 {
+                    "type": "m.room.message",  # Required field for filtering
                     "sender": "@user:matrix.test",
                     "content": {"body": "Test message"},
                     "origin_server_ts": 1704067200000,
