@@ -135,8 +135,8 @@ class TestTTLCleanup:
             # Add event
             event_dedupe_store.is_duplicate_event(old_event_id, mock_logger)
 
-            # Wait for TTL to expire
-            time.sleep(1.5)
+            # Wait for TTL to expire (2+ seconds to account for integer rounding)
+            time.sleep(2.1)
 
             # Add a new event (this triggers cleanup of old events)
             new_event_id = "$new_event_after_cleanup"
