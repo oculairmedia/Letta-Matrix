@@ -223,10 +223,13 @@ class TestAdminToken:
         mock_response.__aexit__ = AsyncMock(return_value=None)
 
         mock_aiohttp_session.post = Mock(return_value=mock_response)
+        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
         manager = AgentUserManager(mock_config)
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        # Patch aiohttp.ClientSession which is used by get_admin_token
+        with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
             token = await manager.get_admin_token()
 
         assert token == "admin_token_123"
@@ -272,24 +275,27 @@ class TestAgentDiscovery:
     @pytest.mark.asyncio
     async def test_get_letta_agents_success(self, mock_config, mock_aiohttp_session):
         """Test successfully retrieving Letta agents"""
-        # Mock the /v1/models endpoint response
+        # Mock the /v1/agents endpoint response
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={
             "data": [
-                {"id": "agent-001"},
-                {"id": "agent-002"},
-                {"id": "agent-003"}
+                {"id": "agent-001", "name": "Agent 1"},
+                {"id": "agent-002", "name": "Agent 2"},
+                {"id": "agent-003", "name": "Agent 3"}
             ]
         })
         mock_response.__aenter__ = AsyncMock(return_value=mock_response)
         mock_response.__aexit__ = AsyncMock(return_value=None)
 
         mock_aiohttp_session.get = Mock(return_value=mock_response)
+        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
         manager = AgentUserManager(mock_config)
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        # Patch aiohttp.ClientSession to return our mock session
+        with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
             agents = await manager.get_letta_agents()
 
         assert len(agents) == 3
@@ -299,31 +305,23 @@ class TestAgentDiscovery:
     @pytest.mark.asyncio
     async def test_get_letta_agents_with_details(self, mock_config, mock_aiohttp_session):
         """Test retrieving agents with detailed information"""
-        # Mock agent list response
+        # Mock agent list response with name included
         list_response = AsyncMock()
         list_response.status = 200
         list_response.json = AsyncMock(return_value={
-            "data": [{"id": "agent-001"}]
+            "data": [{"id": "agent-001", "name": "DetailedAgent"}]
         })
         list_response.__aenter__ = AsyncMock(return_value=list_response)
         list_response.__aexit__ = AsyncMock(return_value=None)
 
-        # Mock individual agent details response
-        detail_response = AsyncMock()
-        detail_response.status = 200
-        detail_response.json = AsyncMock(return_value={
-            "id": "agent-001",
-            "name": "DetailedAgent"
-        })
-        detail_response.__aenter__ = AsyncMock(return_value=detail_response)
-        detail_response.__aexit__ = AsyncMock(return_value=None)
-
-        # Setup mock session to return different responses
-        mock_aiohttp_session.get = Mock(side_effect=[list_response, detail_response])
+        # Setup mock session
+        mock_aiohttp_session.get = Mock(return_value=list_response)
+        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
         manager = AgentUserManager(mock_config)
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
             agents = await manager.get_letta_agents()
 
         assert len(agents) == 1
@@ -378,23 +376,25 @@ class TestUsernameGeneration:
         manager = AgentUserManager(mock_config)
 
         # Test with standard UUID format
-        agent = {"id": "agent-12345678-1234-1234-1234-123456789abc", "name": "TestAgent"}
-        username = manager._generate_matrix_username(agent)
+        agent_name = "TestAgent"
+        agent_id = "agent-12345678-1234-1234-1234-123456789abc"
+        username = manager.generate_username(agent_name, agent_id)
 
         # Should convert hyphens to underscores and use agent ID
-        assert username.startswith("@agent_")
+        assert username.startswith("agent_")
         assert "12345678_1234" in username
-        assert username.endswith(":matrix.test")
+        # Note: generate_username returns just the localpart without @, domain
 
     def test_generate_matrix_username_stability(self, mock_config):
         """Test that username generation is stable across renames"""
         manager = AgentUserManager(mock_config)
 
-        agent_v1 = {"id": "agent-001", "name": "OriginalName"}
-        agent_v2 = {"id": "agent-001", "name": "NewName"}
+        agent_id = "agent-001"
+        agent_name_v1 = "OriginalName"
+        agent_name_v2 = "NewName"
 
-        username1 = manager._generate_matrix_username(agent_v1)
-        username2 = manager._generate_matrix_username(agent_v2)
+        username1 = manager.generate_username(agent_name_v1, agent_id)
+        username2 = manager.generate_username(agent_name_v2, agent_id)
 
         # Username should be the same despite name change
         assert username1 == username2
@@ -411,27 +411,32 @@ class TestUserCreation:
     @pytest.mark.asyncio
     async def test_create_user_for_agent_success(self, mock_config, mock_aiohttp_session):
         """Test successfully creating a Matrix user for an agent"""
-        # Mock admin token retrieval
-        token_response = AsyncMock()
-        token_response.status = 200
-        token_response.json = AsyncMock(return_value={"access_token": "admin_token"})
-        token_response.__aenter__ = AsyncMock(return_value=token_response)
-        token_response.__aexit__ = AsyncMock(return_value=None)
-
         # Mock user creation response
         create_response = AsyncMock()
         create_response.status = 200
-        create_response.json = AsyncMock(return_value={"success": True})
+        create_response.json = AsyncMock(return_value={
+            "access_token": "new_user_token",
+            "user_id": "@agent_123:matrix.oculair.ca"
+        })
         create_response.__aenter__ = AsyncMock(return_value=create_response)
         create_response.__aexit__ = AsyncMock(return_value=None)
 
-        mock_aiohttp_session.post = Mock(side_effect=[token_response, create_response])
-        mock_aiohttp_session.put = Mock(return_value=create_response)
+        # Mock display name update response
+        display_name_response = AsyncMock()
+        display_name_response.status = 200
+        display_name_response.__aenter__ = AsyncMock(return_value=display_name_response)
+        display_name_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_aiohttp_session.post = Mock(return_value=create_response)
+        mock_aiohttp_session.put = Mock(return_value=display_name_response)
+        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
         manager = AgentUserManager(mock_config)
         agent = {"id": "agent-123", "name": "NewAgent"}
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        # Patch aiohttp.ClientSession to return our mock session
+        with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
             await manager.create_user_for_agent(agent)
 
         # Verify mapping was created

@@ -198,9 +198,9 @@ class TestRoomCreationAndManagement:
         mock_aiohttp_session.post = Mock(side_effect=[login_response, room_response])
 
         with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
-            # Create room
-            agent = {"id": "agent-room-test", "name": "Room Test Agent"}
-            await agent_manager.create_room_for_agent(agent)
+            # Create room - using current method name
+            agent_id = "agent-room-test"
+            await agent_manager.create_or_update_agent_room(agent_id)
 
             # Verify room was created
             mapping = agent_manager.mappings["agent-room-test"]
@@ -386,6 +386,7 @@ class TestInvitationManagement:
     """Test user invitation to agent rooms"""
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="_invite_user_with_retry method no longer exists - invitations handled differently")
     async def test_invite_admin_to_agent_room(self, agent_manager, mock_aiohttp_session):
         """Test inviting admin users to agent rooms"""
         # Setup agent with room
@@ -416,17 +417,9 @@ class TestInvitationManagement:
         mock_aiohttp_session.post = Mock(side_effect=[login_response, invite_response])
 
         with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
-            # Invite admin user
-            room_id = "!invite_room:matrix.test"
-            user_id = "@admin:matrix.test"
-
-            success = await agent_manager._invite_user_with_retry(
-                room_id, user_id, "Invite Test Agent"
-            )
-
-            # In a real test with actual implementation, would verify:
-            # assert success is True
-            # assert agent_manager.mappings["agent-invite"].invitation_status[user_id] == "invited"
+            # This method no longer exists - invitations are now handled
+            # within create_or_update_agent_room using auto_accept_invitations_with_tracking
+            pass
 
     @pytest.mark.asyncio
     async def test_invitation_status_tracking(self, agent_manager):
