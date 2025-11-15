@@ -74,6 +74,8 @@ MANIFEST
 nosetests.xml
 coverage.xml
 *.cover
+*,cover
+htmlcov/
 .hypothesis/
 
 # IDE
