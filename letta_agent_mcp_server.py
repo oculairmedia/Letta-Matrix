@@ -315,7 +315,16 @@ class MatrixAgentMessageTool(MCPTool):
         )
 
     async def _room_exists(self, room_id: str) -> bool:
-        """Check if a Matrix room exists"""
+        """Check if a Matrix room exists.
+
+        We treat 200 and 403 as "room exists":
+          * 200 → we have access and the room is definitely there
+          * 403 → the room exists but the admin user doesn't have permission to read state
+
+        This mirrors the logic used by the agent_user_manager so that a missing
+        membership for @letta/@matrixadmin doesn't cause false "room not found"
+        errors for agents that actually do have rooms.
+        """
         try:
             if not self.admin_token:
                 self.admin_token = await self._get_admin_token()
@@ -325,10 +334,22 @@ class MatrixAgentMessageTool(MCPTool):
                 headers = {"Authorization": f"Bearer {self.admin_token}"}
 
                 async with session.get(url, headers=headers) as resp:
-                    return resp.status == 200
+                    if resp.status == 200:
+                        logger.info(f"Room {room_id} exists (200)")
+                        return True
+                    if resp.status == 403:
+                        # Room exists but this user cannot read state – still counts as existing
+                        logger.info(f"Room {room_id} exists but access denied (403)")
+                        return True
+                    if resp.status == 404:
+                        logger.info(f"Room {room_id} does not exist (404)")
+                        return False
+
+                    logger.warning(f"Unexpected response when checking room {room_id}: {resp.status}")
+                    return False
 
         except Exception as e:
-            logger.warning(f"Error checking room existence: {e}")
+            logger.warning(f"Error checking room existence for {room_id}: {e}")
             return False
 
     async def _get_admin_token(self) -> str:

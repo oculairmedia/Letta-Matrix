@@ -1,40 +1,4 @@
 services:
-  synapse:
-    image: docker.io/matrixdotorg/synapse:latest
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - SYNAPSE_DATABASE_HOST=${POSTGRES_HOST}
-      - SYNAPSE_DATABASE_PORT=${POSTGRES_PORT}
-      - SYNAPSE_DATABASE_USER=${POSTGRES_USER}
-      - SYNAPSE_DATABASE_PASSWORD=${POSTGRES_PASSWORD}
-      - SYNAPSE_DATABASE_NAME=${POSTGRES_DB}
-    volumes:
-      - ${SYNAPSE_DATA_PATH}:/data
-      - ./synapse_entrypoint.sh:/synapse_entrypoint.sh:ro
-    entrypoint: /synapse_entrypoint.sh
-    depends_on:
-      - db
-    networks:
-      - matrix-internal
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8008/_matrix/client/versions"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-  db:
-    image: docker.io/postgres:15-alpine
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
-    volumes:
-      - ${POSTGRES_DATA_PATH}:/var/lib/postgresql/data
-    networks:
-      - matrix-internal
   element:
     image: vectorim/element-web:latest
     restart: unless-stopped
@@ -52,14 +16,13 @@ services:
     networks:
       - matrix-internal
     depends_on:
-      - synapse
       - element
     labels:
       - "homepage.group=Communication"
-      - "homepage.name=Matrix Homeserver"
+      - "homepage.name=Matrix Homeserver (Tuwunel)"
       - "homepage.icon=si-matrix"
       - "homepage.href=http://matrix.oculair.ca"
-      - "homepage.description=Matrix homeserver with Element web client"
+      - "homepage.description=Tuwunel Matrix homeserver with Element web client"
   matrix-client:
     build:
       context: .
@@ -68,7 +31,7 @@ services:
     env_file:
       - .env
     environment:
-      - MATRIX_HOMESERVER_URL=http://synapse:8008
+      - MATRIX_HOMESERVER_URL=http://tuwunel:6167
     volumes:
       - ./matrix_store:/app/matrix_store
       - ./matrix_client_data:/app/data
@@ -79,8 +42,6 @@ services:
     networks:
       - matrix-internal
     depends_on:
-      synapse:
-        condition: service_healthy
       matrix-api:
         condition: service_started
       mcp-server:
@@ -103,15 +64,13 @@ services:
     env_file:
       - .env
     environment:
-      - MATRIX_HOMESERVER_URL=http://synapse:8008
+      - MATRIX_HOMESERVER_URL=http://tuwunel:6167
     volumes:
       - ./matrix_client_data:/app/data
     ports:
       - 8004:8000
     networks:
       - matrix-internal
-    depends_on:
-      - synapse
     labels:
       - "homepage.group=Communication"
       - "homepage.name=Matrix API"
@@ -127,7 +86,7 @@ services:
       - .env
     environment:
       - MATRIX_API_URL=http://matrix-api:8000
-      - MATRIX_HOMESERVER_URL=http://synapse:8008
+      - MATRIX_HOMESERVER_URL=http://tuwunel:6167
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8005
       - MCP_HTTP_HOST=0.0.0.0
@@ -138,7 +97,6 @@ services:
     networks:
       - matrix-internal
     depends_on:
-      - synapse
       - matrix-api
     volumes:
       - ./mcp_data:/app/data
@@ -157,7 +115,7 @@ services:
       - .env
     environment:
       - MATRIX_API_URL=http://matrix-api:8000
-      - MATRIX_HOMESERVER_URL=http://synapse:8008
+      - MATRIX_HOMESERVER_URL=http://tuwunel:6167
       - LETTA_API_URL=http://192.168.50.90:8289
       - LETTA_AGENT_MCP_HOST=0.0.0.0
       - LETTA_AGENT_MCP_PORT=8017
@@ -166,7 +124,6 @@ services:
     networks:
       - matrix-internal
     depends_on:
-      - synapse
       - matrix-api
       - matrix-client
     volumes:

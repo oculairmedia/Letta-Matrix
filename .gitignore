@@ -98,6 +98,11 @@ temp/
 *.backup
 *~
 
+# Backup directories
+postgres-data.backup.*/
+matrix_client_data.backup.*/
+tuwunel-data.backup.*/
+
 # OS files
 .DS_Store
-Thumbs.dbpostgres-data.backup.*/
+Thumbs.db

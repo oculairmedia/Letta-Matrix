@@ -54,7 +54,8 @@ class Config:
                 homeserver_url=os.getenv("MATRIX_HOMESERVER_URL", "http://localhost:8008"),
                 username=os.getenv("MATRIX_USERNAME", "@letta:matrix.oculair.ca"),
                 password=os.getenv("MATRIX_PASSWORD", "letta"),
-                room_id=os.getenv("MATRIX_ROOM_ID", "!LWmNEJcwPwVWlbmNqe:matrix.oculair.ca"),
+                # MATRIX_ROOM_ID is optional. If unset or empty, we skip joining a base room.
+                room_id=os.getenv("MATRIX_ROOM_ID", "") or "",
                 letta_api_url=os.getenv("LETTA_API_URL", "https://letta.oculair.ca"),
                 letta_token=os.getenv("LETTA_TOKEN", "lettaSecurePass123"),
                 letta_agent_id=os.getenv("LETTA_AGENT_ID", "agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444"),
@@ -451,34 +452,58 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             
             # If this is an inter-agent message, enhance it with context
             if is_inter_agent_message and from_agent_id and from_agent_name:
-                # Format message with context for the receiving agent
+                # Format message with context for the receiving agent.
+                # IMPORTANT: The receiving agent MAY reply back using the
+                # 'matrix_agent_message' tool, but must avoid open-ended loops.
+
+                # The original Matrix event body already includes a prefix like
+                # "[Inter-Agent Message from X]". Strip that inner prefix so we
+                # don't show duplicate headers to the receiving agent.
+                raw_body = event.body or ""
+                payload_lines = raw_body.splitlines()
+                if payload_lines and payload_lines[0].startswith("[Inter-Agent Message from"):
+                    # Drop the first line (the original prefix) and keep the rest
+                    payload = "\n".join(payload_lines[1:]).lstrip("\n")
+                else:
+                    payload = raw_body
+
                 message_to_send = f"""[INTER-AGENT MESSAGE from {from_agent_name}]
 
-{event.body}
+{payload}
 
 ---
-⚠️ SYSTEM INSTRUCTION - INTER-AGENT COMMUNICATION ⚠️
+SYSTEM NOTE (INTER-AGENT COMMUNICATION)
 
-The message above is from another Letta agent: {from_agent_name} (ID: {from_agent_id})
+The message above is from another Letta agent: {from_agent_name} (ID: {from_agent_id}).
+Treat this as your MAIN task for this turn; the other agent is trying to
+collaborate with you.
 
-YOU MUST respond using the 'matrix_agent_message' tool. DO NOT respond in this room directly.
+WHEN TO REPLY BACK TO THE OTHER AGENT:
+- If the message clearly contains a question or request addressed to you,
+  you SHOULD send a direct reply back to that agent using the
+  'matrix_agent_message' tool.
+- Your reply should normally be a single, clear answer (not many tiny
+  follow-ups).
 
-Required tool call:
-{{
-  "tool": "matrix_agent_message",
-  "arguments": {{
-    "to_agent_id": "{from_agent_id}",
-    "message": "your response here"
-  }}
-}}
+LOOP-SAFETY RULES (MUST OBEY):
+- Never call 'matrix_agent_message' more than once in response to a single
+  inter-agent message.
+- For any ongoing inter-agent conversation, you may use 'matrix_agent_message'
+  at most 3 times in total. After your third such reply, STOP using the tool
+  and explain to the human that you are ending the inter-agent exchange to
+  avoid loops.
+- If the other agent appears to repeat the same question or answer, do NOT
+  keep going back and forth. Instead, explain the situation to the human and
+  do not call 'matrix_agent_message' again for that topic.
 
-This ensures {from_agent_name} receives your reply in their dedicated Matrix room.
-If you respond any other way, {from_agent_name} will NOT see your message.
+If the message does NOT require a reply (for example, it is just FYI), you can
+simply acknowledge it or focus on any actions the HUMAN has asked for in this
+room.
 """
                 logger.info(f"[INTER-AGENT CONTEXT] Enhanced message for receiving agent:")
                 logger.info(f"[INTER-AGENT CONTEXT] Sender: {from_agent_name} ({from_agent_id})")
                 logger.info(f"[INTER-AGENT CONTEXT] Full enhanced message:\n{message_to_send}")
-            
+
             # Send the message to Letta with room context
             letta_response = await send_to_letta_api(message_to_send, event.sender, config, logger, room.room_id)
             
@@ -692,17 +717,25 @@ async def main():
         "device_id": client.device_id
     })
 
-    # Join the specified room
-    joined_room_id = await join_room_if_needed(client, config.room_id, logger)
-    if not joined_room_id:
-        logger.error("Could not join room, exiting", extra={"room_id": config.room_id})
-        await client.close()
-        return
-    
-    logger.info("Ready to interact in room", extra={"room_id": joined_room_id})
+    # Join the optional base room, but do not treat failures as fatal
+    joined_room_id = None
+    if config.room_id:
+        joined_room_id = await join_room_if_needed(client, config.room_id, logger)
+        if not joined_room_id:
+            logger.warning(
+                "Configured MATRIX_ROOM_ID could not be joined; continuing without a base room",
+                extra={"room_id": config.room_id}
+            )
+    else:
+        logger.info("No MATRIX_ROOM_ID configured; skipping base room join")
+
+    if joined_room_id:
+        logger.info("Ready to interact in room", extra={"room_id": joined_room_id})
+    else:
+        logger.info("Proceeding without a dedicated base room; will listen in agent rooms only")
 
     # If we created a new room, save its ID for future reference
-    if joined_room_id != config.room_id:
+    if joined_room_id and joined_room_id != config.room_id:
         logger.warning("New room created, please update configuration", extra={
             "new_room_id": joined_room_id,
             "original_room_id": config.room_id
