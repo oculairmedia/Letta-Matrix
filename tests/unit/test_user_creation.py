@@ -23,13 +23,19 @@ class TestUserCreation:
     @pytest.mark.asyncio
     async def test_check_user_exists_user_found(self, user_manager):
         """Test check_user_exists returns True when user exists (403 Forbidden)"""
-        mock_response = AsyncMock()
+        mock_response = MagicMock()
         mock_response.status = 403
         mock_response.json = AsyncMock(return_value={"errcode": "M_FORBIDDEN"})
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
         
-        with patch('aiohttp.ClientSession') as mock_session:
-            mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
-            
+        mock_post = MagicMock(return_value=mock_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        with patch('aiohttp.ClientSession', return_value=mock_session):
             exists = await user_manager.check_user_exists("testuser")
             assert exists is True
 
@@ -61,16 +67,22 @@ class TestUserCreation:
     @pytest.mark.asyncio
     async def test_create_matrix_user_success(self, user_manager):
         """Test successful user creation"""
-        mock_response = AsyncMock()
+        mock_response = MagicMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={
             "access_token": "test_token",
             "user_id": "@testuser:test.com"
         })
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
         
-        with patch('aiohttp.ClientSession') as mock_session:
-            mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
-            
+        mock_post = MagicMock(return_value=mock_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        with patch('aiohttp.ClientSession', return_value=mock_session):
             # Mock set_user_display_name
             with patch.object(user_manager, 'set_user_display_name', new_callable=AsyncMock) as mock_set_display:
                 mock_set_display.return_value = True
@@ -81,13 +93,19 @@ class TestUserCreation:
     @pytest.mark.asyncio
     async def test_create_matrix_user_already_exists(self, user_manager):
         """Test creating user that already exists returns True"""
-        mock_response = AsyncMock()
+        mock_response = MagicMock()
         mock_response.status = 400
         mock_response.json = AsyncMock(return_value={"errcode": "M_USER_IN_USE"})
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
         
-        with patch('aiohttp.ClientSession') as mock_session:
-            mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
-            
+        mock_post = MagicMock(return_value=mock_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        with patch('aiohttp.ClientSession', return_value=mock_session):
             result = await user_manager.create_matrix_user("testuser", "password123", "Test User")
             assert result is True
 
@@ -194,13 +212,19 @@ class TestUserCreation:
     @pytest.mark.asyncio
     async def test_get_admin_token_success(self, user_manager):
         """Test successful admin token retrieval"""
-        mock_response = AsyncMock()
+        mock_response = MagicMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={"access_token": "admin_token_123"})
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
         
-        with patch('aiohttp.ClientSession') as mock_session:
-            mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
-            
+        mock_post = MagicMock(return_value=mock_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        with patch('aiohttp.ClientSession', return_value=mock_session):
             token = await user_manager.get_admin_token()
             assert token == "admin_token_123"
             assert user_manager.admin_token == "admin_token_123"
@@ -267,28 +291,29 @@ class TestUserCreationIntegration:
             admin_password="admin_pass"
         )
         
-        # Simulate user doesn't exist
-        check_response = AsyncMock()
+        # Simulate user doesn't exist (check returns 404)
+        check_response = MagicMock()
         check_response.status = 404
+        check_response.__aenter__ = AsyncMock(return_value=check_response)
+        check_response.__aexit__ = AsyncMock(return_value=None)
         
         # Simulate successful creation
-        create_response = AsyncMock()
+        create_response = MagicMock()
         create_response.status = 200
         create_response.json = AsyncMock(return_value={
             "access_token": "new_user_token",
             "user_id": "@newuser:test.com"
         })
+        create_response.__aenter__ = AsyncMock(return_value=create_response)
+        create_response.__aexit__ = AsyncMock(return_value=None)
         
-        with patch('aiohttp.ClientSession') as mock_session:
-            mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value.status = 200
-            mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value.json = AsyncMock(
-                side_effect=[
-                    {},  # check (404)
-                    {"access_token": "new_user_token", "user_id": "@newuser:test.com"}  # create
-                ]
-            )
-            mock_session.return_value.__aenter__.return_value.put.return_value.__aenter__.return_value.status = 200
-            
+        mock_post = MagicMock(side_effect=[check_response, create_response])
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        with patch('aiohttp.ClientSession', return_value=mock_session):
             # Check user doesn't exist
             exists = await user_manager.check_user_exists("newuser")
             
