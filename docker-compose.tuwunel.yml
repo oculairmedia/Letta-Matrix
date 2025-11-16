@@ -149,6 +149,7 @@ services:
   letta-agent-mcp:
     image: ghcr.io/oculairmedia/letta-matrix-mcp:latest
     restart: unless-stopped
+    command: ["python", "-m", "src.mcp.letta_mcp"]
     env_file:
       - .env
     environment:
