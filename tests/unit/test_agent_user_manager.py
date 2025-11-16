@@ -16,7 +16,7 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from dataclasses import asdict
 
 # Import the module to test
-from src.core.agent_user_manager import (
+from agent_user_manager import (
     AgentUserManager,
     AgentUserMapping,
     get_global_session
@@ -95,9 +95,7 @@ class TestAgentUserManagerInit:
         """Test that initialization creates data directory"""
         with patch('os.makedirs') as mock_makedirs:
             manager = AgentUserManager(mock_config)
-            # Called twice: once in AgentUserManager, once in MatrixSpaceManager
-            assert mock_makedirs.call_count == 2
-            mock_makedirs.assert_any_call("/app/data", exist_ok=True)
+            mock_makedirs.assert_called_once_with("/app/data", exist_ok=True)
 
 
 # ============================================================================
@@ -231,7 +229,7 @@ class TestAdminToken:
         manager = AgentUserManager(mock_config)
 
         # Patch aiohttp.ClientSession which is used by get_admin_token
-        with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+        with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
             token = await manager.get_admin_token()
 
         assert token == "admin_token_123"
@@ -261,7 +259,7 @@ class TestAdminToken:
 
         manager = AgentUserManager(mock_config)
 
-        with patch('src.core.agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
             token = await manager.get_admin_token()
 
         assert token is None
@@ -297,7 +295,7 @@ class TestAgentDiscovery:
         manager = AgentUserManager(mock_config)
 
         # Patch aiohttp.ClientSession to return our mock session
-        with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+        with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
             agents = await manager.get_letta_agents()
 
         assert len(agents) == 3
@@ -323,7 +321,7 @@ class TestAgentDiscovery:
 
         manager = AgentUserManager(mock_config)
 
-        with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+        with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
             agents = await manager.get_letta_agents()
 
         assert len(agents) == 1
@@ -442,7 +440,7 @@ class TestUserCreation:
         agent = {"id": "agent-123", "name": "NewAgent"}
 
         # Patch aiohttp.ClientSession to return our mock session
-        with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+        with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
             await manager.create_user_for_agent(agent)
 
         # Verify mapping was created
@@ -467,7 +465,7 @@ class TestUserCreation:
         agent = {"id": "agent-123", "name": "ExistingAgent"}
 
         # Should not make any API calls
-        with patch('src.core.agent_user_manager.get_global_session') as mock_session:
+        with patch('agent_user_manager.get_global_session') as mock_session:
             await manager.create_user_for_agent(agent)
             # Verify no session was created
             mock_session.assert_not_called()

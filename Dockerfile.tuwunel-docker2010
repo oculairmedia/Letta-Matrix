@@ -1,0 +1,59 @@
+# Tuwunel Dockerfile for Docker 20.10.24 compatibility
+# Uses pre-built static binaries instead of OCI format
+# Compatible with Docker 20.10.24 (no OCI dependency)
+
+FROM debian:bookworm-slim
+
+# Install runtime dependencies and tools
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    zstd \
+    wget \
+    file \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tuwunel version to download (GitHub Actions can override via build-args)
+ARG TUWUNEL_VERSION=v1.4.6
+
+# Download and extract pre-built Tuwunel binary
+# Use full URL to avoid variable expansion issues
+RUN set -ex && \
+    VERSION="${TUWUNEL_VERSION}" && \
+    echo "Downloading Tuwunel ${VERSION}" && \
+    curl -fSL "https://github.com/matrix-construct/tuwunel/releases/download/${VERSION}/${VERSION}-release-all-x86_64-v1-linux-gnu-tuwunel.zst" \
+        -o /tmp/tuwunel.zst && \
+    file /tmp/tuwunel.zst && \
+    zstd -d /tmp/tuwunel.zst -o /usr/local/bin/tuwunel && \
+    chmod +x /usr/local/bin/tuwunel && \
+    rm /tmp/tuwunel.zst && \
+    /usr/local/bin/tuwunel --version
+
+# Create tuwunel user
+RUN useradd -m -u 1000 -U -s /bin/sh -d /var/lib/tuwunel tuwunel
+
+# Create data directory
+RUN mkdir -p /var/lib/tuwunel && \
+    chown -R tuwunel:tuwunel /var/lib/tuwunel
+
+# Switch to tuwunel user
+USER tuwunel
+WORKDIR /var/lib/tuwunel
+
+# Expose ports
+EXPOSE 6167 8448
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=60s \
+    CMD wget --spider -q http://localhost:6167/_matrix/client/versions || exit 1
+
+# Volume for data
+VOLUME ["/var/lib/tuwunel"]
+
+# Set environment defaults
+ENV TUWUNEL_SERVER_NAME=localhost
+ENV TUWUNEL_DATABASE_PATH=/var/lib/tuwunel
+ENV TUWUNEL_LOG=info
+
+# Run Tuwunel
+ENTRYPOINT ["/usr/local/bin/tuwunel"]

@@ -1,0 +1,39 @@
+# Matrix API Dockerfile
+FROM python:3.12-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application files
+COPY matrix_api.py .
+COPY agent_user_manager.py .
+COPY custom_matrix_client.py .
+
+# Note: .env will be mounted as volume in docker-compose.yml
+# Create a placeholder .env for build context
+RUN touch .env
+
+# Create non-root user for security
+RUN useradd -m -u 1000 matrixapi && chown -R matrixapi:matrixapi /app
+USER matrixapi
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+
+# Start the API server
+CMD ["python", "matrix_api.py"]

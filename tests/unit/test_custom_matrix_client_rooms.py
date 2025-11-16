@@ -10,7 +10,7 @@ Tests cover:
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from nio import JoinError, RemoteProtocolError
-from src.matrix.client import create_room_if_needed, join_room_if_needed
+from custom_matrix_client import create_room_if_needed, join_room_if_needed
 
 
 @pytest.fixture

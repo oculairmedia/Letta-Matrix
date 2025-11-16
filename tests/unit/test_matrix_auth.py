@@ -17,7 +17,7 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from nio import LoginError, LogoutError
 
 # Import the module to test
-from src.matrix.auth import MatrixAuthManager
+from matrix_auth import MatrixAuthManager
 
 
 # ============================================================================
@@ -123,7 +123,7 @@ class TestAuthentication:
 
         mock_nio_client.login = mock_login
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
 
             assert client is not None
@@ -143,7 +143,7 @@ class TestAuthentication:
 
         mock_nio_client.load_store = mock_load_store
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
 
             assert client is not None
@@ -162,7 +162,7 @@ class TestAuthentication:
         login_error = LoginError(message="Invalid credentials", status_code="M_FORBIDDEN")
         mock_nio_client.login = AsyncMock(return_value=login_error)
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
 
             assert client is None
@@ -181,7 +181,7 @@ class TestAuthentication:
         )
         mock_nio_client.login = AsyncMock(return_value=rate_limit_error)
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
 
             assert client is None
@@ -190,7 +190,7 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_get_authenticated_client_handles_exception(self, auth_manager):
         """Test handling of general exceptions during authentication"""
-        with patch('src.matrix.auth.AsyncClient', side_effect=Exception("Network error")):
+        with patch('matrix_auth.AsyncClient', side_effect=Exception("Network error")):
             client = await auth_manager.get_authenticated_client()
 
             assert client is None
@@ -207,7 +207,7 @@ class TestAuthentication:
         mock_nio_client.device_id = "device"
         mock_nio_client.load_store = Mock()
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             await auth_manager.get_authenticated_client()
 
             # Store directory should now exist
@@ -355,7 +355,7 @@ class TestSessionPersistence:
 
         mock_nio_client.login = mock_login
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
 
             assert client is not None
@@ -381,7 +381,7 @@ class TestSessionPersistence:
 
         mock_nio_client.login = mock_login
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
 
             assert client is not None
@@ -405,7 +405,7 @@ class TestSessionPersistence:
 
         mock_nio_client.login = mock_login
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
 
             assert client is not None
@@ -426,7 +426,7 @@ class TestRateLimiting:
         mock_nio_client.access_token = None
         mock_nio_client.login = AsyncMock(side_effect=Exception("429 rate limit exceeded"))
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
 
             assert client is None
@@ -440,7 +440,7 @@ class TestRateLimiting:
             side_effect=Exception("Too many login attempts - rate limited")
         )
 
-        with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
+        with patch('matrix_auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
 
             assert client is None

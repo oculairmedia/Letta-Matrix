@@ -26,7 +26,7 @@ services:
   matrix-client:
     build:
       context: .
-      dockerfile: docker/Dockerfile.matrix-client
+      dockerfile: Dockerfile.matrix-client
     restart: unless-stopped
     env_file:
       - .env
@@ -35,7 +35,10 @@ services:
     volumes:
       - ./matrix_store:/app/matrix_store
       - ./matrix_client_data:/app/data
-      - ./src:/app/src:ro
+      - ./custom_matrix_client.py:/app/custom_matrix_client.py:ro
+      - ./agent_user_manager.py:/app/agent_user_manager.py:ro
+      - ./matrix_auth.py:/app/matrix_auth.py:ro
+      - ./event_dedupe_store.py:/app/event_dedupe_store.py:ro
     networks:
       - matrix-internal
     depends_on:
@@ -56,7 +59,7 @@ services:
   matrix-api:
     build:
       context: .
-      dockerfile: docker/Dockerfile.matrix-api
+      dockerfile: Dockerfile.matrix-api
     restart: unless-stopped
     env_file:
       - .env
@@ -77,7 +80,7 @@ services:
   mcp-server:
     build:
       context: .
-      dockerfile: docker/Dockerfile.mcp-server
+      dockerfile: Dockerfile.mcp-server
     restart: unless-stopped
     env_file:
       - .env

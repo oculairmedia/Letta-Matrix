@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 # Import the module to test
-import src.matrix.event_dedupe as event_dedupe_store
+import event_dedupe_store
 
 
 # ============================================================================
