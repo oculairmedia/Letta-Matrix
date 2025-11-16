@@ -462,32 +462,9 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
 
 ---
 SYSTEM NOTE (INTER-AGENT COMMUNICATION)
-
 The message above is from another Letta agent: {from_agent_name} (ID: {from_agent_id}).
 Treat this as your MAIN task for this turn; the other agent is trying to
 collaborate with you.
-
-WHEN TO REPLY BACK TO THE OTHER AGENT:
-- If the message clearly contains a question or request addressed to you,
-  you SHOULD send a direct reply back to that agent using the
-  'matrix_agent_message' tool.
-- Your reply should normally be a single, clear answer (not many tiny
-  follow-ups).
-
-LOOP-SAFETY RULES (MUST OBEY):
-- Never call 'matrix_agent_message' more than once in response to a single
-  inter-agent message.
-- For any ongoing inter-agent conversation, you may use 'matrix_agent_message'
-  at most 3 times in total. After your third such reply, STOP using the tool
-  and explain to the human that you are ending the inter-agent exchange to
-  avoid loops.
-- If the other agent appears to repeat the same question or answer, do NOT
-  keep going back and forth. Instead, explain the situation to the human and
-  do not call 'matrix_agent_message' again for that topic.
-
-If the message does NOT require a reply (for example, it is just FYI), you can
-simply acknowledge it or focus on any actions the HUMAN has asked for in this
-room.
 """
                 logger.info(f"[INTER-AGENT CONTEXT] Enhanced message for receiving agent:")
                 logger.info(f"[INTER-AGENT CONTEXT] Sender: {from_agent_name} ({from_agent_id})")
