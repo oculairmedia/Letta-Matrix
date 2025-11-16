@@ -93,11 +93,13 @@ class TestAgentUserManagerInit:
 
     def test_init_creates_data_directory(self, mock_config):
         """Test that initialization creates data directory"""
-        with patch('os.makedirs') as mock_makedirs:
+        with patch('os.makedirs') as mock_makedirs, \
+             patch.dict('os.environ', {'MATRIX_DATA_DIR': '/tmp/test_data'}):
             manager = AgentUserManager(mock_config)
             # Called twice: once in AgentUserManager, once in MatrixSpaceManager
             assert mock_makedirs.call_count == 2
-            mock_makedirs.assert_any_call("/app/data", exist_ok=True)
+            # Check that the data directory from env var is used
+            mock_makedirs.assert_any_call("/tmp/test_data", exist_ok=True)
 
 
 # ============================================================================

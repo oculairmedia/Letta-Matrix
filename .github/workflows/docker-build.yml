@@ -37,7 +37,10 @@ jobs:
           pip install -r test_requirements.txt
 
       - name: Run unit tests
+        env:
+          MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
         run: |
+          mkdir -p $MATRIX_DATA_DIR
           pytest tests/unit/ -v --cov=src.core.agent_user_manager --cov-report=xml
 
       - name: Upload coverage reports

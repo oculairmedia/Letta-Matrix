@@ -70,7 +70,10 @@ class AgentUserManager:
         self.homeserver_url = config.homeserver_url
         self.letta_token = config.letta_token
         self.letta_api_url = config.letta_api_url
-        self.mappings_file = "/app/data/agent_user_mappings.json"
+        
+        # Configure data directory - use env var or default to /app/data
+        self.data_dir = os.getenv("MATRIX_DATA_DIR", "/app/data")
+        self.mappings_file = os.path.join(self.data_dir, "agent_user_mappings.json")
         self.mappings: Dict[str, AgentUserMapping] = {}
         # Note: admin_token is now a property that proxies to user_manager.admin_token
 
@@ -81,7 +84,7 @@ class AgentUserManager:
         logger.info(f"Using admin account: {self.admin_username} (from env: {os.getenv('MATRIX_ADMIN_USERNAME')})")
 
         # Ensure data directory exists
-        os.makedirs("/app/data", exist_ok=True)
+        os.makedirs(self.data_dir, exist_ok=True)
 
         # Initialize Matrix Space Manager
         self.space_manager = MatrixSpaceManager(
@@ -89,7 +92,7 @@ class AgentUserManager:
             admin_username=self.admin_username,
             admin_password=self.admin_password,
             main_bot_username=config.username,
-            space_config_file="/app/data/letta_space_config.json"
+            space_config_file=os.path.join(self.data_dir, "letta_space_config.json")
         )
 
         # Initialize Matrix User Manager
