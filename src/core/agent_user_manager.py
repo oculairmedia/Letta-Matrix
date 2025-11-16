@@ -13,6 +13,8 @@ from typing import Dict, List, Optional, Set
 from dataclasses import dataclass
 # Removed Letta client imports - now using OpenAI endpoint
 
+from .space_manager import MatrixSpaceManager
+
 logger = logging.getLogger("matrix_client.agent_user_manager")
 
 # Global session with connection pooling for better performance
@@ -67,10 +69,8 @@ class AgentUserManager:
         self.letta_token = config.letta_token
         self.letta_api_url = config.letta_api_url
         self.mappings_file = "/app/data/agent_user_mappings.json"
-        self.space_config_file = "/app/data/letta_space_config.json"
         self.mappings: Dict[str, AgentUserMapping] = {}
         self.admin_token = None  # Will be obtained programmatically
-        self.space_id: Optional[str] = None  # Letta Agents space ID
 
         # Matrix admin credentials - try to use a dedicated admin account
         # Fall back to main letta user if not specified
@@ -80,6 +80,15 @@ class AgentUserManager:
 
         # Ensure data directory exists
         os.makedirs("/app/data", exist_ok=True)
+
+        # Initialize Matrix Space Manager
+        self.space_manager = MatrixSpaceManager(
+            homeserver_url=self.homeserver_url,
+            admin_username=self.admin_username,
+            admin_password=self.admin_password,
+            main_bot_username=config.username,
+            space_config_file="/app/data/letta_space_config.json"
+        )
 
     async def load_existing_mappings(self):
         """Load existing agent-user mappings from file"""
@@ -98,32 +107,6 @@ class AgentUserManager:
         except Exception as e:
             logger.error(f"Error loading mappings: {e}")
 
-    async def load_space_config(self):
-        """Load the Letta Agents space configuration"""
-        try:
-            if os.path.exists(self.space_config_file):
-                with open(self.space_config_file, 'r') as f:
-                    data = json.load(f)
-                    self.space_id = data.get("space_id")
-                    logger.info(f"Loaded space configuration: {self.space_id}")
-            else:
-                logger.info("No existing space configuration found")
-        except Exception as e:
-            logger.error(f"Error loading space config: {e}")
-
-    async def save_space_config(self):
-        """Save the Letta Agents space configuration"""
-        try:
-            data = {
-                "space_id": self.space_id,
-                "created_at": time.time(),
-                "name": "Letta Agents"
-            }
-            with open(self.space_config_file, 'w') as f:
-                json.dump(data, f, indent=2)
-            logger.info(f"Saved space configuration: {self.space_id}")
-        except Exception as e:
-            logger.error(f"Error saving space config: {e}")
 
     async def save_mappings(self):
         """Save agent-user mappings to file"""
@@ -389,184 +372,6 @@ class AgentUserManager:
         except Exception as e:
             logger.error(f"Error setting display name: {e}")
             return False
-    async def create_letta_agents_space(self) -> Optional[str]:
-        """Create the Letta Agents space if it doesn't exist"""
-        try:
-            # Check if we already have a space
-            if self.space_id:
-                # Verify it still exists
-                exists = await self.check_room_exists(self.space_id)
-                if exists:
-                    logger.info(f"Letta Agents space already exists: {self.space_id}")
-                    return self.space_id
-                else:
-                    logger.warning(f"Stored space {self.space_id} doesn't exist, creating new one")
-                    self.space_id = None
-
-            # Login as admin to create the space
-            admin_login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
-            admin_username_local = self.admin_username.split(':')[0].replace('@', '')
-
-            login_data = {
-                "type": "m.login.password",
-                "user": admin_username_local,
-                "password": self.admin_password
-            }
-
-            async with aiohttp.ClientSession() as session:
-                # Login
-                async with session.post(admin_login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"Failed to login as admin to create space: {response.status} - {error_text}")
-                        return None
-
-                    auth_data = await response.json()
-                    admin_token = auth_data.get("access_token")
-
-                if not admin_token:
-                    logger.error("No token received for admin user")
-                    return None
-
-                # Create the space
-                space_url = f"{self.homeserver_url}/_matrix/client/r0/createRoom"
-
-                # Invite key users to the space
-                invites = [
-                    "@admin:matrix.oculair.ca",
-                    self.config.username  # Main Letta bot
-                ]
-
-                space_data = {
-                    "name": "Letta Agents",
-                    "topic": "All Letta AI agents - organized by the Letta Matrix bridge",
-                    "preset": "private_chat",
-                    "invite": invites,
-                    "power_level_content_override": {
-                        "events": {
-                            "m.space.child": 50  # Allow room moderators to add children
-                        }
-                    },
-                    "creation_content": {
-                        "type": "m.space"
-                    },
-                    "initial_state": [
-                        {
-                            "type": "m.room.guest_access",
-                            "state_key": "",
-                            "content": {"guest_access": "forbidden"}
-                        },
-                        {
-                            "type": "m.room.history_visibility",
-                            "state_key": "",
-                            "content": {"history_visibility": "shared"}
-                        }
-                    ]
-                }
-
-                headers = {
-                    "Authorization": f"Bearer {admin_token}",
-                    "Content-Type": "application/json"
-                }
-
-                logger.info("Creating Letta Agents space")
-                async with session.post(space_url, headers=headers, json=space_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        space_id = data.get("room_id")
-                        logger.info(f"Created Letta Agents space: {space_id}")
-
-                        # Store the space ID
-                        self.space_id = space_id
-                        await self.save_space_config()
-
-                        return space_id
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Failed to create space: {response.status} - {error_text}")
-                        return None
-
-        except Exception as e:
-            logger.error(f"Error creating Letta Agents space: {e}")
-            return None
-
-    async def add_room_to_space(self, room_id: str, room_name: str) -> bool:
-        """Add a room as a child of the Letta Agents space"""
-        try:
-            if not self.space_id:
-                logger.warning("No space ID available, cannot add room to space")
-                return False
-
-            # Get admin token
-            admin_token = await self.get_admin_token()
-            if not admin_token:
-                logger.warning("Failed to get admin token, cannot add room to space")
-                return False
-
-            # Add the room as a child of the space
-            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{self.space_id}/state/m.space.child/{room_id}"
-            headers = {
-                "Authorization": f"Bearer {admin_token}",
-                "Content-Type": "application/json"
-            }
-
-            child_data = {
-                "via": ["matrix.oculair.ca"],
-                "suggested": True,
-                "order": room_name  # Use room name for alphabetical ordering
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json=child_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Added room {room_id} ({room_name}) to Letta Agents space")
-
-                        # Also add the space as a parent of the room (bidirectional relationship)
-                        parent_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.space.parent/{self.space_id}"
-                        parent_data = {
-                            "via": ["matrix.oculair.ca"],
-                            "canonical": True
-                        }
-
-                        async with session.put(parent_url, headers=headers, json=parent_data, timeout=DEFAULT_TIMEOUT) as parent_response:
-                            if parent_response.status == 200:
-                                logger.info(f"Set space as parent of room {room_id}")
-                            else:
-                                logger.warning(f"Failed to set space as parent: {parent_response.status}")
-
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Failed to add room to space: {response.status} - {error_text}")
-                        return False
-
-        except Exception as e:
-            logger.error(f"Error adding room {room_id} to space: {e}")
-            return False
-
-    async def migrate_existing_rooms_to_space(self) -> int:
-        """Migrate all existing agent rooms to the Letta Agents space"""
-        if not self.space_id:
-            logger.warning("No space ID available, cannot migrate rooms")
-            return 0
-
-        migrated_count = 0
-        for agent_id, mapping in self.mappings.items():
-            if mapping.room_id and mapping.room_created:
-                logger.info(f"Migrating room for agent {mapping.agent_name} to space")
-                success = await self.add_room_to_space(mapping.room_id, mapping.agent_name)
-                if success:
-                    migrated_count += 1
-                    logger.info(f"Successfully migrated room for {mapping.agent_name}")
-                else:
-                    logger.warning(f"Failed to migrate room for {mapping.agent_name}")
-
-        logger.info(f"Migrated {migrated_count} existing rooms to space")
-        return migrated_count
-
-    def get_space_id(self) -> Optional[str]:
-        """Get the current Letta Agents space ID"""
-        return self.space_id
 
     def generate_username(self, agent_name: str, agent_id: str) -> str:
         """Generate a safe Matrix username from agent ID"""
@@ -656,15 +461,15 @@ class AgentUserManager:
 
         # Load existing mappings and space config
         await self.load_existing_mappings()
-        await self.load_space_config()
+        await self.space_manager.load_space_config()
         print(f"[AGENT_SYNC] Loaded {len(self.mappings)} existing mappings", flush=True)
 
         # Ensure the Letta Agents space exists
         space_just_created = False
-        if not self.space_id:
+        if not self.space_manager.get_space_id():
             logger.info("Creating Letta Agents space")
             print("[AGENT_SYNC] Creating Letta Agents space", flush=True)
-            space_id = await self.create_letta_agents_space()
+            space_id = await self.space_manager.create_letta_agents_space()
             if space_id:
                 logger.info(f"Successfully created Letta Agents space: {space_id}")
                 print(f"[AGENT_SYNC] Successfully created Letta Agents space: {space_id}", flush=True)
@@ -673,8 +478,8 @@ class AgentUserManager:
                 logger.warning("Failed to create Letta Agents space, rooms will not be organized")
                 print("[AGENT_SYNC] Failed to create Letta Agents space, rooms will not be organized", flush=True)
         else:
-            logger.info(f"Using existing Letta Agents space: {self.space_id}")
-            print(f"[AGENT_SYNC] Using existing Letta Agents space: {self.space_id}", flush=True)
+            logger.info(f"Using existing Letta Agents space: {self.space_manager.get_space_id()}")
+            print(f"[AGENT_SYNC] Using existing Letta Agents space: {self.space_manager.get_space_id()}", flush=True)
 
         # Get current Letta agents
         agents = await self.get_letta_agents()
@@ -748,10 +553,10 @@ class AgentUserManager:
         await self.save_mappings()
 
         # If space was just created, migrate all existing rooms to it
-        if space_just_created and self.space_id:
+        if space_just_created and self.space_manager.get_space_id():
             logger.info("Migrating existing agent rooms to the new space")
             print("[AGENT_SYNC] Migrating existing agent rooms to the new space", flush=True)
-            migrated = await self.migrate_existing_rooms_to_space()
+            migrated = await self.space_manager.migrate_existing_rooms_to_space(self.mappings)
             logger.info(f"Migrated {migrated} rooms to space")
             print(f"[AGENT_SYNC] Migrated {migrated} rooms to space", flush=True)
 
@@ -845,40 +650,11 @@ class AgentUserManager:
         return list(self.mappings.values())
 
     async def check_room_exists(self, room_id: str) -> bool:
-        """Check if a room exists on the server"""
-        try:
-            # Get admin token
-            admin_token = await self.get_admin_token()
-            if not admin_token:
-                logger.warning("Failed to get admin token, cannot check room existence")
-                return False
+        """Check if a room exists on the server
 
-            # Use the room state API to check if room exists
-            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state"
-            headers = {
-                "Authorization": f"Bearer {admin_token}",
-                "Content-Type": "application/json"
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Room {room_id} exists")
-                        return True
-                    elif response.status == 404:
-                        logger.info(f"Room {room_id} does not exist")
-                        return False
-                    elif response.status == 403:
-                        # Room exists but we don't have access - still counts as existing
-                        logger.info(f"Room {room_id} exists but access denied")
-                        return True
-                    else:
-                        logger.warning(f"Unexpected response checking room {room_id}: {response.status}")
-                        return False
-
-        except Exception as e:
-            logger.error(f"Error checking if room {room_id} exists: {e}")
-            return False
+        Delegates to space_manager.check_room_exists to avoid code duplication
+        """
+        return await self.space_manager.check_room_exists(room_id)
 
     async def update_room_name(self, room_id: str, new_name: str) -> bool:
         """Update the name of an existing room"""
@@ -1108,9 +884,9 @@ class AgentUserManager:
                         await self.save_mappings()
 
                         # Add the room to the Letta Agents space
-                        if self.space_id:
+                        if self.space_manager.get_space_id():
                             logger.info(f"Adding room {room_id} to Letta Agents space")
-                            space_success = await self.add_room_to_space(room_id, mapping.agent_name)
+                            space_success = await self.space_manager.add_room_to_space(room_id, mapping.agent_name)
                             if space_success:
                                 logger.info(f"Successfully added room to space")
                             else:

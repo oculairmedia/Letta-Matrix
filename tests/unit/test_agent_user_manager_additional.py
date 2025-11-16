@@ -78,9 +78,9 @@ class TestGetSpaceId:
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
-                manager.space_id = "!test_space:matrix.oculair.ca"
+                manager.space_manager.space_id = "!test_space:matrix.oculair.ca"
 
-                space_id = manager.get_space_id()
+                space_id = manager.space_manager.get_space_id()
 
                 assert space_id == "!test_space:matrix.oculair.ca"
 
@@ -90,7 +90,7 @@ class TestGetSpaceId:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                space_id = manager.get_space_id()
+                space_id = manager.space_manager.get_space_id()
 
                 assert space_id is None
 
