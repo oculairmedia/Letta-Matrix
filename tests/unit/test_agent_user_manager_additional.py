@@ -35,7 +35,8 @@ class TestUpdateDisplayName:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                with patch.object(manager, 'get_admin_token', return_value="admin_token"):
+                # Patch at user_manager level since get_admin_token is delegated
+                with patch.object(manager.user_manager, 'get_admin_token', return_value="admin_token"):
                     mock_response = AsyncMock()
                     mock_response.status = 200
                     mock_response.__aenter__ = AsyncMock(return_value=mock_response)
@@ -45,7 +46,7 @@ class TestUpdateDisplayName:
                     mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         success = await manager.update_display_name(
                             "@agent_123:matrix.oculair.ca",
                             "New Agent Name"
@@ -60,7 +61,8 @@ class TestUpdateDisplayName:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                with patch.object(manager, 'get_admin_token', return_value=None):
+                # Patch at user_manager level since get_admin_token is delegated
+                with patch.object(manager.user_manager, 'get_admin_token', return_value=None):
                     success = await manager.update_display_name(
                         "@agent_123:matrix.oculair.ca",
                         "New Name"
