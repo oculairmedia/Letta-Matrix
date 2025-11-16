@@ -729,7 +729,7 @@ async def main():
 
     # Join the Letta Agents space if it exists
     if agent_manager:
-        space_id = agent_manager.get_space_id()
+        space_id = agent_manager.space_manager.get_space_id()
         if space_id:
             logger.info(f"Attempting to join Letta Agents space: {space_id}")
             space_joined = await join_room_if_needed(client, space_id, logger)
