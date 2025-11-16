@@ -20,7 +20,7 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock, mock_open
 from nio import RoomMessageText
 
 # Import modules to test
-from custom_matrix_client import (
+from src.matrix.client import (
     retry_with_backoff,
     send_to_letta_api,
     send_as_agent,
@@ -241,7 +241,7 @@ class TestSendToLettaApi:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('custom_matrix_client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
             response = await send_to_letta_api(
                 message_body="Test message",
                 sender_id="@user:test.com",
@@ -276,7 +276,7 @@ class TestSendToLettaApi:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('custom_matrix_client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
             response = await send_to_letta_api(
                 message_body="Test message",
                 sender_id="@user:test.com",
@@ -300,7 +300,7 @@ class TestSendToLettaApi:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('custom_matrix_client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
             with pytest.raises(LettaApiError) as exc_info:
                 await send_to_letta_api(
                     message_body="Test message",
@@ -327,8 +327,8 @@ class TestSendToLettaApi:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('custom_matrix_client.aiohttp.ClientSession', return_value=mock_session):
-            with patch('custom_matrix_client.os.path.exists', return_value=True):
+        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+            with patch('src.matrix.client.os.path.exists', return_value=True):
                 with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
                     response = await send_to_letta_api(
                         message_body="Test message",
@@ -358,7 +358,7 @@ class TestSendToLettaApi:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('custom_matrix_client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
             await send_to_letta_api(
                 message_body="Test",
                 sender_id="@johndoe:matrix.org",  # Should extract "johndoe"
@@ -386,7 +386,7 @@ class TestSendToLettaApi:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('custom_matrix_client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
             response = await send_to_letta_api(
                 message_body="Test",
                 sender_id="@user:test.com",
@@ -428,8 +428,8 @@ class TestSendAsAgent:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('custom_matrix_client.aiohttp.ClientSession', return_value=mock_session):
-            with patch('custom_matrix_client.os.path.exists', return_value=True):
+        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+            with patch('src.matrix.client.os.path.exists', return_value=True):
                 with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
                     result = await send_as_agent(
                         room_id="!agentroom:test.com",
@@ -445,7 +445,7 @@ class TestSendAsAgent:
     @pytest.mark.asyncio
     async def test_send_as_agent_no_mappings_file(self, mock_config, mock_logger):
         """Test handling when mappings file doesn't exist"""
-        with patch('custom_matrix_client.os.path.exists', return_value=False):
+        with patch('src.matrix.client.os.path.exists', return_value=False):
             result = await send_as_agent(
                 room_id="!agentroom:test.com",
                 message="Test",
@@ -459,7 +459,7 @@ class TestSendAsAgent:
     @pytest.mark.asyncio
     async def test_send_as_agent_room_not_found(self, mock_config, mock_logger, temp_mappings_file):
         """Test handling when room is not in mappings"""
-        with patch('custom_matrix_client.os.path.exists', return_value=True):
+        with patch('src.matrix.client.os.path.exists', return_value=True):
             with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
                 result = await send_as_agent(
                     room_id="!unknownroom:test.com",  # Not in mappings
@@ -485,8 +485,8 @@ class TestSendAsAgent:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('custom_matrix_client.aiohttp.ClientSession', return_value=mock_session):
-            with patch('custom_matrix_client.os.path.exists', return_value=True):
+        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+            with patch('src.matrix.client.os.path.exists', return_value=True):
                 with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
                     result = await send_as_agent(
                         room_id="!agentroom:test.com",
@@ -519,8 +519,8 @@ class TestSendAsAgent:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('custom_matrix_client.aiohttp.ClientSession', return_value=mock_session):
-            with patch('custom_matrix_client.os.path.exists', return_value=True):
+        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+            with patch('src.matrix.client.os.path.exists', return_value=True):
                 with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
                     result = await send_as_agent(
                         room_id="!agentroom:test.com",
@@ -557,7 +557,7 @@ class TestMessageCallback:
         mock_client.user_id = "@bot:test.com"
 
         # Mock is_duplicate_event to return True
-        with patch('custom_matrix_client.is_duplicate_event', return_value=True):
+        with patch('src.matrix.client.is_duplicate_event', return_value=True):
             await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
         # Should return early, no Letta API call
@@ -580,7 +580,7 @@ class TestMessageCallback:
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
 
-        with patch('custom_matrix_client.is_duplicate_event', return_value=False):
+        with patch('src.matrix.client.is_duplicate_event', return_value=False):
             await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
         # Should return early without processing
@@ -600,8 +600,8 @@ class TestMessageCallback:
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
 
-        with patch('custom_matrix_client.is_duplicate_event', return_value=False):
-            with patch('custom_matrix_client.os.path.exists', return_value=True):
+        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+            with patch('src.matrix.client.os.path.exists', return_value=True):
                 with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
                     await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
@@ -627,11 +627,11 @@ class TestMessageCallback:
         mock_client.user_id = "@bot:test.com"
 
         # Mock Letta API response
-        with patch('custom_matrix_client.is_duplicate_event', return_value=False):
-            with patch('custom_matrix_client.os.path.exists', return_value=True):
+        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+            with patch('src.matrix.client.os.path.exists', return_value=True):
                 with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                    with patch('custom_matrix_client.send_to_letta_api', return_value="Agent response"):
-                        with patch('custom_matrix_client.send_as_agent', return_value=True):
+                    with patch('src.matrix.client.send_to_letta_api', return_value="Agent response"):
+                        with patch('src.matrix.client.send_as_agent', return_value=True):
                             await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
         # Should have logged "Received message from user"
@@ -655,11 +655,11 @@ class TestMessageCallback:
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
 
-        with patch('custom_matrix_client.is_duplicate_event', return_value=False):
-            with patch('custom_matrix_client.os.path.exists', return_value=True):
+        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+            with patch('src.matrix.client.os.path.exists', return_value=True):
                 with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                    with patch('custom_matrix_client.send_to_letta_api', return_value="Response"):
-                        with patch('custom_matrix_client.send_as_agent', return_value=True):
+                    with patch('src.matrix.client.send_to_letta_api', return_value="Response"):
+                        with patch('src.matrix.client.send_as_agent', return_value=True):
                             await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
         # Should have detected inter-agent message

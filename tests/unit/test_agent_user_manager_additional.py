@@ -35,6 +35,7 @@ class TestUpdateDisplayName:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
+                # Patch at user_manager level since get_admin_token is delegated
                 with patch.object(manager.user_manager, 'get_admin_token', return_value="admin_token"):
                     mock_response = AsyncMock()
                     mock_response.status = 200
@@ -60,7 +61,8 @@ class TestUpdateDisplayName:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                with patch.object(manager, 'get_admin_token', return_value=None):
+                # Patch at user_manager level since get_admin_token is delegated
+                with patch.object(manager.user_manager, 'get_admin_token', return_value=None):
                     success = await manager.update_display_name(
                         "@agent_123:matrix.oculair.ca",
                         "New Name"
