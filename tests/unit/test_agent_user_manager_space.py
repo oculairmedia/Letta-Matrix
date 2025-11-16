@@ -550,17 +550,20 @@ class TestUpdateRoomName:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                with patch.object(manager, 'get_admin_token', return_value="admin_token"):
-                    mock_response = AsyncMock()
-                    mock_response.status = 200
-                    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-                    mock_response.__aexit__ = AsyncMock(return_value=None)
+                # Patch the callback in room_manager since it was captured during init
+                manager.room_manager.get_admin_token = AsyncMock(return_value="admin_token")
 
-                    mock_aiohttp_session.put = Mock(return_value=mock_response)
-                    mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-                    mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+                mock_response = AsyncMock()
+                mock_response.status = 200
+                mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+                mock_response.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                mock_aiohttp_session.put = Mock(return_value=mock_response)
+                mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+                mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.room_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         success = await manager.update_room_name(
                             "!room123:matrix.oculair.ca",
                             "New Agent Name"
@@ -590,18 +593,21 @@ class TestUpdateRoomName:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                with patch.object(manager, 'get_admin_token', return_value="admin_token"):
-                    mock_response = AsyncMock()
-                    mock_response.status = 500
-                    mock_response.text = AsyncMock(return_value="Internal Server Error")
-                    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-                    mock_response.__aexit__ = AsyncMock(return_value=None)
+                # Patch the callback in room_manager since it was captured during init
+                manager.room_manager.get_admin_token = AsyncMock(return_value="admin_token")
 
-                    mock_aiohttp_session.put = Mock(return_value=mock_response)
-                    mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-                    mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+                mock_response = AsyncMock()
+                mock_response.status = 500
+                mock_response.text = AsyncMock(return_value="Internal Server Error")
+                mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+                mock_response.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                mock_aiohttp_session.put = Mock(return_value=mock_response)
+                mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+                mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.room_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         success = await manager.update_room_name(
                             "!room123:matrix.oculair.ca",
                             "New Agent Name"
