@@ -536,7 +536,7 @@ if __name__ == "__main__":
     print(f"🔧 Alternative docs: http://{host}:{port}/redoc")
     
     uvicorn.run(
-        "matrix_api:app",
+        "src.api.app:app",
         host=host,
         port=port,
         reload=True,

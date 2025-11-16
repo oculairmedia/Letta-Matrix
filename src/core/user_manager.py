@@ -101,15 +101,36 @@ class MatrixUserManager:
                 async with session.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         # Somehow logged in with dummy password (shouldn't happen)
+                        logger.debug(f"User {username} exists (authenticated with test password)")
                         return True
                     elif response.status == 403:
                         # Wrong password = user exists
-                        return True
+                        try:
+                            error_data = await response.json()
+                            errcode = error_data.get("errcode", "")
+                            if errcode == "M_FORBIDDEN":
+                                # Wrong password means user exists
+                                logger.debug(f"User {username} exists (M_FORBIDDEN on login)")
+                                return True
+                            elif errcode == "M_UNKNOWN":
+                                # Unknown user
+                                logger.debug(f"User {username} does not exist (M_UNKNOWN)")
+                                return False
+                            else:
+                                # Assume user exists for other 403 errors
+                                logger.debug(f"User {username} exists (403 with {errcode})")
+                                return True
+                        except:
+                            # If we can't parse JSON, assume 403 = user exists
+                            logger.debug(f"User {username} exists (403 status)")
+                            return True
                     elif response.status == 404:
                         # User not found
+                        logger.debug(f"User {username} does not exist (404)")
                         return False
                     else:
-                        # Assume user doesn't exist for other errors
+                        # For other errors, log and assume user doesn't exist
+                        logger.warning(f"Unexpected status {response.status} checking user {username}, assuming doesn't exist")
                         return False
 
         except Exception as e:
