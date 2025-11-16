@@ -44,14 +44,16 @@ def temp_space_config_file():
 def manager_with_space(mock_config):
     """Create an AgentUserManager with mocked dependencies and space ID"""
     with patch('src.core.agent_user_manager.logging.getLogger'):
-        with patch.dict(os.environ, {
-            "MATRIX_ADMIN_USERNAME": "@matrixadmin:matrix.oculair.ca",
-            "MATRIX_ADMIN_PASSWORD": "admin123"
-        }):
-            with patch('src.core.agent_user_manager.os.makedirs'):  # Prevent creating /app/data
-                manager = AgentUserManager(config=mock_config)
-                manager.space_id = "!test_space_123:matrix.oculair.ca"
-                return manager
+        with patch('src.core.space_manager.logging.getLogger'):
+            with patch.dict(os.environ, {
+                "MATRIX_ADMIN_USERNAME": "@matrixadmin:matrix.oculair.ca",
+                "MATRIX_ADMIN_PASSWORD": "admin123"
+            }):
+                with patch('src.core.agent_user_manager.os.makedirs'):  # Prevent creating /app/data
+                    with patch('src.core.space_manager.os.makedirs'):  # Prevent creating /app/data for space_manager
+                        manager = AgentUserManager(config=mock_config)
+                        manager.space_manager.space_id = "!test_space_123:matrix.oculair.ca"
+                        return manager
 
 
 @pytest.mark.unit
@@ -64,10 +66,10 @@ class TestSpaceConfigPersistence:
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
-                manager.space_config_file = temp_space_config_file
-                manager.space_id = "!test_space_456:matrix.oculair.ca"
+                manager.space_manager.space_config_file = temp_space_config_file
+                manager.space_manager.space_id = "!test_space_456:matrix.oculair.ca"
 
-                await manager.save_space_config()
+                await manager.space_manager.save_space_config()
 
                 # Verify file was written with correct data
                 assert os.path.exists(temp_space_config_file)
@@ -92,11 +94,11 @@ class TestSpaceConfigPersistence:
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
-                manager.space_config_file = temp_space_config_file
+                manager.space_manager.space_config_file = temp_space_config_file
 
-                await manager.load_space_config()
+                await manager.space_manager.load_space_config()
 
-                assert manager.space_id == "!loaded_space_789:matrix.oculair.ca"
+                assert manager.space_manager.space_id == "!loaded_space_789:matrix.oculair.ca"
 
     @pytest.mark.asyncio
     async def test_load_space_config_file_not_found(self, mock_config):
@@ -104,12 +106,12 @@ class TestSpaceConfigPersistence:
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
-                manager.space_config_file = "/nonexistent/path/space_config.json"
+                manager.space_manager.space_config_file = "/nonexistent/path/space_config.json"
 
-                await manager.load_space_config()
+                await manager.space_manager.load_space_config()
 
                 # Should not crash, space_id should remain None
-                assert manager.space_id is None
+                assert manager.space_manager.space_id is None
 
     @pytest.mark.asyncio
     async def test_save_space_config_handles_exception(self, mock_config):
@@ -117,11 +119,11 @@ class TestSpaceConfigPersistence:
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
-                manager.space_config_file = "/invalid/path/space_config.json"
-                manager.space_id = "!test_space:matrix.oculair.ca"
+                manager.space_manager.space_config_file = "/invalid/path/space_config.json"
+                manager.space_manager.space_id = "!test_space:matrix.oculair.ca"
 
                 # Should not raise exception
-                await manager.save_space_config()
+                await manager.space_manager.save_space_config()
 
 
 @pytest.mark.unit
@@ -155,12 +157,13 @@ class TestCreateLettaAgentsSpace:
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
                 with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
-                    with patch.object(manager, 'save_space_config', new_callable=AsyncMock) as mock_save:
-                        space_id = await manager.create_letta_agents_space()
+                    with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                        with patch.object(manager.space_manager, 'save_space_config', new_callable=AsyncMock) as mock_save:
+                            space_id = await manager.space_manager.create_letta_agents_space()
 
-                        assert space_id == "!new_space_123:matrix.oculair.ca"
-                        assert manager.space_id == "!new_space_123:matrix.oculair.ca"
-                        mock_save.assert_called_once()
+                            assert space_id == "!new_space_123:matrix.oculair.ca"
+                            assert manager.space_manager.space_id == "!new_space_123:matrix.oculair.ca"
+                            mock_save.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_create_space_already_exists(self, mock_config):
@@ -168,10 +171,10 @@ class TestCreateLettaAgentsSpace:
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
-            manager.space_id = "!existing_space:matrix.oculair.ca"
+            manager.space_manager.space_id = "!existing_space:matrix.oculair.ca"
 
-            with patch.object(manager, 'check_room_exists', return_value=True) as mock_check:
-                space_id = await manager.create_letta_agents_space()
+            with patch.object(manager.space_manager, 'check_room_exists', return_value=True) as mock_check:
+                space_id = await manager.space_manager.create_letta_agents_space()
 
                 assert space_id == "!existing_space:matrix.oculair.ca"
                 mock_check.assert_called_once_with("!existing_space:matrix.oculair.ca")
@@ -194,12 +197,13 @@ class TestCreateLettaAgentsSpace:
             mock_login_response.__aexit__.return_value = AsyncMock()
 
             with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_session):
-                mock_session.__aenter__.return_value = mock_session
-                mock_session.__aexit__.return_value = AsyncMock()
+                with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_session):
+                    mock_session.__aenter__.return_value = mock_session
+                    mock_session.__aexit__.return_value = AsyncMock()
 
-                space_id = await manager.create_letta_agents_space()
+                    space_id = await manager.space_manager.create_letta_agents_space()
 
-                assert space_id is None
+                    assert space_id is None
 
     @pytest.mark.asyncio
     async def test_create_space_creation_failure(self, mock_config):
@@ -231,12 +235,13 @@ class TestCreateLettaAgentsSpace:
             mock_create_response.__aexit__.return_value = AsyncMock()
 
             with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_session):
-                mock_session.__aenter__.return_value = mock_session
-                mock_session.__aexit__.return_value = AsyncMock()
+                with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_session):
+                    mock_session.__aenter__.return_value = mock_session
+                    mock_session.__aexit__.return_value = AsyncMock()
 
-                space_id = await manager.create_letta_agents_space()
+                    space_id = await manager.space_manager.create_letta_agents_space()
 
-                assert space_id is None
+                    assert space_id is None
 
 
 @pytest.mark.unit
@@ -249,7 +254,7 @@ class TestAddRoomToSpace:
         manager = manager_with_space
 
         # Mock get_admin_token
-        with patch.object(manager, 'get_admin_token', return_value="admin_token_123"):
+        with patch.object(manager.space_manager, 'get_admin_token', return_value="admin_token_123"):
             # Mock child response
             mock_child_response = AsyncMock()
             mock_child_response.status = 200
@@ -268,13 +273,14 @@ class TestAddRoomToSpace:
             mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
             with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
-                success = await manager.add_room_to_space(
-                    "!room123:matrix.oculair.ca",
-                    "Test Agent"
-                )
+                with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    success = await manager.space_manager.add_room_to_space(
+                        "!room123:matrix.oculair.ca",
+                        "Test Agent"
+                    )
 
-                assert success is True
-                assert mock_aiohttp_session.put.call_count == 2
+                    assert success is True
+                    assert mock_aiohttp_session.put.call_count == 2
 
     @pytest.mark.asyncio
     async def test_add_room_to_space_no_space_id(self, mock_config):
@@ -284,7 +290,7 @@ class TestAddRoomToSpace:
                 manager = AgentUserManager(config=mock_config)
             # Don't set space_id
 
-            success = await manager.add_room_to_space(
+            success = await manager.space_manager.add_room_to_space(
                 "!room123:matrix.oculair.ca",
                 "Test Agent"
             )
@@ -296,8 +302,8 @@ class TestAddRoomToSpace:
         """Test adding room when admin token is unavailable"""
         manager = manager_with_space
 
-        with patch.object(manager, 'get_admin_token', return_value=None):
-            success = await manager.add_room_to_space(
+        with patch.object(manager.space_manager, 'get_admin_token', return_value=None):
+            success = await manager.space_manager.add_room_to_space(
                 "!room123:matrix.oculair.ca",
                 "Test Agent"
             )
@@ -309,7 +315,7 @@ class TestAddRoomToSpace:
         """Test when child relationship API call fails"""
         manager = manager_with_space
 
-        with patch.object(manager, 'get_admin_token', return_value="admin_token"):
+        with patch.object(manager.space_manager, 'get_admin_token', return_value="admin_token"):
             mock_response = AsyncMock()
             mock_response.status = 403
             mock_response.text = AsyncMock(return_value="Forbidden")
@@ -321,19 +327,20 @@ class TestAddRoomToSpace:
             mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
             with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
-                success = await manager.add_room_to_space(
-                    "!room123:matrix.oculair.ca",
-                    "Test Agent"
-                )
+                with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    success = await manager.space_manager.add_room_to_space(
+                        "!room123:matrix.oculair.ca",
+                        "Test Agent"
+                    )
 
-                assert success is False
+                    assert success is False
 
     @pytest.mark.asyncio
     async def test_add_room_to_space_parent_api_warning(self, manager_with_space, mock_aiohttp_session):
         """Test when parent relationship API succeeds but with warning"""
         manager = manager_with_space
 
-        with patch.object(manager, 'get_admin_token', return_value="admin_token"):
+        with patch.object(manager.space_manager, 'get_admin_token', return_value="admin_token"):
             mock_child_response = AsyncMock()
             mock_child_response.status = 200
             mock_child_response.__aenter__ = AsyncMock(return_value=mock_child_response)
@@ -349,13 +356,14 @@ class TestAddRoomToSpace:
             mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
             with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
-                success = await manager.add_room_to_space(
-                    "!room123:matrix.oculair.ca",
-                    "Test Agent"
-                )
+                with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    success = await manager.space_manager.add_room_to_space(
+                        "!room123:matrix.oculair.ca",
+                        "Test Agent"
+                    )
 
-                # Still returns True because child relationship succeeded
-                assert success is True
+                    # Still returns True because child relationship succeeded
+                    assert success is True
 
 
 @pytest.mark.unit
@@ -396,8 +404,8 @@ class TestMigrateExistingRoomsToSpace:
         }
 
         # Mock add_room_to_space to succeed for both rooms
-        with patch.object(manager, 'add_room_to_space', return_value=True) as mock_add:
-            migrated_count = await manager.migrate_existing_rooms_to_space()
+        with patch.object(manager.space_manager, 'add_room_to_space', return_value=True) as mock_add:
+            migrated_count = await manager.space_manager.migrate_existing_rooms_to_space(manager.mappings)
 
             assert migrated_count == 2
             assert mock_add.call_count == 2
@@ -410,7 +418,7 @@ class TestMigrateExistingRoomsToSpace:
                 manager = AgentUserManager(config=mock_config)
             # Don't set space_id
 
-            migrated_count = await manager.migrate_existing_rooms_to_space()
+            migrated_count = await manager.space_manager.migrate_existing_rooms_to_space(manager.mappings)
 
             assert migrated_count == 0
 
@@ -439,8 +447,8 @@ class TestMigrateExistingRoomsToSpace:
         }
 
         # Mock add_room_to_space to succeed for first, fail for second
-        with patch.object(manager, 'add_room_to_space', side_effect=[True, False]) as mock_add:
-            migrated_count = await manager.migrate_existing_rooms_to_space()
+        with patch.object(manager.space_manager, 'add_room_to_space', side_effect=[True, False]) as mock_add:
+            migrated_count = await manager.space_manager.migrate_existing_rooms_to_space(manager.mappings)
 
             assert migrated_count == 1
             assert mock_add.call_count == 2
@@ -457,7 +465,7 @@ class TestCheckRoomExists:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                with patch.object(manager, 'get_admin_token', return_value="admin_token"):
+                with patch.object(manager.space_manager, 'get_admin_token', return_value="admin_token"):
                     mock_response = AsyncMock()
                     mock_response.status = 200
                     mock_response.__aenter__ = AsyncMock(return_value=mock_response)
@@ -468,9 +476,10 @@ class TestCheckRoomExists:
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
                     with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
-                        exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
+                        with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                            exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
 
-                        assert exists is True
+                            assert exists is True
 
     @pytest.mark.asyncio
     async def test_check_room_exists_false(self, mock_config, mock_aiohttp_session):
@@ -501,7 +510,7 @@ class TestCheckRoomExists:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                with patch.object(manager, 'get_admin_token', return_value="admin_token"):
+                with patch.object(manager.space_manager, 'get_admin_token', return_value="admin_token"):
                     mock_response = AsyncMock()
                     mock_response.status = 403
                     mock_response.__aenter__ = AsyncMock(return_value=mock_response)
@@ -512,9 +521,10 @@ class TestCheckRoomExists:
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
                     with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
-                        exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
+                        with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                            exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
 
-                        assert exists is True
+                            assert exists is True
 
     @pytest.mark.asyncio
     async def test_check_room_exists_no_admin_token(self, mock_config):
