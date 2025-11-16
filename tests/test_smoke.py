@@ -23,35 +23,35 @@ class TestImports:
     def test_import_agent_user_manager(self):
         """Test importing agent_user_manager module"""
         try:
-            import agent_user_manager
+            import src.core.agent_user_manager as agent_user_manager
             assert hasattr(agent_user_manager, 'AgentUserManager')
             assert hasattr(agent_user_manager, 'AgentUserMapping')
         except ImportError as e:
-            pytest.fail(f"Failed to import agent_user_manager: {e}")
+            pytest.fail(f"Failed to import src.core.agent_user_manager as agent_user_manager: {e}")
 
     def test_import_custom_matrix_client(self):
         """Test importing custom_matrix_client module"""
         try:
-            import custom_matrix_client
+            import src.matrix.client as custom_matrix_client
             assert hasattr(custom_matrix_client, 'Config')
         except ImportError as e:
-            pytest.fail(f"Failed to import custom_matrix_client: {e}")
+            pytest.fail(f"Failed to import src.matrix.client as custom_matrix_client: {e}")
 
     def test_import_matrix_api(self):
         """Test importing matrix_api module"""
         try:
-            import matrix_api
+            import src.api.app as matrix_api
             assert hasattr(matrix_api, 'app')
         except ImportError as e:
-            pytest.fail(f"Failed to import matrix_api: {e}")
+            pytest.fail(f"Failed to import src.api.app as matrix_api: {e}")
 
     def test_import_matrix_auth(self):
         """Test importing matrix_auth module"""
         try:
-            import matrix_auth
+            import src.matrix.auth as matrix_auth
             assert hasattr(matrix_auth, 'MatrixAuthManager')
         except ImportError as e:
-            pytest.fail(f"Failed to import matrix_auth: {e}")
+            pytest.fail(f"Failed to import src.matrix.auth as matrix_auth: {e}")
 
 
 # ============================================================================
@@ -64,7 +64,7 @@ class TestDataclasses:
 
     def test_agent_user_mapping_creation(self):
         """Test creating AgentUserMapping"""
-        from agent_user_manager import AgentUserMapping
+        from src.core.agent_user_manager import AgentUserMapping
 
         mapping = AgentUserMapping(
             agent_id="test-id",
@@ -79,7 +79,7 @@ class TestDataclasses:
 
     def test_config_creation(self):
         """Test creating Config"""
-        from custom_matrix_client import Config
+        from src.matrix.client import Config
 
         config = Config(
             homeserver_url="http://test:8008",
@@ -106,7 +106,7 @@ class TestBasicFunctionality:
     @pytest.mark.asyncio
     async def test_agent_manager_initialization(self, mock_config):
         """Test AgentUserManager can be initialized"""
-        from agent_user_manager import AgentUserManager
+        from src.core.agent_user_manager import AgentUserManager
 
         with pytest.raises(SystemExit, match="0"):
             try:
@@ -122,7 +122,7 @@ class TestBasicFunctionality:
 
     def test_fastapi_app_creation(self):
         """Test FastAPI app is created"""
-        from matrix_api import app
+        from src.api.app import app
         from fastapi import FastAPI
 
         assert isinstance(app, FastAPI)
@@ -130,7 +130,7 @@ class TestBasicFunctionality:
 
     def test_logging_setup(self, mock_config):
         """Test logging can be configured"""
-        from custom_matrix_client import setup_logging
+        from src.matrix.client import setup_logging
 
         logger = setup_logging(mock_config)
 
@@ -148,7 +148,7 @@ class TestConfiguration:
 
     def test_config_from_env_with_defaults(self):
         """Test Config.from_env() with default values"""
-        from custom_matrix_client import Config
+        from src.matrix.client import Config
         import os
 
         # Clear any existing env vars
@@ -192,7 +192,7 @@ class TestExceptions:
 
     def test_custom_exceptions_importable(self):
         """Test that custom exceptions can be imported and raised"""
-        from custom_matrix_client import (
+        from src.matrix.client import (
             LettaApiError,
             MatrixClientError,
             ConfigurationError
@@ -229,7 +229,7 @@ class TestFileSystem:
     @pytest.mark.asyncio
     async def test_mappings_file_operations(self, tmp_path, mock_config):
         """Test reading and writing mappings file"""
-        from agent_user_manager import AgentUserManager, AgentUserMapping
+        from src.core.agent_user_manager import AgentUserManager, AgentUserMapping
         import json
 
         mappings_file = tmp_path / "test_mappings.json"

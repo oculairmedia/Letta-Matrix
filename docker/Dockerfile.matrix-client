@@ -17,10 +17,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY custom_matrix_client.py .
-COPY matrix_auth.py .
-COPY agent_user_manager.py .
-COPY event_dedupe_store.py .
+COPY src/ ./src/
 
 # Create directories for matrix store and agent mappings
 RUN mkdir -p /app/matrix_store /app/data
@@ -35,4 +32,4 @@ ENV LETTA_TOKEN=lettaSecurePass123
 ENV LETTA_AGENT_ID=agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444
 
 # Run the application
-CMD ["python", "custom_matrix_client.py"]
+CMD ["python", "-m", "src.matrix.client"]

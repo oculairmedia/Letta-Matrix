@@ -17,8 +17,8 @@ from unittest.mock import Mock, AsyncMock, patch
 from pathlib import Path
 
 # Import components
-from agent_user_manager import AgentUserManager, AgentUserMapping
-from custom_matrix_client import Config
+from src.core.agent_user_manager import AgentUserManager, AgentUserMapping
+from src.matrix.client import Config
 
 
 # ============================================================================
@@ -98,7 +98,7 @@ class TestAgentDiscoveryAndCreation:
         mock_aiohttp_session.post = Mock(return_value=token_response)
         mock_aiohttp_session.put = Mock(return_value=create_response)
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('src.core.agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
             # Get agents
             agents = await agent_manager.get_letta_agents()
             assert len(agents) == 2
@@ -148,7 +148,7 @@ class TestAgentDiscoveryAndCreation:
         mock_aiohttp_session.post = Mock(return_value=token_response)
         mock_aiohttp_session.put = Mock(return_value=create_response)
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('src.core.agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
             # Run sync
             await agent_manager.sync_agents_to_users()
 
@@ -197,7 +197,7 @@ class TestRoomCreationAndManagement:
 
         mock_aiohttp_session.post = Mock(side_effect=[login_response, room_response])
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('src.core.agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
             # Create room - using current method name
             agent_id = "agent-room-test"
             await agent_manager.create_or_update_agent_room(agent_id)
@@ -291,7 +291,7 @@ class TestAgentNameUpdates:
         mock_aiohttp_session.get = Mock(side_effect=[agents_response, detail_response])
         mock_aiohttp_session.put = Mock(return_value=update_response)
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('src.core.agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
             # Sync agents (should detect name change)
             agents = await agent_manager.get_letta_agents()
 
@@ -416,7 +416,7 @@ class TestInvitationManagement:
 
         mock_aiohttp_session.post = Mock(side_effect=[login_response, invite_response])
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('src.core.agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
             # This method no longer exists - invitations are now handled
             # within create_or_update_agent_room using auto_accept_invitations_with_tracking
             pass
@@ -531,7 +531,7 @@ class TestErrorRecovery:
 
         mock_aiohttp_session.get = Mock(side_effect=[agents_response, success_response, fail_response])
 
-        with patch('agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        with patch('src.core.agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
             agents = await agent_manager.get_letta_agents()
 
             # Should have one successful agent (the other failed to get details)
