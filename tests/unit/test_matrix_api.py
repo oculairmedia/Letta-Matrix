@@ -15,7 +15,7 @@ from unittest.mock import Mock, AsyncMock, patch
 import json
 
 # Import the FastAPI app
-from matrix_api import (
+from src.api.app import (
     app,
     LoginRequest,
     LoginResponse,
@@ -191,7 +191,7 @@ class TestHealthCheck:
 class TestLoginEndpoint:
     """Test login endpoint"""
 
-    @patch('matrix_api.aiohttp.ClientSession')
+    @patch('src.api.app.aiohttp.ClientSession')
     def test_login_success(self, mock_session, client):
         """Test successful login"""
         # Mock aiohttp response
@@ -242,7 +242,7 @@ class TestLoginEndpoint:
 class TestSendMessageEndpoint:
     """Test send message endpoint"""
 
-    @patch('matrix_api.aiohttp.ClientSession')
+    @patch('src.api.app.aiohttp.ClientSession')
     def test_send_message_success(self, mock_session, client):
         """Test successfully sending a message"""
         # Mock aiohttp response
@@ -291,7 +291,7 @@ class TestSendMessageEndpoint:
 class TestGetMessagesEndpoint:
     """Test get messages endpoint"""
 
-    @patch('matrix_api.aiohttp.ClientSession')
+    @patch('src.api.app.aiohttp.ClientSession')
     def test_get_messages_success(self, mock_session, client):
         """Test successfully getting messages"""
         # Mock aiohttp response
@@ -340,7 +340,7 @@ class TestGetMessagesEndpoint:
 class TestListRoomsEndpoint:
     """Test list rooms endpoint"""
 
-    @patch('matrix_api.aiohttp.ClientSession')
+    @patch('src.api.app.aiohttp.ClientSession')
     def test_list_rooms_success(self, mock_session, client):
         """Test successfully listing rooms"""
         # Mock aiohttp response
@@ -417,7 +417,7 @@ class TestWebhookEndpoint:
 class TestErrorHandling:
     """Test error handling in API endpoints"""
 
-    @patch('matrix_api.aiohttp.ClientSession')
+    @patch('src.api.app.aiohttp.ClientSession')
     def test_network_error_handling(self, mock_session, client):
         """Test handling of network errors"""
         import aiohttp

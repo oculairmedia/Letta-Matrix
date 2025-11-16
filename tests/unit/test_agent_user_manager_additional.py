@@ -8,7 +8,7 @@ Focuses on:
 
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
-from agent_user_manager import AgentUserManager
+from src.core.agent_user_manager import AgentUserManager
 
 
 @pytest.fixture
@@ -31,8 +31,8 @@ class TestUpdateDisplayName:
     @pytest.mark.asyncio
     async def test_update_display_name_success(self, mock_config, mock_aiohttp_session):
         """Test successfully updating display name"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 with patch.object(manager, 'get_admin_token', return_value="admin_token"):
@@ -45,7 +45,7 @@ class TestUpdateDisplayName:
                     mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         success = await manager.update_display_name(
                             "@agent_123:matrix.oculair.ca",
                             "New Agent Name"
@@ -56,8 +56,8 @@ class TestUpdateDisplayName:
     @pytest.mark.asyncio
     async def test_update_display_name_no_admin_token(self, mock_config):
         """Test display name update when admin token unavailable"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 with patch.object(manager, 'get_admin_token', return_value=None):
@@ -75,8 +75,8 @@ class TestGetSpaceId:
 
     def test_get_space_id_returns_current_id(self, mock_config):
         """Test that get_space_id returns the current space ID"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
                 manager.space_id = "!test_space:matrix.oculair.ca"
 
@@ -86,8 +86,8 @@ class TestGetSpaceId:
 
     def test_get_space_id_returns_none_when_not_set(self, mock_config):
         """Test that get_space_id returns None when space not created"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 space_id = manager.get_space_id()
@@ -102,8 +102,8 @@ class TestUpdateDisplayNameFailure:
     @pytest.mark.asyncio
     async def test_update_display_name_api_failure(self, mock_config, mock_aiohttp_session):
         """Test display name update when API fails"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 with patch.object(manager, 'get_admin_token', return_value="admin_token"):
@@ -117,7 +117,7 @@ class TestUpdateDisplayNameFailure:
                     mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         success = await manager.update_display_name(
                             "@agent_123:matrix.oculair.ca",
                             "New Name"

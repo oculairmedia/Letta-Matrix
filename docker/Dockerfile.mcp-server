@@ -13,8 +13,7 @@ RUN apt-get update && apt-get install -y \
 RUN mkdir -p /app/data
 
 # Copy application files
-COPY mcp_server.py .
-COPY mcp_http_server.py .
+COPY src/ ./src/
 
 # Install Python dependencies directly (no requirements.txt needed for now)
 RUN pip install --no-cache-dir \
@@ -34,4 +33,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')" || exit 1
 
 # Start the MCP HTTP server (can switch to websocket server by changing the command)
-CMD ["python", "mcp_http_server.py"]
+CMD ["python", "-m", "src.mcp.http_server"]

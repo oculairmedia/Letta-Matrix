@@ -12,11 +12,11 @@ from nio.responses import JoinError
 from nio.exceptions import RemoteProtocolError
 
 # Import our authentication manager
-from matrix_auth import MatrixAuthManager
+from src.matrix.auth import MatrixAuthManager
 
 # Import agent user manager
-from agent_user_manager import run_agent_sync
-from event_dedupe_store import is_duplicate_event
+from src.core.agent_user_manager import run_agent_sync
+from src.matrix.event_dedupe import is_duplicate_event
 
 # Custom exception classes
 class LettaApiError(Exception):

@@ -16,7 +16,7 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from dataclasses import dataclass
 
 # Import the module to test
-from custom_matrix_client import (
+from src.matrix.client import (
     Config,
     setup_logging,
     LettaApiError,
@@ -156,7 +156,7 @@ class TestLoggingSetup:
     def test_json_formatter(self, mock_config):
         """Test JSON log formatting"""
         import logging
-        from custom_matrix_client import setup_logging
+        from src.matrix.client import setup_logging
 
         logger = setup_logging(mock_config)
 

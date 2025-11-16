@@ -13,7 +13,7 @@ from nio import AsyncClient, RoomMessageText, LoginError
 import websockets
 from dotenv import load_dotenv
 
-from event_dedupe_store import is_duplicate_event
+from src.matrix.event_dedupe import is_duplicate_event
 
 
 # Configure logging

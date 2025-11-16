@@ -12,7 +12,7 @@ import pytest
 import json
 import os
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from agent_user_manager import AgentUserManager, AgentUserMapping
+from src.core.agent_user_manager import AgentUserManager, AgentUserMapping
 
 
 @pytest.fixture
@@ -35,8 +35,8 @@ class TestCreateUserForAgent:
     @pytest.mark.asyncio
     async def test_create_user_for_agent_success(self, mock_config, mock_aiohttp_session):
         """Test successful user creation for new agent"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 agent = {
@@ -58,7 +58,7 @@ class TestCreateUserForAgent:
                     mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         with patch.object(manager, 'create_or_update_agent_room', new_callable=AsyncMock):
                             await manager.create_user_for_agent(agent)
 
@@ -71,8 +71,8 @@ class TestCreateUserForAgent:
     @pytest.mark.asyncio
     async def test_create_user_for_agent_already_exists(self, mock_config):
         """Test creating user when agent already exists in mappings"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Pre-populate mapping
@@ -99,8 +99,8 @@ class TestCreateUserForAgent:
     @pytest.mark.asyncio
     async def test_create_user_for_agent_creates_mapping_even_without_token(self, mock_config):
         """Test user creation creates mapping structure even when user creation fails"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 agent = {
@@ -126,8 +126,8 @@ class TestUserExistence:
     @pytest.mark.asyncio
     async def test_user_exists_returns_true_on_403(self, mock_config, mock_aiohttp_session):
         """Test that 403 response indicates user exists"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Mock 403 response (wrong password = user exists)
@@ -140,7 +140,7 @@ class TestUserExistence:
                 mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     exists = await manager.check_user_exists("@test:matrix.oculair.ca")
 
                     assert exists is True
@@ -148,8 +148,8 @@ class TestUserExistence:
     @pytest.mark.asyncio
     async def test_user_exists_returns_false_on_404(self, mock_config, mock_aiohttp_session):
         """Test that 404 response indicates user doesn't exist"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Mock 404 response (user not found)
@@ -162,7 +162,7 @@ class TestUserExistence:
                 mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     exists = await manager.check_user_exists("@test:matrix.oculair.ca")
 
                     assert exists is False
@@ -170,8 +170,8 @@ class TestUserExistence:
     @pytest.mark.asyncio
     async def test_user_exists_returns_false_on_other_errors(self, mock_config, mock_aiohttp_session):
         """Test that unknown error codes default to user doesn't exist"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Mock 500 response (assume doesn't exist for unknown errors)
@@ -184,7 +184,7 @@ class TestUserExistence:
                 mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     exists = await manager.check_user_exists("@test:matrix.oculair.ca")
 
                     assert exists is False
@@ -196,8 +196,8 @@ class TestPasswordGeneration:
 
     def test_generate_password_returns_string(self, mock_config):
         """Test that password generation returns a string"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 password = manager.generate_password()
@@ -207,8 +207,8 @@ class TestPasswordGeneration:
 
     def test_generate_password_dev_mode(self, mock_config):
         """Test that DEV_MODE returns simple password"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 with patch.dict(os.environ, {"DEV_MODE": "true"}):
                     manager = AgentUserManager(config=mock_config)
 
@@ -223,8 +223,8 @@ class TestUsernameGeneration:
 
     def test_generate_username_from_agent_id(self, mock_config):
         """Test username generation from agent ID"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Test with standard agent ID format
@@ -235,8 +235,8 @@ class TestUsernameGeneration:
 
     def test_generate_username_removes_agent_prefix(self, mock_config):
         """Test that 'agent-' prefix is removed"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 username = manager.generate_username("Test", "agent-xyz789")
@@ -251,8 +251,8 @@ class TestGetLettaAgents:
     @pytest.mark.asyncio
     async def test_get_letta_agents_success(self, mock_config, mock_aiohttp_session):
         """Test successful agent discovery"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Mock models response
@@ -271,7 +271,7 @@ class TestGetLettaAgents:
                 mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     agents = await manager.get_letta_agents()
 
                     assert len(agents) == 2
@@ -281,8 +281,8 @@ class TestGetLettaAgents:
     @pytest.mark.asyncio
     async def test_get_letta_agents_api_error(self, mock_config, mock_aiohttp_session):
         """Test agent discovery when API fails"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Mock failed response
@@ -296,7 +296,7 @@ class TestGetLettaAgents:
                 mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     agents = await manager.get_letta_agents()
 
                     # Should return empty list on error
@@ -305,8 +305,8 @@ class TestGetLettaAgents:
     @pytest.mark.asyncio
     async def test_get_letta_agents_invalid_json(self, mock_config, mock_aiohttp_session):
         """Test agent discovery with malformed JSON response"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Mock response with invalid JSON structure
@@ -320,7 +320,7 @@ class TestGetLettaAgents:
                 mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     agents = await manager.get_letta_agents()
 
                     # Should handle gracefully
@@ -334,8 +334,8 @@ class TestImportRecentHistory:
     @pytest.mark.asyncio
     async def test_import_recent_history_handles_no_messages(self, mock_config, mock_aiohttp_session):
         """Test history import when no messages exist"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Mock empty messages response
@@ -349,7 +349,7 @@ class TestImportRecentHistory:
                 mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     # Should complete without errors
                     await manager.import_recent_history(
                         agent_id="agent-456",
@@ -361,8 +361,8 @@ class TestImportRecentHistory:
     @pytest.mark.asyncio
     async def test_import_recent_history_handles_api_failure(self, mock_config, mock_aiohttp_session):
         """Test history import when Letta API fails"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Mock failed API response
@@ -376,7 +376,7 @@ class TestImportRecentHistory:
                 mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     # Should handle error gracefully
                     await manager.import_recent_history(
                         agent_id="agent-789",

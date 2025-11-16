@@ -16,9 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY matrix_api.py .
-COPY agent_user_manager.py .
-COPY custom_matrix_client.py .
+COPY src/ ./src/
 
 # Note: .env will be mounted as volume in docker-compose.yml
 # Create a placeholder .env for build context
@@ -36,4 +34,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
 
 # Start the API server
-CMD ["python", "matrix_api.py"]
+CMD ["python", "-m", "src.api.app"]

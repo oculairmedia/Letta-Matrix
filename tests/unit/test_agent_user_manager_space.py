@@ -14,7 +14,7 @@ import json
 import os
 import tempfile
 from unittest.mock import Mock, AsyncMock, patch, mock_open, MagicMock
-from agent_user_manager import AgentUserManager, AgentUserMapping
+from src.core.agent_user_manager import AgentUserManager, AgentUserMapping
 
 
 @pytest.fixture
@@ -43,12 +43,12 @@ def temp_space_config_file():
 @pytest.fixture
 def manager_with_space(mock_config):
     """Create an AgentUserManager with mocked dependencies and space ID"""
-    with patch('agent_user_manager.logging.getLogger'):
+    with patch('src.core.agent_user_manager.logging.getLogger'):
         with patch.dict(os.environ, {
             "MATRIX_ADMIN_USERNAME": "@matrixadmin:matrix.oculair.ca",
             "MATRIX_ADMIN_PASSWORD": "admin123"
         }):
-            with patch('agent_user_manager.os.makedirs'):  # Prevent creating /app/data
+            with patch('src.core.agent_user_manager.os.makedirs'):  # Prevent creating /app/data
                 manager = AgentUserManager(config=mock_config)
                 manager.space_id = "!test_space_123:matrix.oculair.ca"
                 return manager
@@ -61,8 +61,8 @@ class TestSpaceConfigPersistence:
     @pytest.mark.asyncio
     async def test_save_space_config_success(self, mock_config, temp_space_config_file):
         """Test successful space config save"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
                 manager.space_config_file = temp_space_config_file
                 manager.space_id = "!test_space_456:matrix.oculair.ca"
@@ -89,8 +89,8 @@ class TestSpaceConfigPersistence:
         with open(temp_space_config_file, 'w') as f:
             json.dump(test_data, f)
 
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
                 manager.space_config_file = temp_space_config_file
 
@@ -101,8 +101,8 @@ class TestSpaceConfigPersistence:
     @pytest.mark.asyncio
     async def test_load_space_config_file_not_found(self, mock_config):
         """Test loading when space config file doesn't exist"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
                 manager.space_config_file = "/nonexistent/path/space_config.json"
 
@@ -114,8 +114,8 @@ class TestSpaceConfigPersistence:
     @pytest.mark.asyncio
     async def test_save_space_config_handles_exception(self, mock_config):
         """Test that save_space_config handles exceptions gracefully"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
                 manager.space_config_file = "/invalid/path/space_config.json"
                 manager.space_id = "!test_space:matrix.oculair.ca"
@@ -131,8 +131,8 @@ class TestCreateLettaAgentsSpace:
     @pytest.mark.asyncio
     async def test_create_space_success(self, mock_config, mock_aiohttp_session):
         """Test successful space creation"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 # Mock login response
@@ -154,7 +154,7 @@ class TestCreateLettaAgentsSpace:
                 mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                 mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     with patch.object(manager, 'save_space_config', new_callable=AsyncMock) as mock_save:
                         space_id = await manager.create_letta_agents_space()
 
@@ -165,8 +165,8 @@ class TestCreateLettaAgentsSpace:
     @pytest.mark.asyncio
     async def test_create_space_already_exists(self, mock_config):
         """Test when space already exists"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
             manager.space_id = "!existing_space:matrix.oculair.ca"
 
@@ -179,8 +179,8 @@ class TestCreateLettaAgentsSpace:
     @pytest.mark.asyncio
     async def test_create_space_login_failure(self, mock_config):
         """Test space creation when admin login fails"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
             # Mock failed login
@@ -193,7 +193,7 @@ class TestCreateLettaAgentsSpace:
             mock_login_response.__aenter__.return_value = mock_login_response
             mock_login_response.__aexit__.return_value = AsyncMock()
 
-            with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_session):
+            with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_session):
                 mock_session.__aenter__.return_value = mock_session
                 mock_session.__aexit__.return_value = AsyncMock()
 
@@ -204,8 +204,8 @@ class TestCreateLettaAgentsSpace:
     @pytest.mark.asyncio
     async def test_create_space_creation_failure(self, mock_config):
         """Test when Matrix API fails to create space"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
             # Mock successful login but failed space creation
@@ -230,7 +230,7 @@ class TestCreateLettaAgentsSpace:
             mock_create_response.__aenter__.return_value = mock_create_response
             mock_create_response.__aexit__.return_value = AsyncMock()
 
-            with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_session):
+            with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_session):
                 mock_session.__aenter__.return_value = mock_session
                 mock_session.__aexit__.return_value = AsyncMock()
 
@@ -267,7 +267,7 @@ class TestAddRoomToSpace:
             mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
             mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-            with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+            with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                 success = await manager.add_room_to_space(
                     "!room123:matrix.oculair.ca",
                     "Test Agent"
@@ -279,8 +279,8 @@ class TestAddRoomToSpace:
     @pytest.mark.asyncio
     async def test_add_room_to_space_no_space_id(self, mock_config):
         """Test adding room when no space ID is set"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
             # Don't set space_id
 
@@ -320,7 +320,7 @@ class TestAddRoomToSpace:
             mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
             mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-            with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+            with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                 success = await manager.add_room_to_space(
                     "!room123:matrix.oculair.ca",
                     "Test Agent"
@@ -348,7 +348,7 @@ class TestAddRoomToSpace:
             mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
             mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-            with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+            with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                 success = await manager.add_room_to_space(
                     "!room123:matrix.oculair.ca",
                     "Test Agent"
@@ -405,8 +405,8 @@ class TestMigrateExistingRoomsToSpace:
     @pytest.mark.asyncio
     async def test_migrate_rooms_no_space_id(self, mock_config):
         """Test migration when no space ID is set"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
             # Don't set space_id
 
@@ -453,8 +453,8 @@ class TestCheckRoomExists:
     @pytest.mark.asyncio
     async def test_check_room_exists_true(self, mock_config, mock_aiohttp_session):
         """Test checking a room that exists"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 with patch.object(manager, 'get_admin_token', return_value="admin_token"):
@@ -467,7 +467,7 @@ class TestCheckRoomExists:
                     mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
 
                         assert exists is True
@@ -475,8 +475,8 @@ class TestCheckRoomExists:
     @pytest.mark.asyncio
     async def test_check_room_exists_false(self, mock_config, mock_aiohttp_session):
         """Test checking a room that doesn't exist"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 with patch.object(manager, 'get_admin_token', return_value="admin_token"):
@@ -489,7 +489,7 @@ class TestCheckRoomExists:
                     mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
 
                         assert exists is False
@@ -497,8 +497,8 @@ class TestCheckRoomExists:
     @pytest.mark.asyncio
     async def test_check_room_exists_forbidden_still_exists(self, mock_config, mock_aiohttp_session):
         """Test that 403 response indicates room exists"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 with patch.object(manager, 'get_admin_token', return_value="admin_token"):
@@ -511,7 +511,7 @@ class TestCheckRoomExists:
                     mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
 
                         assert exists is True
@@ -519,8 +519,8 @@ class TestCheckRoomExists:
     @pytest.mark.asyncio
     async def test_check_room_exists_no_admin_token(self, mock_config):
         """Test checking room when admin token is unavailable"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
             with patch.object(manager, 'get_admin_token', return_value=None):
@@ -536,8 +536,8 @@ class TestUpdateRoomName:
     @pytest.mark.asyncio
     async def test_update_room_name_success(self, mock_config, mock_aiohttp_session):
         """Test successfully updating room name"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 with patch.object(manager, 'get_admin_token', return_value="admin_token"):
@@ -550,7 +550,7 @@ class TestUpdateRoomName:
                     mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         success = await manager.update_room_name(
                             "!room123:matrix.oculair.ca",
                             "New Agent Name"
@@ -561,8 +561,8 @@ class TestUpdateRoomName:
     @pytest.mark.asyncio
     async def test_update_room_name_no_admin_token(self, mock_config):
         """Test updating room name when admin token is unavailable"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
             with patch.object(manager, 'get_admin_token', return_value=None):
@@ -576,8 +576,8 @@ class TestUpdateRoomName:
     @pytest.mark.asyncio
     async def test_update_room_name_api_failure(self, mock_config, mock_aiohttp_session):
         """Test room name update when API call fails"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
                 with patch.object(manager, 'get_admin_token', return_value="admin_token"):
@@ -591,7 +591,7 @@ class TestUpdateRoomName:
                     mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
                     mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                         success = await manager.update_room_name(
                             "!room123:matrix.oculair.ca",
                             "New Agent Name"
@@ -602,8 +602,8 @@ class TestUpdateRoomName:
     @pytest.mark.asyncio
     async def test_update_room_name_exception_handling(self, mock_config):
         """Test that exceptions are handled gracefully"""
-        with patch('agent_user_manager.logging.getLogger'):
-            with patch('agent_user_manager.os.makedirs'):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
             with patch.object(manager, 'get_admin_token', side_effect=Exception("Network error")):
