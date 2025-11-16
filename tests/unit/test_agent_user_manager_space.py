@@ -533,7 +533,7 @@ class TestCheckRoomExists:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-            with patch.object(manager, 'get_admin_token', return_value=None):
+            with patch.object(manager.space_manager, 'get_admin_token', return_value=None):
                 exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
 
                 assert exists is False
