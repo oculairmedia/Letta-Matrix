@@ -38,7 +38,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest test_space_management.py -v --cov=agent_user_manager --cov-report=xml
+          pytest tests/unit/ -v --cov=src.core.agent_user_manager --cov-report=xml
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
@@ -87,7 +87,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.matrix-client
+          file: ./docker/Dockerfile.matrix-client
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -135,7 +135,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.matrix-api
+          file: ./docker/Dockerfile.matrix-api
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -183,7 +183,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.mcp-server
+          file: ./docker/Dockerfile.mcp-server
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}

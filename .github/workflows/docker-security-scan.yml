@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'Dockerfile.*'
+      - 'docker/Dockerfile.*'
       - 'requirements.txt'
 
 jobs:
@@ -17,9 +17,9 @@ jobs:
     strategy:
       matrix:
         dockerfile:
-          - Dockerfile.matrix-client
-          - Dockerfile.matrix-api
-          - Dockerfile.mcp-server
+          - docker/Dockerfile.matrix-client
+          - docker/Dockerfile.matrix-api
+          - docker/Dockerfile.mcp-server
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

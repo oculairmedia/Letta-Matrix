@@ -25,19 +25,19 @@ jobs:
 
       - name: Run Black (formatting check)
         run: |
-          black --check *.py || true
+          black --check src/ scripts/ tests/ || true
 
       - name: Run isort (import sorting check)
         run: |
-          isort --check-only *.py || true
+          isort --check-only src/ scripts/ tests/ || true
 
       - name: Run Flake8 (style guide enforcement)
         run: |
-          flake8 *.py --max-line-length=120 --ignore=E501,W503,E203 || true
+          flake8 src/ scripts/ tests/ --max-line-length=120 --ignore=E501,W503,E203 || true
 
       - name: Run MyPy (type checking)
         run: |
-          mypy *.py --ignore-missing-imports || true
+          mypy src/ --ignore-missing-imports || true
 
   docker-lint:
     name: Dockerfile Linting
@@ -49,19 +49,19 @@ jobs:
       - name: Run Hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: Dockerfile.matrix-client
+          dockerfile: docker/Dockerfile.matrix-client
           ignore: DL3008,DL3009
 
       - name: Run Hadolint on matrix-api
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: Dockerfile.matrix-api
+          dockerfile: docker/Dockerfile.matrix-api
           ignore: DL3008,DL3009
 
       - name: Run Hadolint on mcp-server
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: Dockerfile.mcp-server
+          dockerfile: docker/Dockerfile.mcp-server
           ignore: DL3008,DL3009
 
   yaml-lint:
