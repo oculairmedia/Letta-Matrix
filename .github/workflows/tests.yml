@@ -28,7 +28,11 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run smoke tests
-      run: ./run_tests.sh smoke
+      env:
+        MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
+      run: |
+        mkdir -p $MATRIX_DATA_DIR
+        ./run_tests.sh smoke
 
   unit-tests:
     name: Unit Tests
@@ -52,7 +56,11 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run unit tests
-      run: ./run_tests.sh unit
+      env:
+        MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
+      run: |
+        mkdir -p $MATRIX_DATA_DIR
+        ./run_tests.sh unit
 
     - name: Upload test results
       if: always()
@@ -85,7 +93,11 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run integration tests
-      run: ./run_tests.sh integration
+      env:
+        MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
+      run: |
+        mkdir -p $MATRIX_DATA_DIR
+        ./run_tests.sh integration
 
     - name: Upload test results
       if: always()
@@ -118,7 +130,10 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run tests with coverage
+      env:
+        MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
       run: |
+        mkdir -p $MATRIX_DATA_DIR
         pytest --cov=. --cov-report=xml --cov-report=html --cov-report=term-missing
 
     - name: Display coverage summary
