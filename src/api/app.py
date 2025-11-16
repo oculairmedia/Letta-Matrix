@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Import agent sync functionality
 try:
-    from agent_user_manager import run_agent_sync
-    from custom_matrix_client import Config
+    from ..core.agent_user_manager import run_agent_sync
+    from ..matrix.client import Config
     AGENT_SYNC_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Agent sync not available: {e}")
