@@ -574,5 +574,14 @@ async def run_agent_sync(config):
 
     logger.info("Starting agent sync process from run_agent_sync")
     manager = AgentUserManager(config)
+    
+    # Ensure core users exist before syncing agents
+    logger.info("Ensuring core Matrix users exist...")
+    core_users = [
+        (config.username, config.password, "Letta Bot"),
+        (manager.admin_username, manager.admin_password, "Matrix Admin")
+    ]
+    await manager.user_manager.ensure_core_users_exist(core_users)
+    
     await manager.sync_agents_to_users()
     return manager

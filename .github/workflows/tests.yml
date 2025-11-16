@@ -28,11 +28,7 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run smoke tests
-      env:
-        MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
-      run: |
-        mkdir -p $MATRIX_DATA_DIR
-        ./run_tests.sh smoke
+      run: ./run_tests.sh smoke
 
   unit-tests:
     name: Unit Tests
@@ -56,15 +52,11 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run unit tests
-      env:
-        MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
-      run: |
-        mkdir -p $MATRIX_DATA_DIR
-        ./run_tests.sh unit
+      run: ./run_tests.sh unit
 
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
         name: unit-test-results
         path: |
@@ -93,15 +85,11 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run integration tests
-      env:
-        MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
-      run: |
-        mkdir -p $MATRIX_DATA_DIR
-        ./run_tests.sh integration
+      run: ./run_tests.sh integration
 
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
         name: integration-test-results
         path: |
@@ -130,10 +118,7 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run tests with coverage
-      env:
-        MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
       run: |
-        mkdir -p $MATRIX_DATA_DIR
         pytest --cov=. --cov-report=xml --cov-report=html --cov-report=term-missing
 
     - name: Display coverage summary
@@ -152,7 +137,7 @@ jobs:
         fail_ci_if_error: false
 
     - name: Upload coverage HTML report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
         name: coverage-report
         path: htmlcov/

@@ -24,9 +24,7 @@ services:
       - "homepage.href=http://matrix.oculair.ca"
       - "homepage.description=Tuwunel Matrix homeserver with Element web client"
   matrix-client:
-    build:
-      context: .
-      dockerfile: Dockerfile.matrix-client
+    image: ghcr.io/oculairmedia/letta-matrix-client:latest
     restart: unless-stopped
     env_file:
       - .env
@@ -57,9 +55,7 @@ services:
       retries: 3
       start_period: 40s
   matrix-api:
-    build:
-      context: .
-      dockerfile: Dockerfile.matrix-api
+    image: ghcr.io/oculairmedia/letta-matrix-api:latest
     restart: unless-stopped
     env_file:
       - .env
@@ -78,9 +74,7 @@ services:
       - "homepage.href=http://192.168.50.90:8004"
       - "homepage.description=Matrix API server for automation"
   mcp-server:
-    build:
-      context: .
-      dockerfile: Dockerfile.mcp-server
+    image: ghcr.io/oculairmedia/letta-matrix-mcp:latest
     restart: unless-stopped
     env_file:
       - .env
@@ -107,9 +101,7 @@ services:
       - "homepage.href=http://192.168.50.90:8016"
       - "homepage.description=Matrix MCP server for Claude integration"
   letta-agent-mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile.letta-agent-mcp
+    image: ghcr.io/oculairmedia/letta-matrix-mcp:latest
     restart: unless-stopped
     env_file:
       - .env

@@ -2,7 +2,7 @@ services:
   # Tuwunel Matrix Homeserver (replacing Synapse)
   # Using custom-built image compatible with Docker 20.10.24
   tuwunel:
-    image: ghcr.io/oculairmedia/tuwunel-docker2010:feature-tuwunel-migration
+    image: ghcr.io/oculairmedia/tuwunel-docker2010:latest
     restart: unless-stopped
     command: ["-O", "address=\"0.0.0.0\"", "-O", "port=6167"]
     environment:
@@ -60,9 +60,7 @@ services:
 
   # Matrix Client with Agent Management
   matrix-client:
-    build:
-      context: .
-      dockerfile: Dockerfile.matrix-client
+    image: ghcr.io/oculairmedia/letta-matrix-client:latest
     restart: unless-stopped
     env_file:
       - .env
@@ -96,9 +94,7 @@ services:
 
   # Matrix API Service
   matrix-api:
-    build:
-      context: .
-      dockerfile: Dockerfile.matrix-api
+    image: ghcr.io/oculairmedia/letta-matrix-api:latest
     restart: unless-stopped
     env_file:
       - .env
@@ -121,9 +117,7 @@ services:
 
   # MCP Server for Matrix Tools
   mcp-server:
-    build:
-      context: .
-      dockerfile: Dockerfile.mcp-server
+    image: ghcr.io/oculairmedia/letta-matrix-mcp:latest
     restart: unless-stopped
     env_file:
       - .env
@@ -153,9 +147,7 @@ services:
 
   # Letta Agent MCP Server
   letta-agent-mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile.letta-agent-mcp
+    image: ghcr.io/oculairmedia/letta-matrix-mcp:latest
     restart: unless-stopped
     env_file:
       - .env
