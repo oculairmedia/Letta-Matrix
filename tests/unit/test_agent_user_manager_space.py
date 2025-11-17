@@ -505,7 +505,7 @@ class TestCheckRoomExists:
 
     @pytest.mark.asyncio
     async def test_check_room_exists_forbidden_still_exists(self, mock_config, mock_aiohttp_session):
-        """Test that 403 response indicates room exists"""
+        """Test that 403 response indicates room is invalid (access denied)"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
@@ -524,7 +524,9 @@ class TestCheckRoomExists:
                         with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                             exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
 
-                            assert exists is True
+                            # Changed: 403 now treated as invalid (returns False) to trigger recreation
+                            assert exists is False
+
 
     @pytest.mark.asyncio
     async def test_check_room_exists_no_admin_token(self, mock_config):
