@@ -535,9 +535,33 @@ class AgentUserManager:
         return await self.room_manager.find_existing_agent_room(agent_name)
 
     async def create_or_update_agent_room(self, agent_id: str):
-        """Create or update a Matrix room for agent communication - delegates to room_manager"""
+        """Create or update a Matrix room for agent communication with validation"""
         mapping = self.mappings.get(agent_id)
-        return await self.room_manager.create_or_update_agent_room(agent_id, mapping)
+        if not mapping:
+            logger.error(f"No mapping found for agent {agent_id}, cannot create room")
+            return None
+
+        # Validate existing room (ensure create event/version)
+        if mapping.room_id and mapping.room_created:
+            room_exists = await self.room_manager.space_manager.check_room_exists(mapping.room_id)
+            if room_exists:
+                logger.info(f"Room exists for agent {agent_id}: {mapping.room_id}")
+                await self.room_manager.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
+                return mapping.room_id
+            else:
+                logger.warning(f"Room {mapping.room_id} invalid/missing, clearing and recreating")
+                mapping.room_id = None
+                mapping.room_created = False
+                await self.save_mappings()
+
+        logger.info(f"Creating room for agent {agent_id}: {mapping.agent_name}")
+        result = await self.room_manager.create_or_update_agent_room(agent_id, mapping)
+        if result:
+            logger.info(f"Room created for agent {agent_id}: {result}")
+        else:
+            logger.error(f"Failed to create room for agent {agent_id}")
+        return result
+
 
     async def import_recent_history(
         self,

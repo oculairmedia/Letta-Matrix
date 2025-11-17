@@ -95,47 +95,51 @@ class MatrixSpaceManager:
             return None
 
     async def check_room_exists(self, room_id: str) -> bool:
-        """Check if a room exists on the server
-
-        Args:
-            room_id: Matrix room ID to check
-
-        Returns:
-            True if room exists, False otherwise
-        """
+        """Check if a room exists and is valid (has a create event with room version)"""
         try:
-            # Get admin token
             admin_token = await self.get_admin_token()
             if not admin_token:
                 logger.warning("Failed to get admin token, cannot check room existence")
                 return False
 
-            # Use the room state API to check if room exists
-            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state"
             headers = {
                 "Authorization": f"Bearer {admin_token}",
                 "Content-Type": "application/json"
             }
 
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Room {room_id} exists")
-                        return True
-                    elif response.status == 404:
+                # Basic existence check
+                state_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state"
+                async with session.get(state_url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 404:
                         logger.info(f"Room {room_id} does not exist")
                         return False
-                    elif response.status == 403:
-                        # Room exists but we don't have access - still counts as existing
-                        logger.info(f"Room {room_id} exists but access denied")
-                        return True
-                    else:
+                    if response.status == 403:
+                        logger.warning(f"Room {room_id} exists but access denied (treating as invalid)")
+                        return False
+                    if response.status != 200:
                         logger.warning(f"Unexpected response checking room {room_id}: {response.status}")
                         return False
+
+                # Validate create event / room version to catch corrupted rooms
+                create_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.create"
+                async with session.get(create_url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status != 200:
+                        logger.warning(f"Room {room_id} missing create event (status {response.status}), treating as invalid")
+                        return False
+                    create_data = await response.json()
+                    room_version = create_data.get("room_version")
+                    if not room_version:
+                        logger.warning(f"Room {room_id} has no room_version in create event, treating as invalid")
+                        return False
+
+                logger.info(f"Room {room_id} exists with room version {room_version}")
+                return True
 
         except Exception as e:
             logger.error(f"Error checking if room {room_id} exists: {e}")
             return False
+
 
     async def load_space_config(self):
         """Load the Letta Agents space configuration from file"""

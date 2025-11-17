@@ -146,7 +146,8 @@ class MatrixRoomManager:
         """Create or update a Matrix room for agent communication"""
         if not mapping or not mapping.created:
             logger.error(f"Cannot create room for agent {agent_id} - user not created")
-            return
+            return None
+
 
         # Check if room already exists in our mapping and on the server
         if mapping.room_id and mapping.room_created:
