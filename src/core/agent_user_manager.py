@@ -446,10 +446,20 @@ class AgentUserManager:
             logger.info(f"  User: {existing_mapping.matrix_user_id}, Created: {existing_mapping.created}")
             logger.info(f"  Room: {existing_mapping.room_id}, Room Created: {existing_mapping.room_created}")
 
-            # If both user and room exist, we're done
+            # If both user and room exist, validate the room is still valid
             if existing_mapping.created and existing_mapping.room_created and existing_mapping.room_id:
-                logger.info(f"Agent {agent_name} already has user and room configured, skipping")
-                return
+                # Validate room still exists and is valid
+                room_exists = await self.space_manager.check_room_exists(existing_mapping.room_id)
+                if room_exists:
+                    logger.info(f"Agent {agent_name} already has user and room configured, skipping")
+                    return
+                else:
+                    logger.warning(f"Room {existing_mapping.room_id} for {agent_name} is invalid, recreating")
+                    existing_mapping.room_id = None
+                    existing_mapping.room_created = False
+                    await self.save_mappings()
+                    # Fall through to create room below
+
 
             # If user exists but room doesn't, just create the room
             if existing_mapping.created and not existing_mapping.room_created:
