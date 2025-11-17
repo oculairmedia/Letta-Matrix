@@ -258,13 +258,12 @@ def patched_http_session(mock_http_session):
 
     patchers = []
 
-    # Patch get_global_session in each module
-    for module in modules_to_patch:
-        patcher = patch(f'{module}.get_global_session', side_effect=mock_get_global_session)
-        patcher.start()
-        patchers.append(patcher)
+    # Only patch get_global_session where it exists (agent_user_manager)
+    patcher = patch('src.core.agent_user_manager.get_global_session', side_effect=mock_get_global_session)
+    patcher.start()
+    patchers.append(patcher)
 
-    # CRITICAL FIX: Also patch aiohttp.ClientSession directly in each module
+    # CRITICAL FIX: Patch aiohttp.ClientSession directly in ALL modules
     # This catches cases where code creates sessions with "async with aiohttp.ClientSession()"
     for module in modules_to_patch:
         patcher = patch(f'{module}.aiohttp.ClientSession', return_value=mock_http_session)

@@ -57,6 +57,7 @@ class MockedIntegrationTest:
         self.temp_dir = temp_dir
         self.manager = None
         self.results = []
+        self.patchers = []  # Track patchers for cleanup
 
         # Mock data for testing
         self.mock_space_id = "!mock_letta_space_123:mock.matrix.test"
@@ -96,11 +97,13 @@ class MockedIntegrationTest:
     async def _setup_http_mocks(self):
         """Set up HTTP mocks for Matrix and Letta API calls"""
 
-        # Create a mock session
-        mock_session = AsyncMock()
+        # Create a mock session with async context manager support
+        mock_session = MagicMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
 
         # Mock Matrix login response
-        mock_login_response = AsyncMock()
+        mock_login_response = MagicMock()
         mock_login_response.status = 200
         mock_login_response.json = AsyncMock(return_value={
             "access_token": self.mock_access_token,
@@ -111,7 +114,7 @@ class MockedIntegrationTest:
         mock_login_response.__aexit__ = AsyncMock(return_value=None)
 
         # Mock space creation response
-        mock_space_create_response = AsyncMock()
+        mock_space_create_response = MagicMock()
         mock_space_create_response.status = 200
         mock_space_create_response.json = AsyncMock(return_value={
             "room_id": self.mock_space_id
@@ -120,7 +123,7 @@ class MockedIntegrationTest:
         mock_space_create_response.__aexit__ = AsyncMock(return_value=None)
 
         # Mock room creation response
-        mock_room_create_response = AsyncMock()
+        mock_room_create_response = MagicMock()
         mock_room_create_response.status = 200
         mock_room_create_response.json = AsyncMock(return_value={
             "room_id": self.mock_room_id
@@ -129,23 +132,37 @@ class MockedIntegrationTest:
         mock_room_create_response.__aexit__ = AsyncMock(return_value=None)
 
         # Mock Letta agents list response
-        mock_letta_agents_response = AsyncMock()
+        mock_letta_agents_response = MagicMock()
         mock_letta_agents_response.status = 200
         mock_letta_agents_response.json = AsyncMock(return_value=self.mock_agents)
         mock_letta_agents_response.__aenter__ = AsyncMock(return_value=mock_letta_agents_response)
         mock_letta_agents_response.__aexit__ = AsyncMock(return_value=None)
 
+        # Mock user registration response
+        mock_register_response = MagicMock()
+        mock_register_response.status = 200
+        mock_register_response.json = AsyncMock(return_value={
+            "user_id": "@new_user:mock.matrix.test",
+            "access_token": "new_user_token",
+            "device_id": "NEW_DEVICE"
+        })
+        mock_register_response.__aenter__ = AsyncMock(return_value=mock_register_response)
+        mock_register_response.__aexit__ = AsyncMock(return_value=None)
+
         # Mock generic success response (for PUT, etc.)
-        mock_success_response = AsyncMock()
+        mock_success_response = MagicMock()
         mock_success_response.status = 200
         mock_success_response.json = AsyncMock(return_value={})
         mock_success_response.__aenter__ = AsyncMock(return_value=mock_success_response)
         mock_success_response.__aexit__ = AsyncMock(return_value=None)
 
         # Configure session methods to return appropriate mocks
+        # These are regular functions (not async) that return the response objects
         def mock_post(url, **kwargs):
             if "login" in url:
                 return mock_login_response
+            elif "register" in url:
+                return mock_register_response
             elif "createRoom" in url:
                 # Check if it's a space creation (has "type": "m.space")
                 if kwargs.get('json', {}).get('creation_content', {}).get('type') == 'm.space':
@@ -163,6 +180,8 @@ class MockedIntegrationTest:
         def mock_put(url, **kwargs):
             return mock_success_response
 
+        # Use Mock (not AsyncMock) for session methods
+        # They return response objects directly (which have async context manager methods)
         mock_session.post = Mock(side_effect=mock_post)
         mock_session.get = Mock(side_effect=mock_get)
         mock_session.put = Mock(side_effect=mock_put)
@@ -173,14 +192,18 @@ class MockedIntegrationTest:
             return mock_session
 
         # Apply the patch to the manager's modules
+        # Only patch get_global_session where it exists (agent_user_manager)
         patch_target = 'src.core.agent_user_manager.get_global_session'
         self.session_patcher = patch(patch_target, side_effect=mock_get_global_session)
         self.session_patcher.start()
 
-        # Also patch for space_manager, user_manager, and room_manager
-        for module in ['space_manager', 'user_manager', 'room_manager']:
-            patcher = patch(f'src.core.{module}.get_global_session', side_effect=mock_get_global_session)
+        # Patch aiohttp.ClientSession directly in all modules
+        # Using return_value to make ClientSession() return our mock_session
+        for module in ['agent_user_manager', 'space_manager', 'user_manager', 'room_manager']:
+            patch_target = f'src.core.{module}.aiohttp.ClientSession'
+            patcher = patch(patch_target, return_value=mock_session)
             patcher.start()
+            self.patchers.append(patcher)
 
     async def test_space_creation(self):
         """Test creating the Letta Agents space"""
