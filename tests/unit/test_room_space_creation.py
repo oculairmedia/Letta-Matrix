@@ -109,8 +109,242 @@ class TestSpaceCreation:
     def test_get_space_id(self, space_manager):
         """Test get_space_id returns the current space ID"""
         space_manager.space_id = "!myspace:test.com"
-        
+
         assert space_manager.get_space_id() == "!myspace:test.com"
+
+    @pytest.mark.asyncio
+    async def test_check_room_exists_room_found(self, space_manager):
+        """Test check_room_exists returns True when room exists"""
+        # Mock get_admin_token
+        with patch.object(space_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = "admin_token"
+
+            # Mock successful state response
+            state_response = MagicMock()
+            state_response.status = 200
+            state_response.__aenter__ = AsyncMock(return_value=state_response)
+            state_response.__aexit__ = AsyncMock(return_value=None)
+
+            # Mock successful create event response
+            create_response = MagicMock()
+            create_response.status = 200
+            create_response.json = AsyncMock(return_value={"room_version": "10"})
+            create_response.__aenter__ = AsyncMock(return_value=create_response)
+            create_response.__aexit__ = AsyncMock(return_value=None)
+
+            mock_get = MagicMock(side_effect=[state_response, create_response])
+            mock_session = MagicMock()
+            mock_session.get = mock_get
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+
+            with patch('aiohttp.ClientSession', return_value=mock_session):
+                exists = await space_manager.check_room_exists("!room:test.com")
+                assert exists is True
+
+    @pytest.mark.asyncio
+    async def test_check_room_exists_room_not_found(self, space_manager):
+        """Test check_room_exists returns False when room doesn't exist (404)"""
+        with patch.object(space_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = "admin_token"
+
+            # Mock 404 response
+            mock_response = MagicMock()
+            mock_response.status = 404
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=None)
+
+            mock_get = MagicMock(return_value=mock_response)
+            mock_session = MagicMock()
+            mock_session.get = mock_get
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+
+            with patch('aiohttp.ClientSession', return_value=mock_session):
+                exists = await space_manager.check_room_exists("!room:test.com")
+                assert exists is False
+
+    @pytest.mark.asyncio
+    async def test_check_room_exists_room_forbidden(self, space_manager):
+        """Test check_room_exists returns False when access is forbidden"""
+        with patch.object(space_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = "admin_token"
+
+            # Mock 403 response
+            mock_response = MagicMock()
+            mock_response.status = 403
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=None)
+
+            mock_get = MagicMock(return_value=mock_response)
+            mock_session = MagicMock()
+            mock_session.get = mock_get
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+
+            with patch('aiohttp.ClientSession', return_value=mock_session):
+                exists = await space_manager.check_room_exists("!room:test.com")
+                assert exists is False
+
+    @pytest.mark.asyncio
+    async def test_check_room_exists_no_admin_token(self, space_manager):
+        """Test check_room_exists returns False when admin token unavailable"""
+        with patch.object(space_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = None
+
+            exists = await space_manager.check_room_exists("!room:test.com")
+            assert exists is False
+
+    @pytest.mark.asyncio
+    async def test_check_room_exists_missing_room_version(self, space_manager):
+        """Test check_room_exists returns False when room has no room_version"""
+        with patch.object(space_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = "admin_token"
+
+            # Mock successful state response
+            state_response = MagicMock()
+            state_response.status = 200
+            state_response.__aenter__ = AsyncMock(return_value=state_response)
+            state_response.__aexit__ = AsyncMock(return_value=None)
+
+            # Mock create event response without room_version
+            create_response = MagicMock()
+            create_response.status = 200
+            create_response.json = AsyncMock(return_value={})  # No room_version
+            create_response.__aenter__ = AsyncMock(return_value=create_response)
+            create_response.__aexit__ = AsyncMock(return_value=None)
+
+            mock_get = MagicMock(side_effect=[state_response, create_response])
+            mock_session = MagicMock()
+            mock_session.get = mock_get
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+
+            with patch('aiohttp.ClientSession', return_value=mock_session):
+                exists = await space_manager.check_room_exists("!room:test.com")
+                assert exists is False
+
+    @pytest.mark.asyncio
+    async def test_check_room_exists_exception_handling(self, space_manager):
+        """Test check_room_exists handles exceptions gracefully"""
+        with patch.object(space_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.side_effect = Exception("Network error")
+
+            exists = await space_manager.check_room_exists("!room:test.com")
+            assert exists is False
+
+    @pytest.mark.asyncio
+    async def test_get_admin_token_caching(self, space_manager):
+        """Test that get_admin_token caches the token"""
+        # Set a cached token
+        space_manager._admin_token = "cached_token_123"
+
+        # Should return cached token without making HTTP request
+        token = await space_manager.get_admin_token()
+        assert token == "cached_token_123"
+
+    @pytest.mark.asyncio
+    async def test_get_admin_token_failure(self, space_manager):
+        """Test get_admin_token handles login failure"""
+        # Mock failed login response
+        mock_response = MagicMock()
+        mock_response.status = 403
+        mock_response.text = AsyncMock(return_value="Invalid credentials")
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_post = MagicMock(return_value=mock_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            token = await space_manager.get_admin_token()
+            assert token is None
+
+    @pytest.mark.asyncio
+    async def test_migrate_existing_rooms_to_space_success(self, space_manager):
+        """Test migrate_existing_rooms_to_space successfully migrates rooms"""
+        space_manager.space_id = "!space:test.com"
+
+        # Create mock agent mappings
+        mock_mapping1 = Mock()
+        mock_mapping1.room_id = "!room1:test.com"
+        mock_mapping1.room_created = True
+        mock_mapping1.agent_name = "Agent 1"
+
+        mock_mapping2 = Mock()
+        mock_mapping2.room_id = "!room2:test.com"
+        mock_mapping2.room_created = True
+        mock_mapping2.agent_name = "Agent 2"
+
+        agent_mappings = {
+            "agent-1": mock_mapping1,
+            "agent-2": mock_mapping2
+        }
+
+        # Mock add_room_to_space to return success
+        with patch.object(space_manager, 'add_room_to_space', new_callable=AsyncMock) as mock_add:
+            mock_add.return_value = True
+
+            count = await space_manager.migrate_existing_rooms_to_space(agent_mappings)
+
+            assert count == 2
+            assert mock_add.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_migrate_existing_rooms_no_space(self, space_manager):
+        """Test migrate_existing_rooms_to_space returns 0 when no space exists"""
+        space_manager.space_id = None
+
+        agent_mappings = {"agent-1": Mock()}
+
+        count = await space_manager.migrate_existing_rooms_to_space(agent_mappings)
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_load_space_config_file_not_found(self, space_manager):
+        """Test load_space_config handles missing config file"""
+        import tempfile
+        import os
+
+        # Use a non-existent file path
+        with tempfile.TemporaryDirectory() as tmpdir:
+            space_manager.space_config_file = os.path.join(tmpdir, "nonexistent.json")
+
+            # Should not raise exception
+            await space_manager.load_space_config()
+
+            # space_id should remain None
+            assert space_manager.space_id is None
+
+    @pytest.mark.asyncio
+    async def test_save_space_config_success(self, space_manager):
+        """Test save_space_config successfully saves configuration"""
+        import tempfile
+        import json
+        import os
+
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+            config_file = f.name
+
+        try:
+            space_manager.space_config_file = config_file
+            space_manager.space_id = "!savedspace:test.com"
+
+            await space_manager.save_space_config()
+
+            # Verify file was created with correct content
+            assert os.path.exists(config_file)
+            with open(config_file, 'r') as f:
+                data = json.load(f)
+                assert data["space_id"] == "!savedspace:test.com"
+                assert "created_at" in data
+                assert data["name"] == "Letta Agents"
+        finally:
+            if os.path.exists(config_file):
+                os.unlink(config_file)
 
 
 class TestRoomCreation:
@@ -268,6 +502,90 @@ class TestRoomCreation:
         # Room should remain the same
         assert mapping.room_id == "!existing:test.com"
         assert mapping.room_created is True
+
+    @pytest.mark.asyncio
+    async def test_update_room_name_no_admin_token(self, room_manager):
+        """Test update_room_name fails when admin token unavailable"""
+        room_manager.get_admin_token = AsyncMock(return_value=None)
+
+        result = await room_manager.update_room_name("!room:test.com", "New Name")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_room_name_http_failure(self, room_manager):
+        """Test update_room_name handles HTTP failures"""
+        room_manager.get_admin_token = AsyncMock(return_value="admin_token")
+
+        # Mock failed HTTP response
+        put_response = MagicMock()
+        put_response.status = 403
+        put_response.text = AsyncMock(return_value="Forbidden")
+        put_response.__aenter__ = AsyncMock(return_value=put_response)
+        put_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_put = MagicMock(return_value=put_response)
+        mock_session = MagicMock()
+        mock_session.put = mock_put
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            result = await room_manager.update_room_name("!room:test.com", "New Name")
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_room_name_exception(self, room_manager):
+        """Test update_room_name handles exceptions"""
+        room_manager.get_admin_token = AsyncMock(side_effect=Exception("Network error"))
+
+        result = await room_manager.update_room_name("!room:test.com", "New Name")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_create_or_update_agent_room_invalid_room_recreates(self, room_manager):
+        """Test create_or_update_agent_room recreates room when invalid room is detected"""
+        agent_id = "agent-123"
+
+        mapping = AgentUserMapping(
+            agent_id="agent-123",
+            agent_name="Test Agent",
+            matrix_user_id="@agent_123:test.com",
+            matrix_password="password",
+            created=True,
+            room_id="!invalid:test.com",  # Invalid room
+            room_created=True,
+            invitation_status={}
+        )
+
+        # Mock check_room_exists to return False (room doesn't exist)
+        room_manager.space_manager.check_room_exists = AsyncMock(return_value=False)
+
+        # Mock HTTP responses for room creation
+        login_response = MagicMock()
+        login_response.status = 200
+        login_response.json = AsyncMock(return_value={"access_token": "token123"})
+        login_response.__aenter__ = AsyncMock(return_value=login_response)
+        login_response.__aexit__ = AsyncMock(return_value=None)
+
+        create_room_response = MagicMock()
+        create_room_response.status = 200
+        create_room_response.json = AsyncMock(return_value={"room_id": "!newroom:test.com"})
+        create_room_response.__aenter__ = AsyncMock(return_value=create_room_response)
+        create_room_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_post = MagicMock(side_effect=[login_response, create_room_response, login_response, login_response])
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            await room_manager.create_or_update_agent_room(agent_id, mapping)
+
+            # Room ID should be updated to the new room
+            assert mapping.room_id == "!newroom:test.com"
+            # Invalid room info should have been cleared and recreated
+            assert mapping.room_created is True
 
     @pytest.mark.asyncio
     async def test_auto_accept_invitations_tracking(self, room_manager):
