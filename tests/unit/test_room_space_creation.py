@@ -122,6 +122,7 @@ class TestRoomCreation:
         mock_space_manager = Mock()
         mock_space_manager.get_space_id.return_value = "!space:test.com"
         mock_space_manager.add_room_to_space = AsyncMock(return_value=True)
+        mock_space_manager.check_room_exists = AsyncMock(return_value=True)  # Assume rooms exist by default
         
         mock_user_manager = Mock()
         mock_user_manager.get_admin_token = AsyncMock(return_value="admin_token")
@@ -254,14 +255,19 @@ class TestRoomCreation:
             matrix_password="password",
             created=True,
             room_id="!existing:test.com",  # Room already exists
+            room_created=True,  # Mark room as created
             invitation_status={}
         )
         
-        # Should skip room creation since room_id is already set
+        # Explicitly set check_room_exists to return True for the existing room
+        room_manager.space_manager.check_room_exists = AsyncMock(return_value=True)
+        
+        # Should skip room creation since room_id is already set and room exists
         await room_manager.create_or_update_agent_room(agent_id, mapping)
         
         # Room should remain the same
         assert mapping.room_id == "!existing:test.com"
+        assert mapping.room_created is True
 
     @pytest.mark.asyncio
     async def test_auto_accept_invitations_tracking(self, room_manager):

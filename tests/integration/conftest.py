@@ -132,6 +132,35 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
     mock_letta_agent_detail_response.__aenter__ = AsyncMock(return_value=mock_letta_agent_detail_response)
     mock_letta_agent_detail_response.__aexit__ = AsyncMock(return_value=None)
 
+    # Mock Letta agent messages response (for history import)
+    mock_letta_messages_response = AsyncMock()
+    mock_letta_messages_response.status = 200
+    mock_letta_messages_response.json = AsyncMock(return_value={
+        "items": []  # Empty history for tests
+    })
+    mock_letta_messages_response.__aenter__ = AsyncMock(return_value=mock_letta_messages_response)
+    mock_letta_messages_response.__aexit__ = AsyncMock(return_value=None)
+
+    # Mock Matrix room join response
+    mock_room_join_response = AsyncMock()
+    mock_room_join_response.status = 200
+    mock_room_join_response.json = AsyncMock(return_value={
+        "room_id": mock_room_id
+    })
+    mock_room_join_response.__aenter__ = AsyncMock(return_value=mock_room_join_response)
+    mock_room_join_response.__aexit__ = AsyncMock(return_value=None)
+
+    # Mock Matrix user registration response (v3 API)
+    mock_register_v3_response = AsyncMock()
+    mock_register_v3_response.status = 200
+    mock_register_v3_response.json = AsyncMock(return_value={
+        "user_id": "@agent_test:mock.matrix.test",
+        "access_token": "agent_token_mock",
+        "device_id": "AGENT_DEVICE"
+    })
+    mock_register_v3_response.__aenter__ = AsyncMock(return_value=mock_register_v3_response)
+    mock_register_v3_response.__aexit__ = AsyncMock(return_value=None)
+
     # Mock generic success response (for PUT, DELETE, etc.)
     mock_success_response = AsyncMock()
     mock_success_response.status = 200
@@ -147,6 +176,9 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
 
         if "login" in url_lower:
             return mock_login_response
+        elif "join" in url_lower:
+            # Room join endpoint: POST /rooms/{id}/join
+            return mock_room_join_response
         elif "createroom" in url_lower:
             # Check if it's a space creation (has "type": "m.space")
             json_data = kwargs.get('json', {})
@@ -155,7 +187,11 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
                 return mock_space_create_response
             else:
                 return mock_room_create_response
-        elif "register" in url_lower or "v2/users" in url_lower:
+        elif "register" in url_lower:
+            # Matrix user registration (v3 API)
+            return mock_register_v3_response
+        elif "v2/users" in url_lower:
+            # Old Matrix admin API user creation
             return mock_user_create_response
         else:
             return mock_success_response
@@ -164,11 +200,16 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
         """Mock GET requests"""
         url_lower = url.lower()
 
-        if "letta" in url_lower and "agents" in url_lower:
-            # Check if it's a list or detail request
-            if url.rstrip('/').split('/')[-1] == 'agents':
+        if "letta" in url_lower or ("agents" in url_lower and ":" in url):
+            # Letta API endpoints
+            if "messages" in url_lower:
+                # GET /agents/{id}/messages
+                return mock_letta_messages_response
+            elif url.rstrip('/').split('/')[-1] == 'agents' or 'limit=' in url:
+                # GET /agents (list with pagination)
                 return mock_letta_agents_response
             else:
+                # GET /agents/{id} (detail)
                 return mock_letta_agent_detail_response
         else:
             return mock_success_response
@@ -200,13 +241,14 @@ def patched_http_session(mock_http_session):
     """
     Patch the global HTTP session across all modules
 
-    This fixture patches get_global_session in all relevant modules to return
-    the mocked session, ensuring all HTTP calls are intercepted.
+    This fixture patches both get_global_session AND aiohttp.ClientSession
+    in all relevant modules to return the mocked session, ensuring all HTTP
+    calls are intercepted regardless of how sessions are created.
     """
     async def mock_get_global_session():
         return mock_http_session
 
-    # List of modules that use get_global_session
+    # List of modules that use get_global_session or aiohttp.ClientSession
     modules_to_patch = [
         'src.core.agent_user_manager',
         'src.core.space_manager',
@@ -215,8 +257,16 @@ def patched_http_session(mock_http_session):
     ]
 
     patchers = []
+
+    # Only patch get_global_session where it exists (agent_user_manager)
+    patcher = patch('src.core.agent_user_manager.get_global_session', side_effect=mock_get_global_session)
+    patcher.start()
+    patchers.append(patcher)
+
+    # CRITICAL FIX: Patch aiohttp.ClientSession directly in ALL modules
+    # This catches cases where code creates sessions with "async with aiohttp.ClientSession()"
     for module in modules_to_patch:
-        patcher = patch(f'{module}.get_global_session', side_effect=mock_get_global_session)
+        patcher = patch(f'{module}.aiohttp.ClientSession', return_value=mock_http_session)
         patcher.start()
         patchers.append(patcher)
 

@@ -58,7 +58,8 @@ def temp_data_dir():
 @pytest.fixture
 def mock_aiohttp_session():
     """Mock aiohttp ClientSession for HTTP requests"""
-    session = AsyncMock(spec=aiohttp.ClientSession)
+    # Don't use spec= because aiohttp.ClientSession may already be mocked
+    session = AsyncMock()
 
     # Mock response object
     response = AsyncMock()

@@ -263,7 +263,8 @@ class TestAdminToken:
 
         manager = AgentUserManager(mock_config)
 
-        with patch('src.core.agent_user_manager.get_global_session', return_value=mock_aiohttp_session):
+        # Patch aiohttp.ClientSession in user_manager since get_admin_token uses it directly
+        with patch('src.core.user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
             token = await manager.get_admin_token()
 
         assert token is None
