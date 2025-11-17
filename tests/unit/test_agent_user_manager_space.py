@@ -572,13 +572,17 @@ class TestUpdateRoomName:
                         assert success is True
 
     @pytest.mark.asyncio
-    async def test_update_room_name_no_admin_token(self, mock_config):
+    async def test_update_room_name_no_admin_token(self, mock_config, mock_aiohttp_session):
         """Test updating room name when admin token is unavailable"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-            with patch.object(manager, 'get_admin_token', return_value=None):
+            # Patch the callback in room_manager since it was captured during init
+            async def no_token():
+                return None
+            
+            with patch.object(manager.room_manager, 'get_admin_token', side_effect=no_token):
                 success = await manager.update_room_name(
                     "!room123:matrix.oculair.ca",
                     "New Agent Name"
@@ -622,7 +626,11 @@ class TestUpdateRoomName:
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-            with patch.object(manager, 'get_admin_token', side_effect=Exception("Network error")):
+            # Patch the callback in room_manager since it was captured during init
+            async def failing_get_token():
+                raise Exception("Network error")
+            
+            with patch.object(manager.room_manager, 'get_admin_token', side_effect=failing_get_token):
                 success = await manager.update_room_name(
                     "!room123:matrix.oculair.ca",
                     "New Agent Name"
