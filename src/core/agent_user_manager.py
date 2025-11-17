@@ -344,8 +344,32 @@ class AgentUserManager:
                 logger.warning("Failed to create Letta Agents space, rooms will not be organized")
                 print("[AGENT_SYNC] Failed to create Letta Agents space, rooms will not be organized", flush=True)
         else:
-            logger.info(f"Using existing Letta Agents space: {self.space_manager.get_space_id()}")
-            print(f"[AGENT_SYNC] Using existing Letta Agents space: {self.space_manager.get_space_id()}", flush=True)
+            # Validate existing space
+            existing_space_id = self.space_manager.get_space_id()
+            if existing_space_id:
+                logger.info(f"Validating existing Letta Agents space: {existing_space_id}")
+                print(f"[AGENT_SYNC] Validating existing Letta Agents space: {existing_space_id}", flush=True)
+                
+                space_valid = await self.space_manager.check_room_exists(existing_space_id)
+                if not space_valid:
+                    logger.warning(f"Space {existing_space_id} is invalid, recreating")
+                    print(f"[AGENT_SYNC] Space {existing_space_id} is invalid, recreating", flush=True)
+                    
+                    # Clear the invalid space and create a new one
+                    self.space_manager.space_id = None
+                    await self.space_manager.save_space_config()
+                    
+                    space_id = await self.space_manager.create_letta_agents_space()
+                    if space_id:
+                        logger.info(f"Successfully recreated Letta Agents space: {space_id}")
+                        print(f"[AGENT_SYNC] Successfully recreated Letta Agents space: {space_id}", flush=True)
+                        space_just_created = True
+                    else:
+                        logger.error("Failed to recreate Letta Agents space")
+                        print("[AGENT_SYNC] Failed to recreate Letta Agents space", flush=True)
+                else:
+                    logger.info(f"Using existing Letta Agents space: {existing_space_id}")
+                    print(f"[AGENT_SYNC] Using existing Letta Agents space: {existing_space_id}", flush=True)
 
         # Get current Letta agents
         agents = await self.get_letta_agents()
