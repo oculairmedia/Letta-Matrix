@@ -406,10 +406,21 @@ class AgentUserManager:
                         logger.info(f"Creating room for existing agent {agent['name']}")
                         print(f"[AGENT_SYNC] Creating room for existing agent {agent['name']}", flush=True)
                         await self.create_or_update_agent_room(agent["id"])
-                    # If room exists, ensure invitations are accepted
+                    # If room exists, validate it first before accepting invitations
                     elif mapping.created and mapping.room_created and mapping.room_id:
-                        logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
-                        await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
+                        # Validate room still exists and is valid
+                        room_exists = await self.space_manager.check_room_exists(mapping.room_id)
+                        if not room_exists:
+                            logger.warning(f"Room {mapping.room_id} for {agent['name']} is invalid, recreating")
+                            print(f"[AGENT_SYNC] Room {mapping.room_id} for {agent['name']} is invalid, recreating", flush=True)
+                            mapping.room_id = None
+                            mapping.room_created = False
+                            await self.save_mappings()
+                            # Recreate the room
+                            await self.create_or_update_agent_room(agent["id"])
+                        else:
+                            logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
+                            await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
         # TODO: Optionally handle removed agents (deactivate users?)
         removed_agents = existing_agent_ids - current_agent_ids
         if removed_agents:
