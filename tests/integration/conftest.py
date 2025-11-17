@@ -7,7 +7,7 @@ requiring live Matrix homeserver or Letta API.
 import pytest
 import tempfile
 import os
-from unittest.mock import Mock, AsyncMock, MagicMock, patch
+from unittest.mock import Mock, AsyncMock, patch
 from dataclasses import dataclass
 
 
@@ -72,10 +72,10 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
     This fixture provides a fully mocked aiohttp ClientSession with appropriate
     responses for all common API calls used in integration tests.
     """
-    mock_session = MagicMock()
+    mock_session = AsyncMock()
 
     # Mock Matrix login response
-    mock_login_response = MagicMock()
+    mock_login_response = AsyncMock()
     mock_login_response.status = 200
     mock_login_response.json = AsyncMock(return_value={
         "access_token": mock_access_token,
@@ -87,7 +87,7 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
     mock_login_response.__aexit__ = AsyncMock(return_value=None)
 
     # Mock space creation response
-    mock_space_create_response = MagicMock()
+    mock_space_create_response = AsyncMock()
     mock_space_create_response.status = 200
     mock_space_create_response.json = AsyncMock(return_value={
         "room_id": mock_space_id
@@ -96,7 +96,7 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
     mock_space_create_response.__aexit__ = AsyncMock(return_value=None)
 
     # Mock room creation response
-    mock_room_create_response = MagicMock()
+    mock_room_create_response = AsyncMock()
     mock_room_create_response.status = 200
     mock_room_create_response.json = AsyncMock(return_value={
         "room_id": mock_room_id
@@ -105,7 +105,7 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
     mock_room_create_response.__aexit__ = AsyncMock(return_value=None)
 
     # Mock user creation response
-    mock_user_create_response = MagicMock()
+    mock_user_create_response = AsyncMock()
     mock_user_create_response.status = 200
     mock_user_create_response.json = AsyncMock(return_value={
         "name": "@new_user:mock.matrix.test",
@@ -115,14 +115,14 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
     mock_user_create_response.__aexit__ = AsyncMock(return_value=None)
 
     # Mock Letta agents list response
-    mock_letta_agents_response = MagicMock()
+    mock_letta_agents_response = AsyncMock()
     mock_letta_agents_response.status = 200
     mock_letta_agents_response.json = AsyncMock(return_value=mock_letta_agents)
     mock_letta_agents_response.__aenter__ = AsyncMock(return_value=mock_letta_agents_response)
     mock_letta_agents_response.__aexit__ = AsyncMock(return_value=None)
 
     # Mock Letta agent details response
-    mock_letta_agent_detail_response = MagicMock()
+    mock_letta_agent_detail_response = AsyncMock()
     mock_letta_agent_detail_response.status = 200
     mock_letta_agent_detail_response.json = AsyncMock(return_value={
         "id": "agent-001",
@@ -133,7 +133,7 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
     mock_letta_agent_detail_response.__aexit__ = AsyncMock(return_value=None)
 
     # Mock generic success response (for PUT, DELETE, etc.)
-    mock_success_response = MagicMock()
+    mock_success_response = AsyncMock()
     mock_success_response.status = 200
     mock_success_response.json = AsyncMock(return_value={})
     mock_success_response.text = AsyncMock(return_value="OK")
@@ -181,11 +181,11 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
         """Mock DELETE requests"""
         return mock_success_response
 
-    # Assign mock methods using MagicMock to support side_effect properly
-    mock_session.post = MagicMock(side_effect=mock_post)
-    mock_session.get = MagicMock(side_effect=mock_get)
-    mock_session.put = MagicMock(side_effect=mock_put)
-    mock_session.delete = MagicMock(side_effect=mock_delete)
+    # Assign mock methods
+    mock_session.post = Mock(side_effect=mock_post)
+    mock_session.get = Mock(side_effect=mock_get)
+    mock_session.put = Mock(side_effect=mock_put)
+    mock_session.delete = Mock(side_effect=mock_delete)
     mock_session.closed = False
 
     # Mock context manager methods

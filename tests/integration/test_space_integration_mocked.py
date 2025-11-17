@@ -97,10 +97,10 @@ class MockedIntegrationTest:
         """Set up HTTP mocks for Matrix and Letta API calls"""
 
         # Create a mock session
-        mock_session = MagicMock()
+        mock_session = AsyncMock()
 
         # Mock Matrix login response
-        mock_login_response = MagicMock()
+        mock_login_response = AsyncMock()
         mock_login_response.status = 200
         mock_login_response.json = AsyncMock(return_value={
             "access_token": self.mock_access_token,
@@ -111,7 +111,7 @@ class MockedIntegrationTest:
         mock_login_response.__aexit__ = AsyncMock(return_value=None)
 
         # Mock space creation response
-        mock_space_create_response = MagicMock()
+        mock_space_create_response = AsyncMock()
         mock_space_create_response.status = 200
         mock_space_create_response.json = AsyncMock(return_value={
             "room_id": self.mock_space_id
@@ -120,7 +120,7 @@ class MockedIntegrationTest:
         mock_space_create_response.__aexit__ = AsyncMock(return_value=None)
 
         # Mock room creation response
-        mock_room_create_response = MagicMock()
+        mock_room_create_response = AsyncMock()
         mock_room_create_response.status = 200
         mock_room_create_response.json = AsyncMock(return_value={
             "room_id": self.mock_room_id
@@ -129,14 +129,14 @@ class MockedIntegrationTest:
         mock_room_create_response.__aexit__ = AsyncMock(return_value=None)
 
         # Mock Letta agents list response
-        mock_letta_agents_response = MagicMock()
+        mock_letta_agents_response = AsyncMock()
         mock_letta_agents_response.status = 200
         mock_letta_agents_response.json = AsyncMock(return_value=self.mock_agents)
         mock_letta_agents_response.__aenter__ = AsyncMock(return_value=mock_letta_agents_response)
         mock_letta_agents_response.__aexit__ = AsyncMock(return_value=None)
 
         # Mock generic success response (for PUT, etc.)
-        mock_success_response = MagicMock()
+        mock_success_response = AsyncMock()
         mock_success_response.status = 200
         mock_success_response.json = AsyncMock(return_value={})
         mock_success_response.__aenter__ = AsyncMock(return_value=mock_success_response)
@@ -163,23 +163,24 @@ class MockedIntegrationTest:
         def mock_put(url, **kwargs):
             return mock_success_response
 
-        mock_session.post = MagicMock(side_effect=mock_post)
-        mock_session.get = MagicMock(side_effect=mock_get)
-        mock_session.put = MagicMock(side_effect=mock_put)
+        mock_session.post = Mock(side_effect=mock_post)
+        mock_session.get = Mock(side_effect=mock_get)
+        mock_session.put = Mock(side_effect=mock_put)
         mock_session.closed = False
 
-        # Mock context manager methods
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
+        # Patch the global session getter
+        async def mock_get_global_session():
+            return mock_session
 
-        # Patch aiohttp.ClientSession to return our mock session
-        # This works because all modules use "async with aiohttp.ClientSession() as session:"
-        # Use return_value instead of side_effect so it returns the same instance each time
-        self.patchers = []
-        for module in ['agent_user_manager', 'space_manager', 'user_manager', 'room_manager']:
-            patcher = patch(f'src.core.{module}.aiohttp.ClientSession', return_value=mock_session)
+        # Apply the patch to the manager's modules
+        patch_target = 'src.core.agent_user_manager.get_global_session'
+        self.session_patcher = patch(patch_target, side_effect=mock_get_global_session)
+        self.session_patcher.start()
+
+        # Also patch for space_manager, user_manager, and room_manager
+        for module in ['space_manager', 'user_manager', 'room_manager']:
+            patcher = patch(f'src.core.{module}.get_global_session', side_effect=mock_get_global_session)
             patcher.start()
-            self.patchers.append(patcher)
 
     async def test_space_creation(self):
         """Test creating the Letta Agents space"""
