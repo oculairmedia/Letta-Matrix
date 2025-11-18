@@ -312,8 +312,10 @@ class TestSendToLettaApi:
         assert "500" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_send_to_letta_api_routes_to_correct_agent(self, mock_config, mock_logger, temp_mappings_file):
+    async def test_send_to_letta_api_routes_to_correct_agent(self, mock_config, mock_logger):
         """Test that messages route to the correct agent based on room_id"""
+        import sys
+        
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={
@@ -327,20 +329,42 @@ class TestSendToLettaApi:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
-            with patch('src.matrix.client.os.path.exists', return_value=True):
-                with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                    response = await send_to_letta_api(
-                        message_body="Test message",
-                        sender_id="@user:test.com",
-                        config=mock_config,
-                        logger=mock_logger,
-                        room_id="!agentroom:test.com"  # Should route to agent-001
-                    )
+        # Mock the database mapping lookup
+        mock_mapping = Mock()
+        mock_mapping.agent_id = "agent-001"
+        mock_mapping.agent_name = "TestAgent"
+        
+        mock_db = Mock()
+        mock_db.get_by_room_id = Mock(return_value=mock_mapping)
+        
+        # Create a mock module with our mocked class
+        mock_module = Mock()
+        mock_db_class = Mock(return_value=mock_db)
+        mock_module.AgentMappingDB = mock_db_class
+        
+        # Patch sys.modules to include our mock module
+        original_module = sys.modules.get('src.models.agent_mapping')
+        sys.modules['src.models.agent_mapping'] = mock_module
 
-        # Check that the correct agent URL was called
-        call_args = mock_session.post.call_args
-        assert "agent-001" in call_args[0][0]  # URL should contain agent-001
+        try:
+            with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+                response = await send_to_letta_api(
+                    message_body="Test message",
+                    sender_id="@user:test.com",
+                    config=mock_config,
+                    logger=mock_logger,
+                    room_id="!agentroom:test.com"  # Should route to agent-001
+                )
+
+            # Check that the correct agent URL was called
+            call_args = mock_session.post.call_args
+            assert "agent-001" in call_args[0][0]  # URL should contain agent-001
+        finally:
+            # Restore original module
+            if original_module is not None:
+                sys.modules['src.models.agent_mapping'] = original_module
+            else:
+                sys.modules.pop('src.models.agent_mapping', None)
 
     @pytest.mark.asyncio
     async def test_send_to_letta_api_extracts_username_from_sender(self, mock_config, mock_logger):

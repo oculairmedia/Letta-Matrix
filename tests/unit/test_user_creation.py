@@ -278,6 +278,154 @@ class TestUserCreation:
             assert len(password) == 16
             assert password.isalnum()
 
+    @pytest.mark.asyncio
+    async def test_update_display_name_success(self, user_manager):
+        """Test successfully updating display name with admin privileges"""
+        # Mock get_admin_token
+        with patch.object(user_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = "admin_token_123"
+
+            # Mock successful HTTP PUT response
+            mock_response = MagicMock()
+            mock_response.status = 200
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=None)
+
+            mock_put = MagicMock(return_value=mock_response)
+            mock_session = MagicMock()
+            mock_session.put = mock_put
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+
+            with patch('aiohttp.ClientSession', return_value=mock_session):
+                result = await user_manager.update_display_name(
+                    "@testuser:test.com",
+                    "New Display Name"
+                )
+
+                assert result is True
+                mock_put.assert_called_once()
+                # Verify the correct URL was called
+                call_args = mock_put.call_args
+                assert "/_matrix/client/r0/profile/" in call_args[0][0]
+                assert "@testuser:test.com" in call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_update_display_name_no_admin_token(self, user_manager):
+        """Test update_display_name fails when admin token unavailable"""
+        # Mock get_admin_token to return None
+        with patch.object(user_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = None
+
+            result = await user_manager.update_display_name(
+                "@testuser:test.com",
+                "New Name"
+            )
+
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_display_name_http_failure(self, user_manager):
+        """Test update_display_name handles HTTP failures"""
+        # Mock get_admin_token
+        with patch.object(user_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = "admin_token"
+
+            # Mock failed HTTP response
+            mock_response = MagicMock()
+            mock_response.status = 403
+            mock_response.text = AsyncMock(return_value="Forbidden")
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=None)
+
+            mock_put = MagicMock(return_value=mock_response)
+            mock_session = MagicMock()
+            mock_session.put = mock_put
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+
+            with patch('aiohttp.ClientSession', return_value=mock_session):
+                result = await user_manager.update_display_name(
+                    "@testuser:test.com",
+                    "New Name"
+                )
+
+                assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_display_name_exception_handling(self, user_manager):
+        """Test update_display_name handles exceptions gracefully"""
+        with patch.object(user_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
+            mock_token.side_effect = Exception("Network error")
+
+            result = await user_manager.update_display_name(
+                "@testuser:test.com",
+                "New Name"
+            )
+
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_set_user_display_name_success(self, user_manager):
+        """Test successfully setting display name with user's own token"""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_put = MagicMock(return_value=mock_response)
+        mock_session = MagicMock()
+        mock_session.put = mock_put
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            result = await user_manager.set_user_display_name(
+                "@user:test.com",
+                "Display Name",
+                "user_access_token"
+            )
+
+            assert result is True
+            mock_put.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_set_user_display_name_failure(self, user_manager):
+        """Test set_user_display_name handles failures"""
+        mock_response = MagicMock()
+        mock_response.status = 403
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_put = MagicMock(return_value=mock_response)
+        mock_session = MagicMock()
+        mock_session.put = mock_put
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            result = await user_manager.set_user_display_name(
+                "@user:test.com",
+                "Display Name",
+                "user_token"
+            )
+
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_set_user_display_name_exception(self, user_manager):
+        """Test set_user_display_name handles exceptions"""
+        with patch('aiohttp.ClientSession') as mock_session:
+            mock_session.side_effect = Exception("Connection error")
+
+            result = await user_manager.set_user_display_name(
+                "@user:test.com",
+                "Display Name",
+                "user_token"
+            )
+
+            assert result is False
+
 
 class TestUserCreationIntegration:
     """Integration tests for user creation workflow"""
