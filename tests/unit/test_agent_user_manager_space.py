@@ -661,7 +661,8 @@ class TestSpaceValidationAndRecreation:
                 
                 with patch.object(manager, 'get_letta_agents', return_value=[]):
                     with patch.object(manager, 'ensure_core_users_exist', return_value=None):
-                        with patch.object(manager.space_manager, 'check_room_exists', return_value=False):
+                        # First call validates old space (False), second call validates new space (True)
+                        with patch.object(manager.space_manager, 'check_room_exists', side_effect=[False, True]):
                             with patch.object(manager.space_manager, 'save_space_config', return_value=None):
                                 with patch.object(manager.space_manager, 'create_letta_agents_space', side_effect=mock_create_space) as mock_create:
                                     with patch.object(manager.space_manager, 'load_space_config', return_value=None):
@@ -713,7 +714,8 @@ class TestSpaceValidationAndRecreation:
                 
                 with patch.object(manager, 'get_letta_agents', return_value=[]):
                     with patch.object(manager, 'ensure_core_users_exist', return_value=None):
-                        with patch.object(manager.space_manager, 'check_room_exists', return_value=False):
+                        # First call validates old space (False), second call validates new space (True)
+                        with patch.object(manager.space_manager, 'check_room_exists', side_effect=[False, True]):
                             with patch.object(manager.space_manager, 'save_space_config', return_value=None):
                                 with patch.object(manager.space_manager, 'create_letta_agents_space', side_effect=mock_create_space):
                                     with patch.object(manager.space_manager, 'load_space_config', return_value=None):
@@ -730,10 +732,12 @@ class TestSpaceValidationAndRecreation:
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
-                manager.space_manager.space_id = "!invalid_space:matrix.oculair.ca"
+                old_space_id = "!invalid_space:matrix.oculair.ca"
+                manager.space_manager.space_id = old_space_id
                 
                 # Mock dependencies
                 with patch.object(manager, 'get_letta_agents', return_value=[]):
+                    # Only one check_room_exists call since create_letta_agents_space returns None
                     with patch.object(manager.space_manager, 'check_room_exists', return_value=False):
                         with patch.object(manager.space_manager, 'save_space_config', return_value=None):
                             with patch.object(manager.space_manager, 'create_letta_agents_space', return_value=None):
@@ -742,8 +746,8 @@ class TestSpaceValidationAndRecreation:
                                         # Should not raise exception
                                         await manager.sync_agents_to_users()
                                         
-                                        # Space ID should be cleared
-                                        assert manager.space_manager.space_id is None
+                                        # Space ID should be restored to old value to prevent recreation loops
+                                        assert manager.space_manager.space_id == old_space_id
 
     @pytest.mark.asyncio
     async def test_sync_skips_validation_when_no_space(self, mock_config):
