@@ -352,21 +352,37 @@ class AgentUserManager:
                 
                 space_valid = await self.space_manager.check_room_exists(existing_space_id)
                 if not space_valid:
-                    logger.warning(f"Space {existing_space_id} is invalid, recreating")
-                    print(f"[AGENT_SYNC] Space {existing_space_id} is invalid, recreating", flush=True)
+                    logger.warning(f"Space {existing_space_id} is invalid, will recreate")
+                    print(f"[AGENT_SYNC] Space {existing_space_id} is invalid, will recreate", flush=True)
                     
-                    # Clear the invalid space and create a new one
+                    # Clear the invalid space ID but don't save yet
+                    old_space_id = existing_space_id
                     self.space_manager.space_id = None
-                    await self.space_manager.save_space_config()
                     
+                    # Create a new space
                     space_id = await self.space_manager.create_letta_agents_space()
                     if space_id:
                         logger.info(f"Successfully recreated Letta Agents space: {space_id}")
                         print(f"[AGENT_SYNC] Successfully recreated Letta Agents space: {space_id}", flush=True)
-                        space_just_created = True
+                        
+                        # Validate the new space works before proceeding
+                        new_space_valid = await self.space_manager.check_room_exists(space_id)
+                        if new_space_valid:
+                            logger.info(f"New space {space_id} validated successfully")
+                            print(f"[AGENT_SYNC] New space {space_id} validated successfully", flush=True)
+                            space_just_created = True
+                        else:
+                            logger.error(f"New space {space_id} failed validation, keeping old space config")
+                            print(f"[AGENT_SYNC] New space {space_id} failed validation", flush=True)
+                            # Restore old space ID to prevent recreation loop
+                            self.space_manager.space_id = old_space_id
+                            await self.space_manager.save_space_config()
                     else:
                         logger.error("Failed to recreate Letta Agents space")
                         print("[AGENT_SYNC] Failed to recreate Letta Agents space", flush=True)
+                        # Restore old space ID to prevent recreation loop
+                        self.space_manager.space_id = old_space_id
+                        await self.space_manager.save_space_config()
                 else:
                     logger.info(f"Using existing Letta Agents space: {existing_space_id}")
                     print(f"[AGENT_SYNC] Using existing Letta Agents space: {existing_space_id}", flush=True)

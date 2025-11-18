@@ -134,7 +134,7 @@ jobs:
         MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
       run: |
         mkdir -p $MATRIX_DATA_DIR
-        pytest --cov=src --cov-config=pytest.ini --cov-report=xml --cov-report=html --cov-report=term-missing
+        pytest --cov=. --cov-report=xml --cov-report=html --cov-report=term-missing
 
     - name: Display coverage summary
       run: |
