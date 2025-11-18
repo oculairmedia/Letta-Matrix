@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Optional, Dict, List
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, ForeignKey, Index
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship, Session
+from sqlalchemy.orm import sessionmaker, relationship, Session, joinedload
+from sqlalchemy.pool import StaticPool
 import os
 
 Base = declarative_base()
@@ -71,8 +72,19 @@ def get_database_url() -> str:
 
 
 def get_engine():
-    """Get SQLAlchemy engine"""
+    """Get SQLAlchemy engine with SQLite or PostgreSQL support"""
     url = get_database_url()
+
+    # SQLite configuration (for testing)
+    if url.startswith('sqlite'):
+        return create_engine(
+            url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            echo=False  # Set to True for SQL debugging
+        )
+
+    # PostgreSQL configuration (for production)
     return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20)
 
 
@@ -105,7 +117,13 @@ class AgentMappingDB:
         """Get mapping by agent ID"""
         session = self.Session()
         try:
-            return session.query(AgentMapping).filter_by(agent_id=agent_id).first()
+            mapping = session.query(AgentMapping).options(
+                joinedload(AgentMapping.invitations)
+            ).filter_by(agent_id=agent_id).first()
+            if mapping:
+                # Expunge to detach from session so we can use it after session closes
+                session.expunge(mapping)
+            return mapping
         finally:
             session.close()
 
@@ -113,7 +131,12 @@ class AgentMappingDB:
         """Get mapping by room ID - used for routing messages"""
         session = self.Session()
         try:
-            return session.query(AgentMapping).filter_by(room_id=room_id).first()
+            mapping = session.query(AgentMapping).options(
+                joinedload(AgentMapping.invitations)
+            ).filter_by(room_id=room_id).first()
+            if mapping:
+                session.expunge(mapping)
+            return mapping
         finally:
             session.close()
 
@@ -121,7 +144,12 @@ class AgentMappingDB:
         """Get mapping by Matrix user ID"""
         session = self.Session()
         try:
-            return session.query(AgentMapping).filter_by(matrix_user_id=matrix_user_id).first()
+            mapping = session.query(AgentMapping).options(
+                joinedload(AgentMapping.invitations)
+            ).filter_by(matrix_user_id=matrix_user_id).first()
+            if mapping:
+                session.expunge(mapping)
+            return mapping
         finally:
             session.close()
 
@@ -129,7 +157,13 @@ class AgentMappingDB:
         """Get all mappings"""
         session = self.Session()
         try:
-            return session.query(AgentMapping).all()
+            mappings = session.query(AgentMapping).options(
+                joinedload(AgentMapping.invitations)
+            ).all()
+            # Expunge all mappings so they can be used after session closes
+            for mapping in mappings:
+                session.expunge(mapping)
+            return mappings
         finally:
             session.close()
 
@@ -150,6 +184,7 @@ class AgentMappingDB:
             session.add(mapping)
             session.commit()
             session.refresh(mapping)
+            session.expunge(mapping)
             return mapping
         finally:
             session.close()
@@ -158,7 +193,9 @@ class AgentMappingDB:
         """Update a mapping"""
         session = self.Session()
         try:
-            mapping = session.query(AgentMapping).filter_by(agent_id=agent_id).first()
+            mapping = session.query(AgentMapping).options(
+                joinedload(AgentMapping.invitations)
+            ).filter_by(agent_id=agent_id).first()
             if not mapping:
                 return None
 
@@ -169,6 +206,45 @@ class AgentMappingDB:
             mapping.updated_at = datetime.utcnow()
             session.commit()
             session.refresh(mapping)
+            session.expunge(mapping)
+            return mapping
+        finally:
+            session.close()
+
+    def upsert(self, agent_id: str, agent_name: str, matrix_user_id: str,
+               matrix_password: str, room_id: Optional[str] = None,
+               room_created: bool = False) -> AgentMapping:
+        """Create or update a mapping (upsert operation)"""
+        session = self.Session()
+        try:
+            # Try to find existing mapping
+            mapping = session.query(AgentMapping).options(
+                joinedload(AgentMapping.invitations)
+            ).filter_by(agent_id=agent_id).first()
+
+            if mapping:
+                # Update existing mapping
+                mapping.agent_name = agent_name
+                mapping.matrix_user_id = matrix_user_id
+                mapping.matrix_password = matrix_password
+                mapping.room_id = room_id
+                mapping.room_created = room_created
+                mapping.updated_at = datetime.utcnow()
+            else:
+                # Create new mapping
+                mapping = AgentMapping(
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    matrix_user_id=matrix_user_id,
+                    matrix_password=matrix_password,
+                    room_id=room_id,
+                    room_created=room_created
+                )
+                session.add(mapping)
+
+            session.commit()
+            session.refresh(mapping)
+            session.expunge(mapping)
             return mapping
         finally:
             session.close()
