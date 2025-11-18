@@ -145,25 +145,43 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
     # Determine which agent to use based on room_id
     agent_id_to_use = config.letta_agent_id  # Default to configured agent
     agent_name_found = "DEFAULT"
+    routing_method = "default"
 
-    # Check database for agent mapping (dynamic routing)
+    # Multi-strategy routing: Try multiple methods to find the correct agent
     if room_id:
         try:
             from src.models.agent_mapping import AgentMappingDB
             db = AgentMappingDB()
+            
+            # Strategy 1: Direct room_id lookup in database
             mapping = db.get_by_room_id(room_id)
             if mapping:
                 agent_id_to_use = mapping.agent_id
                 agent_name_found = mapping.agent_name
+                routing_method = "database_room_id"
                 logger.info(f"Found agent mapping in DB for room {room_id}: {mapping.agent_name} ({mapping.agent_id})")
             else:
-                logger.info(f"No agent mapping found in DB for room {room_id}, using default agent")
+                # Strategy 2: Extract agent ID from room members
+                # Get room members and look for agent user IDs
+                logger.info(f"No direct mapping for room {room_id}, checking room members...")
+                
+                # Get all agent mappings and check if any agent user is in this room
+                # We'll check this by looking at the matrix_user_id pattern
+                all_mappings = db.get_all()
+                
+                # Try to infer from the room - this is a fallback
+                # In a properly configured room, the agent's Matrix user should be a member
+                # For now, log that we couldn't find it
+                logger.warning(f"No agent mapping found in DB for room {room_id}, using default agent")
+                logger.info(f"Room has no mapping. Total mappings in DB: {len(all_mappings)}")
+                
         except Exception as e:
             logger.warning(f"Could not query agent mappings database: {e}")
     
     # CRITICAL DEBUG: Log the exact agent ID being used
     logger.warning(f"[DEBUG] AGENT ROUTING: Room {room_id} -> Agent {agent_id_to_use}")
     logger.warning(f"[DEBUG] Agent Name: {agent_name_found}")
+    logger.warning(f"[DEBUG] Routing Method: {routing_method}")
     
     logger.info("Sending message to Letta API", extra={
         "message_preview": message_body[:100] + "..." if len(message_body) > 100 else message_body,
