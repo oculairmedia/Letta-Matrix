@@ -389,3 +389,117 @@ def mock_invitation_status_model():
     """Mock InvitationStatus model class for unit tests"""
     with patch('src.core.agent_user_manager.InvitationStatus') as mock_model:
         yield mock_model
+
+
+# ============================================================================
+# SQLite Database Fixtures (for integration tests)
+# ============================================================================
+
+@pytest.fixture(scope="session")
+def sqlite_engine():
+    """Create a SQLite engine for the test session
+
+    This fixture creates an in-memory SQLite database that persists for the
+    entire test session. It's shared across all tests but cleaned between
+    individual test runs via the sqlite_db fixture.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import StaticPool
+    from src.models.agent_mapping import Base
+
+    engine = create_engine(
+        'sqlite:///:memory:',
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        echo=False  # Set to True for SQL debugging
+    )
+
+    # Create all tables
+    Base.metadata.create_all(engine)
+
+    yield engine
+
+    # Cleanup
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+@pytest.fixture
+def sqlite_db(sqlite_engine, monkeypatch):
+    """
+    Provide a clean database for each test.
+
+    This fixture:
+    - Uses the shared sqlite_engine from the session
+    - Creates a new AgentMappingDB instance
+    - Clears all data after the test
+
+    Usage:
+        @pytest.mark.integration
+        @pytest.mark.sqlite
+        def test_something(sqlite_db):
+            # Use sqlite_db for database operations
+            sqlite_db.upsert(agent_id="test", ...)
+    """
+    from src.models.agent_mapping import AgentMappingDB, AgentMapping, InvitationStatus
+    from sqlalchemy.orm import sessionmaker
+
+    # Patch get_engine to return our shared engine
+    import src.models.agent_mapping
+    original_get_engine = src.models.agent_mapping.get_engine
+    monkeypatch.setattr(src.models.agent_mapping, 'get_engine', lambda: sqlite_engine)
+
+    # Create database instance (will use our patched get_engine)
+    db = AgentMappingDB()
+
+    yield db
+
+    # Cleanup: clear all data
+    Session = sessionmaker(bind=sqlite_engine)
+    session = Session()
+    try:
+        session.query(InvitationStatus).delete()
+        session.query(AgentMapping).delete()
+        session.commit()
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def sqlite_db_with_data(sqlite_db):
+    """
+    Provide a database pre-populated with test data.
+
+    Useful for tests that need existing data.
+
+    Default test data includes:
+    - agent_id: test-agent-001
+    - agent_name: TestAgent
+    - room_id: !testroom:matrix.test
+
+    Usage:
+        @pytest.mark.integration
+        @pytest.mark.sqlite
+        def test_with_data(sqlite_db_with_data):
+            # Database already has test-agent-001
+            mapping = sqlite_db_with_data.get_by_agent_id("test-agent-001")
+            assert mapping is not None
+    """
+    # Insert test data
+    sqlite_db.upsert(
+        agent_id="test-agent-001",
+        agent_name="TestAgent",
+        matrix_user_id="@test:matrix.test",
+        matrix_password="test_password",
+        room_id="!testroom:matrix.test",
+        room_created=True
+    )
+
+    # Add invitation status
+    sqlite_db.update_invitation_status(
+        agent_id="test-agent-001",
+        invitee="@admin:matrix.test",
+        status="joined"
+    )
+
+    yield sqlite_db
