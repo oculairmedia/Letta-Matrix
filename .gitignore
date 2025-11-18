@@ -108,3 +108,6 @@ tuwunel-data.backup.*/
 # OS files
 .DS_Store
 Thumbs.db
+matrix_client_data/agent_user_mappings.json
+matrix_client_data/letta_space_config.json
+matrix_client_data/matrix_event_dedupe.db

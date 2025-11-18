@@ -96,9 +96,6 @@ class MatrixRoomManager:
 
     async def find_existing_agent_room(self, agent_name: str) -> Optional[str]:
         """Find an existing room for an agent by searching room names"""
-        # TEMPORARY: Always return None to force creation of new rooms
-        return None
-
         try:
             # Get admin token
             admin_token = await self.get_admin_token()

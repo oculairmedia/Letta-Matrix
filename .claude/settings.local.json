@@ -43,7 +43,14 @@
       "Bash(docker-compose start:*)",
       "Bash(git check-ignore:*)",
       "Bash(jq:*)",
-      "Bash(matrix_client_data/agent_user_mappings.json.tmp)"
+      "Bash(matrix_client_data/agent_user_mappings.json.tmp)",
+      "mcp__letta-tools__letta_agent_advanced",
+      "Bash(comm:*)",
+      "Bash(for id in agent-0a2b4b2e-c578-4b04-93d6-00f0e1639507 agent-0b634ec8-f7bb-465a-b67c-a6c65194171e agent-597b5756-2915-4560-ba6b-91005f085166 agent-750cab6e-2b66-456a-8fe1-7c8ea8350149 agent-f2fdf2aa-5b83-4c2d-a926-2e86e6793551 agent-fe8a9291-b49a-4fc1-94c3-1a23b86b6108)",
+      "Bash(do)",
+      "Bash(echo:*)",
+      "Bash(done)",
+      "Bash(python -m pytest:*)"
     ],
     "deny": []
   }
