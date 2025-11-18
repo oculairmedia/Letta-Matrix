@@ -2,12 +2,32 @@
 
 A comprehensive Matrix deployment with Letta AI bot integration and MCP (Model Context Protocol) server support.
 
+## ⚠️ CRITICAL: We Use Tuwunel, NOT Synapse! ⚠️
+
+**THIS DEPLOYMENT USES TUWUNEL AS THE MATRIX HOMESERVER, NOT SYNAPSE!**
+
+- **Homeserver**: Tuwunel (lightweight embedded Matrix server)
+- **NO PostgreSQL**: Tuwunel uses RocksDB (embedded database)
+- **NO Synapse Admin APIs**: Standard Synapse admin endpoints DO NOT work
+- **Admin Tools**: Use Matrix client APIs or Tuwunel-specific tools only
+
+**Common Mistakes to Avoid:**
+- ❌ Trying to use `/_synapse/admin/v1/*` endpoints (they don't exist)
+- ❌ Looking for PostgreSQL database or connection strings
+- ❌ Following Synapse-specific documentation
+- ✅ Use Matrix client API (`/_matrix/client/v3/*`) instead
+- ✅ Remember: Tuwunel is a different server implementation!
+
+See [TUWUNEL_MIGRATION.md](./TUWUNEL_MIGRATION.md) for full details.
+
+---
+
 ## Latest Updates (2025-01-04)
 - **Stable Agent Usernames**: Matrix usernames are now based on agent IDs instead of agent names, ensuring stability even when agents are renamed
 - **Fixed Session Management**: Resolved session scope issues in invitation handling  
 - **Improved Agent Sync**: All agent rooms are properly monitored and agents respond with their own Matrix identities
 
-A complete, self-contained Matrix Synapse server deployment with Element web client and Matrix bot integration.
+A complete, self-contained Matrix deployment with Element web client and Matrix bot integration.
 
 ## Quick Start
 
@@ -24,20 +44,23 @@ A complete, self-contained Matrix Synapse server deployment with Element web cli
 
 ## What's Included
 
-- **Synapse**: Matrix homeserver
-- **PostgreSQL**: Database backend
+- **Tuwunel**: Lightweight Matrix homeserver (NOT Synapse!)
+- **RocksDB**: Embedded database (NO PostgreSQL)
 - **Element Web**: Modern Matrix web client
 - **Nginx**: Reverse proxy for routing
-- **Matrix Client**: Custom bot integration (optional)
+- **Matrix Client**: Custom bot integration with Letta agents
+- **MCP Server**: Model Context Protocol server for tool integration
+- **Letta Agent MCP**: Letta-specific MCP tools and agent management
 
 ## Configuration
 
 The deployment is pre-configured with sensible defaults in `.env`. Key settings:
 
 - **Server Name**: `matrix.oculair.ca` (change this to your domain)
-- **Database**: PostgreSQL with persistent storage
-- **Ports**: Exposed on port 8008
+- **Database**: RocksDB embedded in Tuwunel (NO separate database service)
+- **Ports**: Exposed on port 8008 (via nginx proxy)
 - **Registration**: Enabled without verification for easy setup
+- **Tuwunel Data**: Stored in `./tuwunel-data/` directory
 
 ## Customization
 
@@ -54,9 +77,10 @@ server_name your-domain.com;
 
 ### Data Persistence
 All data is stored in local directories:
-- `./synapse-data/`: Synapse configuration and data
-- `./postgres-data/`: Database files
+- `./tuwunel-data/`: Tuwunel's RocksDB database (ALL homeserver data)
+- `./synapse-data/`: Legacy configuration files (registration configs for bridges)
 - `./matrix_store/`: Matrix client session data
+- `./matrix_client_data/`: Agent mappings and space configuration
 
 ## Security Notes
 
