@@ -323,3 +323,69 @@ def mock_time():
     """Mock time.time() for consistent timestamps"""
     with patch('time.time', return_value=1704067200.0):
         yield 1704067200.0
+
+
+# ============================================================================
+# Database Mock Fixtures
+# ============================================================================
+
+@pytest.fixture
+def mock_agent_mapping_db():
+    """Mock AgentMappingDB for unit tests
+
+    This fixture mocks the database layer to avoid needing a real PostgreSQL
+    instance during unit tests. Use this for testing AgentUserManager logic
+    without database dependencies.
+
+    Usage:
+        @pytest.mark.asyncio
+        async def test_something(self, mock_agent_mapping_db):
+            # mock_agent_mapping_db is already patched and active
+            manager = AgentUserManager(config)
+            await manager.save_mappings()
+            # Verify database methods were called
+            assert mock_agent_mapping_db.upsert.called
+    """
+    # Create mock database instance
+    db_instance = Mock()
+
+    # Mock the methods used by AgentUserManager
+    db_instance.get_all = Mock(return_value=[])
+    db_instance.get_by_room_id = Mock(return_value=None)
+    db_instance.get_by_agent_id = Mock(return_value=None)
+    db_instance.upsert = Mock()
+    db_instance.delete = Mock()
+
+    # Create a mock module with our mocked class
+    mock_module = Mock()
+    mock_db_class = Mock(return_value=db_instance)
+    mock_module.AgentMappingDB = mock_db_class
+    mock_module.AgentMapping = Mock()
+    mock_module.InvitationStatus = Mock()
+
+    # Patch sys.modules to include our mock module
+    import sys
+    original_module = sys.modules.get('src.models.agent_mapping')
+    sys.modules['src.models.agent_mapping'] = mock_module
+
+    yield db_instance
+
+    # Restore original module
+    if original_module is not None:
+        sys.modules['src.models.agent_mapping'] = original_module
+    else:
+        sys.modules.pop('src.models.agent_mapping', None)
+
+
+@pytest.fixture
+def mock_agent_mapping_model():
+    """Mock AgentMapping model class for unit tests"""
+    with patch('src.core.agent_user_manager.AgentMapping') as mock_model:
+        yield mock_model
+
+
+@pytest.fixture
+def mock_invitation_status_model():
+    """Mock InvitationStatus model class for unit tests"""
+    with patch('src.core.agent_user_manager.InvitationStatus') as mock_model:
+        yield mock_model

@@ -145,20 +145,21 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
     # Determine which agent to use based on room_id
     agent_id_to_use = config.letta_agent_id  # Default to configured agent
     agent_name_found = "DEFAULT"
-    
-    # Check if we have agent mappings to determine the right agent
-    if room_id and os.path.exists("/app/data/agent_user_mappings.json"):
+
+    # Check database for agent mapping (dynamic routing)
+    if room_id:
         try:
-            with open("/app/data/agent_user_mappings.json", 'r') as f:
-                mappings = json.load(f)
-                for agent_id, mapping in mappings.items():
-                    if mapping.get("room_id") == room_id:
-                        agent_id_to_use = agent_id
-                        agent_name_found = mapping.get('agent_name', 'UNKNOWN')
-                        logger.info(f"Found agent mapping for room {room_id}: {mapping.get('agent_name')} ({agent_id})")
-                        break
+            from src.models.agent_mapping import AgentMappingDB
+            db = AgentMappingDB()
+            mapping = db.get_by_room_id(room_id)
+            if mapping:
+                agent_id_to_use = mapping.agent_id
+                agent_name_found = mapping.agent_name
+                logger.info(f"Found agent mapping in DB for room {room_id}: {mapping.agent_name} ({mapping.agent_id})")
+            else:
+                logger.info(f"No agent mapping found in DB for room {room_id}, using default agent")
         except Exception as e:
-            logger.warning(f"Could not load agent mappings: {e}")
+            logger.warning(f"Could not query agent mappings database: {e}")
     
     # CRITICAL DEBUG: Log the exact agent ID being used
     logger.warning(f"[DEBUG] AGENT ROUTING: Room {room_id} -> Agent {agent_id_to_use}")

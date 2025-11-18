@@ -124,44 +124,112 @@ class AgentUserManager:
         self.user_manager.admin_token = value
 
     async def load_existing_mappings(self):
-        """Load existing agent-user mappings from file"""
+        """Load existing agent-user mappings from database"""
         try:
-            if os.path.exists(self.mappings_file):
-                with open(self.mappings_file, 'r') as f:
-                    data = json.load(f)
-                    for agent_id, mapping_data in data.items():
-                        # Handle backward compatibility for new invitation_status field
-                        if "invitation_status" not in mapping_data:
-                            mapping_data["invitation_status"] = None
-                        self.mappings[agent_id] = AgentUserMapping(**mapping_data)
-                logger.info(f"Loaded {len(self.mappings)} existing agent-user mappings")
-            else:
-                logger.info("No existing mappings file found")
+            from src.models.agent_mapping import AgentMappingDB
+            db = AgentMappingDB()
+            db_mappings = db.get_all()
+
+            for db_mapping in db_mappings:
+                mapping_dict = db_mapping.to_dict()
+                # Handle backward compatibility for new invitation_status field
+                if "invitation_status" not in mapping_dict:
+                    mapping_dict["invitation_status"] = None
+                self.mappings[db_mapping.agent_id] = AgentUserMapping(**mapping_dict)
+
+            logger.info(f"Loaded {len(self.mappings)} existing agent-user mappings from database")
         except Exception as e:
-            logger.error(f"Error loading mappings: {e}")
+            logger.error(f"Error loading mappings from database: {e}")
+            # Fallback to JSON file if DB fails
+            logger.info("Attempting to fallback to JSON file...")
+            try:
+                if os.path.exists(self.mappings_file):
+                    with open(self.mappings_file, 'r') as f:
+                        data = json.load(f)
+                        for agent_id, mapping_data in data.items():
+                            if "invitation_status" not in mapping_data:
+                                mapping_data["invitation_status"] = None
+                            self.mappings[agent_id] = AgentUserMapping(**mapping_data)
+                    logger.info(f"Loaded {len(self.mappings)} mappings from JSON fallback")
+            except Exception as fallback_error:
+                logger.error(f"Fallback to JSON also failed: {fallback_error}")
 
 
     async def save_mappings(self):
-        """Save agent-user mappings to file"""
+        """Save agent-user mappings to database"""
         try:
-            data = {}
-            for agent_id, mapping in self.mappings.items():
-                data[agent_id] = {
-                    "agent_id": mapping.agent_id,
-                    "agent_name": mapping.agent_name,
-                    "matrix_user_id": mapping.matrix_user_id,
-                    "matrix_password": mapping.matrix_password,
-                    "created": mapping.created,
-                    "room_id": mapping.room_id,
-                    "room_created": mapping.room_created,
-                    "invitation_status": mapping.invitation_status
-                }
+            from src.models.agent_mapping import AgentMappingDB, get_session_maker
+            from src.models.agent_mapping import AgentMapping as DBAgentMapping, InvitationStatus
+            from sqlalchemy.dialects.postgresql import insert
 
-            with open(self.mappings_file, 'w') as f:
-                json.dump(data, f, indent=2)
-            logger.info(f"Saved {len(self.mappings)} agent-user mappings")
+            Session = get_session_maker()
+            session = Session()
+
+            try:
+                for agent_id, mapping in self.mappings.items():
+                    # Upsert agent mapping (insert or update)
+                    stmt = insert(DBAgentMapping).values(
+                        agent_id=mapping.agent_id,
+                        agent_name=mapping.agent_name,
+                        matrix_user_id=mapping.matrix_user_id,
+                        matrix_password=mapping.matrix_password,
+                        room_id=mapping.room_id,
+                        room_created=mapping.room_created
+                    ).on_conflict_do_update(
+                        index_elements=['agent_id'],
+                        set_={
+                            'agent_name': mapping.agent_name,
+                            'room_id': mapping.room_id,
+                            'room_created': mapping.room_created
+                        }
+                    )
+                    session.execute(stmt)
+
+                    # Update invitation statuses
+                    if mapping.invitation_status:
+                        for invitee, status in mapping.invitation_status.items():
+                            stmt = insert(InvitationStatus).values(
+                                agent_id=agent_id,
+                                invitee=invitee,
+                                status=status
+                            ).on_conflict_do_update(
+                                index_elements=['agent_id', 'invitee'],
+                                set_={'status': status}
+                            )
+                            session.execute(stmt)
+
+                session.commit()
+                logger.info(f"Saved {len(self.mappings)} agent-user mappings to database")
+
+            except Exception as db_error:
+                session.rollback()
+                raise db_error
+            finally:
+                session.close()
+
         except Exception as e:
-            logger.error(f"Error saving mappings: {e}")
+            logger.error(f"Error saving mappings to database: {e}")
+            # Fallback to JSON file
+            logger.info("Attempting to fallback to JSON file...")
+            try:
+                data = {}
+                for agent_id, mapping in self.mappings.items():
+                    data[agent_id] = {
+                        "agent_id": mapping.agent_id,
+                        "agent_name": mapping.agent_name,
+                        "matrix_user_id": mapping.matrix_user_id,
+                        "matrix_password": mapping.matrix_password,
+                        "created": mapping.created,
+                        "room_id": mapping.room_id,
+                        "room_created": mapping.room_created,
+                        "invitation_status": mapping.invitation_status
+                    }
+
+                with open(self.mappings_file, 'w') as f:
+                    json.dump(data, f, indent=2)
+                logger.info(f"Saved {len(self.mappings)} agent-user mappings to JSON fallback")
+            except Exception as fallback_error:
+                logger.error(f"Fallback to JSON also failed: {fallback_error}")
 
     async def get_letta_agents(self) -> List[dict]:
         """Get all Letta agents from agents endpoint with pagination support"""

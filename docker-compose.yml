@@ -30,6 +30,7 @@ services:
       - .env
     environment:
       - MATRIX_HOMESERVER_URL=http://tuwunel:6167
+      - DATABASE_URL=postgresql://letta:letta@192.168.50.90:5432/matrix_letta
     volumes:
       - ./matrix_store:/app/matrix_store
       - ./matrix_client_data:/app/data
