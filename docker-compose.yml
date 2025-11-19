@@ -103,7 +103,10 @@ services:
       - "homepage.href=http://192.168.50.90:8016"
       - "homepage.description=Matrix MCP server for Claude integration"
   letta-agent-mcp:
-    image: ghcr.io/oculairmedia/letta-matrix-mcp:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.letta-agent-mcp
+    image: letta-matrix-mcp:local
     restart: unless-stopped
     env_file:
       - .env
