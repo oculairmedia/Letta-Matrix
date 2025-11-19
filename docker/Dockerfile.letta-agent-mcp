@@ -30,5 +30,5 @@ EXPOSE 8017
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8017/health')" || exit 1
 
-# Start the Letta Agent MCP server
-CMD ["python", "-m", "src.mcp.http_server"]
+# Start the Letta Agent MCP server (inter-agent communication)
+CMD ["python", "-m", "src.mcp.letta_mcp"]
