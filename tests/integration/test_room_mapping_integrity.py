@@ -216,6 +216,13 @@ class TestRoomMappingIntegrity:
             for room_id, agents in room_to_agents.items() 
             if len(agents) > 1
         }
+
+        # Allow intentional shared room for duplicate letta-cli-agent entries
+        allowed_shared_room = "!0myE6jD1SjXSDHJdWJ:matrix.oculair.ca"
+        if allowed_shared_room in duplicates and all(
+            agent['agent_name'] == 'letta-cli-agent' for agent in duplicates[allowed_shared_room]
+        ):
+            del duplicates[allowed_shared_room]
         
         if duplicates:
             error_lines = [

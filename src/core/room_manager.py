@@ -94,6 +94,134 @@ class MatrixRoomManager:
             logger.error(f"Error updating room name for {room_id}: {e}")
             return False
 
+    async def check_admin_in_room(self, room_id: str) -> bool:
+        """Check if admin user is a member of the given room"""
+        try:
+            admin_token = await self.get_admin_token()
+            if not admin_token:
+                logger.warning("Failed to get admin token, cannot check room membership")
+                return False
+
+            # Check room members
+            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/joined_members"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json"
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        members = data.get("joined", {})
+                        # Check if @admin:matrix.oculair.ca is in the room
+                        is_member = "@admin:matrix.oculair.ca" in members
+                        logger.debug(f"Admin membership check for room {room_id}: {is_member}")
+                        return is_member
+                    elif response.status == 403:
+                        # Admin not in room (forbidden access)
+                        logger.debug(f"Admin not in room {room_id} (403 forbidden)")
+                        return False
+                    else:
+                        logger.warning(f"Failed to check room members: {response.status}")
+                        return False
+
+        except Exception as e:
+            logger.error(f"Error checking admin membership in room {room_id}: {e}")
+            return False
+
+    async def invite_admin_to_room(self, room_id: str, agent_name: str) -> bool:
+        """Invite admin user to a room using the agent's credentials"""
+        try:
+            # We need to invite as a room member (the agent user)
+            # First, get the agent mapping to get credentials
+            from src.models.agent_mapping import AgentMappingDB
+            db = AgentMappingDB()
+            mapping = db.get_by_room_id(room_id)
+            
+            if not mapping:
+                logger.warning(f"Cannot invite admin to room {room_id} - no agent mapping found")
+                return False
+            
+            # Login as the agent user
+            agent_login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
+            agent_username = mapping.matrix_user_id.split(':')[0].replace('@', '')
+            
+            login_data = {
+                "type": "m.login.password",
+                "user": agent_username,
+                "password": mapping.matrix_password
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(agent_login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Failed to login as agent {agent_username} to invite admin: {response.status} - {error_text}")
+                        return False
+                    
+                    agent_auth = await response.json()
+                    agent_token = agent_auth.get("access_token")
+                
+                if not agent_token:
+                    logger.error(f"No token received for agent {agent_username}")
+                    return False
+                
+                # Invite admin to the room
+                invite_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/invite"
+                headers = {
+                    "Authorization": f"Bearer {agent_token}",
+                    "Content-Type": "application/json"
+                }
+                
+                invite_data = {
+                    "user_id": "@admin:matrix.oculair.ca"
+                }
+                
+                async with session.post(invite_url, headers=headers, json=invite_data, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        logger.info(f"✅ Successfully invited admin to room {room_id} for agent {agent_name}")
+                        
+                        # Now auto-accept the invitation
+                        await self._accept_invite_as_admin(room_id)
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to invite admin to room {room_id}: {response.status} - {error_text}")
+                        return False
+        
+        except Exception as e:
+            logger.error(f"Error inviting admin to room {room_id}: {e}")
+            return False
+    
+    async def _accept_invite_as_admin(self, room_id: str) -> bool:
+        """Accept room invitation as admin user"""
+        try:
+            admin_token = await self.get_admin_token()
+            if not admin_token:
+                logger.warning("Failed to get admin token, cannot accept invitation")
+                return False
+            
+            join_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/join"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json"
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        logger.info(f"✅ Admin successfully joined room {room_id}")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.warning(f"Admin could not join room {room_id}: {response.status} - {error_text}")
+                        return False
+        
+        except Exception as e:
+            logger.error(f"Error accepting invitation for admin: {e}")
+            return False
+
     async def find_existing_agent_room(self, agent_name: str) -> Optional[str]:
         """Find an existing room for an agent by searching room names"""
         try:
@@ -152,9 +280,20 @@ class MatrixRoomManager:
             room_exists = await self.space_manager.check_room_exists(mapping.room_id)
             if room_exists:
                 logger.info(f"Room already exists for agent {mapping.agent_name}: {mapping.room_id}")
+                
+                # Check if admin is in the room - if not, don't recreate, just log warning
+                admin_in_room = await self.check_admin_in_room(mapping.room_id)
+                if not admin_in_room:
+                    logger.warning(f"⚠️  Admin not in room {mapping.room_id} for agent {mapping.agent_name}")
+                    logger.warning(f"⚠️  Room exists but admin has no access - not recreating to prevent drift")
+                    logger.warning(f"⚠️  Manual intervention required: invite @admin:matrix.oculair.ca to {mapping.room_id}")
+                    # Still try to auto-accept invitations in case invitation exists
+                    await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
+                    return mapping.room_id
+                
                 # Ensure invitations are accepted
                 await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
-                return
+                return mapping.room_id
             else:
                 logger.warning(f"Room {mapping.room_id} in mapping doesn't exist on server, checking for existing rooms")
                 # Clear the invalid room info
@@ -170,7 +309,7 @@ class MatrixRoomManager:
             await self.save_mappings()
             # Ensure invitations are accepted
             await self.auto_accept_invitations_with_tracking(existing_room_id, mapping)
-            return
+            return existing_room_id
 
         try:
             # First, we need to login as the agent user to create the room

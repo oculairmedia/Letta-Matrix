@@ -115,8 +115,8 @@ class MatrixSpaceManager:
                         logger.info(f"Room {room_id} does not exist")
                         return False
                     if response.status == 403:
-                        logger.warning(f"Room {room_id} exists but access denied (treating as invalid)")
-                        return False
+                        logger.warning(f"Room {room_id} exists but access denied (treating as existing)")
+                        return True
                     if response.status != 200:
                         logger.warning(f"Unexpected response checking room {room_id}: {response.status}")
                         return False

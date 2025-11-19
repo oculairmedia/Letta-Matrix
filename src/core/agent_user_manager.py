@@ -544,10 +544,20 @@ class AgentUserManager:
                         except Exception as e:
                             logger.error(f"Error checking room drift for {agent['name']}: {e}")
                         
-                        # Ensure invitations are accepted
+                        # Ensure invitations are accepted and admin has access
                         if mapping.room_id:
                             logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
                             await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
+                            
+                            # Check if admin is in the room, invite if not
+                            admin_in_room = await self.room_manager.check_admin_in_room(mapping.room_id)
+                            if not admin_in_room:
+                                logger.warning(f"🔔 Admin not in room for {agent['name']}, attempting to invite...")
+                                invite_success = await self.room_manager.invite_admin_to_room(mapping.room_id, agent['name'])
+                                if invite_success:
+                                    logger.info(f"✅ Successfully invited admin to {agent['name']}'s room")
+                                else:
+                                    logger.warning(f"⚠️  Failed to invite admin to {agent['name']}'s room {mapping.room_id}")
         # TODO: Optionally handle removed agents (deactivate users?)
         removed_agents = existing_agent_ids - current_agent_ids
         if removed_agents:
