@@ -499,10 +499,12 @@ class MatrixAgentMessageTool(MCPTool):
                 async with session.post(url, headers=headers, json={}) as resp:
                     if resp.status in [200, 201]:
                         logger.info(f"Agent {agent_user_id} successfully joined/is in room {room_id}")
+                        return
                     elif resp.status == 403:
                         # Not invited, need admin to invite first
                         logger.info(f"Agent not invited to room, using admin to invite")
-                        await self._invite_agent_to_room(agent_user_id, room_id)
+                        # Pass the session to avoid nested sessions
+                        await self._invite_agent_to_room_with_session(session, agent_user_id, room_id)
 
                         # Retry join after invitation
                         async with session.post(url, headers=headers, json={}) as retry_resp:
@@ -516,28 +518,39 @@ class MatrixAgentMessageTool(MCPTool):
         except Exception as e:
             logger.error(f"Error ensuring agent in room: {e}")
     
+    async def _invite_agent_to_room_with_session(self, session: aiohttp.ClientSession, agent_user_id: str, room_id: str):
+        """Invite an agent to a room using admin privileges (reuses existing session)"""
+        try:
+            if not self.admin_token:
+                self.admin_token = await self._get_admin_token()
+
+            url = f"{self.matrix_homeserver}/_matrix/client/r0/rooms/{room_id}/invite"
+            headers = {
+                "Authorization": f"Bearer {self.admin_token}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "user_id": agent_user_id
+            }
+
+            async with session.post(url, headers=headers, json=payload) as resp:
+                if resp.status in [200, 201]:
+                    logger.info(f"Successfully invited {agent_user_id} to room {room_id}")
+                else:
+                    error_text = await resp.text()
+                    logger.warning(f"Failed to invite agent: {error_text}")
+
+        except Exception as e:
+            logger.error(f"Error inviting agent to room: {e}")
+    
     async def _invite_agent_to_room(self, agent_user_id: str, room_id: str):
-        """Invite an agent to a room using admin privileges"""
+        """Invite an agent to a room using admin privileges (creates own session)"""
         try:
             if not self.admin_token:
                 self.admin_token = await self._get_admin_token()
 
             async with aiohttp.ClientSession() as session:
-                url = f"{self.matrix_homeserver}/_matrix/client/r0/rooms/{room_id}/invite"
-                headers = {
-                    "Authorization": f"Bearer {self.admin_token}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "user_id": agent_user_id
-                }
-
-                async with session.post(url, headers=headers, json=payload) as resp:
-                    if resp.status in [200, 201]:
-                        logger.info(f"Successfully invited {agent_user_id} to room {room_id}")
-                    else:
-                        error_text = await resp.text()
-                        logger.warning(f"Failed to invite agent: {error_text}")
+                await self._invite_agent_to_room_with_session(session, agent_user_id, room_id)
 
         except Exception as e:
             logger.error(f"Error inviting agent to room: {e}")
@@ -858,10 +871,12 @@ class MatrixAgentMessageAsyncTool(MCPTool):
                 async with session.post(url, headers=headers, json={}) as resp:
                     if resp.status in [200, 201]:
                         logger.info(f"Agent {agent_user_id} successfully joined/is in room {room_id}")
+                        return
                     elif resp.status == 403:
                         # Not invited, need admin to invite first
                         logger.info(f"Agent not invited to room, using admin to invite")
-                        await self._invite_agent_to_room(agent_user_id, room_id)
+                        # Pass the session to avoid nested sessions
+                        await self._invite_agent_to_room_with_session(session, agent_user_id, room_id)
 
                         # Retry join after invitation
                         async with session.post(url, headers=headers, json={}) as retry_resp:
@@ -875,28 +890,39 @@ class MatrixAgentMessageAsyncTool(MCPTool):
         except Exception as e:
             logger.error(f"Error ensuring agent in room: {e}")
 
+    async def _invite_agent_to_room_with_session(self, session: aiohttp.ClientSession, agent_user_id: str, room_id: str):
+        """Invite an agent to a room using admin privileges (reuses existing session)"""
+        try:
+            if not self.admin_token:
+                self.admin_token = await self._get_admin_token()
+
+            url = f"{self.matrix_homeserver}/_matrix/client/r0/rooms/{room_id}/invite"
+            headers = {
+                "Authorization": f"Bearer {self.admin_token}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "user_id": agent_user_id
+            }
+
+            async with session.post(url, headers=headers, json=payload) as resp:
+                if resp.status in [200, 201]:
+                    logger.info(f"Successfully invited {agent_user_id} to room {room_id}")
+                else:
+                    error_text = await resp.text()
+                    logger.warning(f"Failed to invite agent: {error_text}")
+
+        except Exception as e:
+            logger.error(f"Error inviting agent to room: {e}")
+
     async def _invite_agent_to_room(self, agent_user_id: str, room_id: str):
-        """Invite an agent to a room using admin privileges"""
+        """Invite an agent to a room using admin privileges (creates own session)"""
         try:
             if not self.admin_token:
                 self.admin_token = await self._get_admin_token()
 
             async with aiohttp.ClientSession() as session:
-                url = f"{self.matrix_homeserver}/_matrix/client/r0/rooms/{room_id}/invite"
-                headers = {
-                    "Authorization": f"Bearer {self.admin_token}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "user_id": agent_user_id
-                }
-
-                async with session.post(url, headers=headers, json=payload) as resp:
-                    if resp.status in [200, 201]:
-                        logger.info(f"Successfully invited {agent_user_id} to room {room_id}")
-                    else:
-                        error_text = await resp.text()
-                        logger.warning(f"Failed to invite agent: {error_text}")
+                await self._invite_agent_to_room_with_session(session, agent_user_id, room_id)
 
         except Exception as e:
             logger.error(f"Error inviting agent to room: {e}")
