@@ -1061,9 +1061,9 @@ async def main():
     """Main entry point"""
     server = MCPHTTPServer()
     
-    # Get configuration from environment
-    host = os.getenv("MCP_HTTP_HOST", "127.0.0.1")
-    port = int(os.getenv("MCP_HTTP_PORT", "8006"))
+    # Get configuration from environment - support both MCP_HTTP_* and LETTA_AGENT_MCP_* vars
+    host = os.getenv("LETTA_AGENT_MCP_HOST") or os.getenv("MCP_HTTP_HOST", "0.0.0.0")
+    port = int(os.getenv("LETTA_AGENT_MCP_PORT") or os.getenv("MCP_HTTP_PORT", "8017"))
     
     try:
         await server.start(host, port)
