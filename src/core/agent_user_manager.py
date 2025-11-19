@@ -514,19 +514,38 @@ class AgentUserManager:
                         logger.info(f"Creating room for existing agent {agent['name']}")
                         print(f"[AGENT_SYNC] Creating room for existing agent {agent['name']}", flush=True)
                         await self.create_or_update_agent_room(agent["id"])
-                    # If room exists, validate it first before accepting invitations
+                    # If room exists, validate it and check for room drift
                     elif mapping.created and mapping.room_created and mapping.room_id:
-                        # Validate room still exists and is valid
-                        room_exists = await self.space_manager.check_room_exists(mapping.room_id)
-                        if not room_exists:
-                            logger.warning(f"Room {mapping.room_id} for {agent['name']} is invalid, recreating")
-                            print(f"[AGENT_SYNC] Room {mapping.room_id} for {agent['name']} is invalid, recreating", flush=True)
-                            mapping.room_id = None
-                            mapping.room_created = False
-                            await self.save_mappings()
-                            # Recreate the room
-                            await self.create_or_update_agent_room(agent["id"])
-                        else:
+                        # Try to discover the actual room the agent is in
+                        try:
+                            actual_room_id = await self.discover_agent_room(mapping.matrix_user_id)
+                            
+                            if actual_room_id and actual_room_id != mapping.room_id:
+                                logger.warning(f"🔄 Room drift detected for {agent['name']}!")
+                                logger.warning(f"  Stored room:  {mapping.room_id}")
+                                logger.warning(f"  Actual room:  {actual_room_id}")
+                                print(f"[AGENT_SYNC] 🔄 Room drift detected for {agent['name']}: {mapping.room_id} -> {actual_room_id}", flush=True)
+                                mapping.room_id = actual_room_id
+                                await self.save_mappings()
+                                logger.info(f"✅ Fixed room mapping for {agent['name']}")
+                                print(f"[AGENT_SYNC] ✅ Fixed room mapping for {agent['name']}", flush=True)
+                            elif not actual_room_id:
+                                # Could not discover room - fall back to existence check
+                                room_exists = await self.space_manager.check_room_exists(mapping.room_id)
+                                if not room_exists:
+                                    logger.warning(f"Room {mapping.room_id} for {agent['name']} is invalid, recreating")
+                                    print(f"[AGENT_SYNC] Room {mapping.room_id} for {agent['name']} is invalid, recreating", flush=True)
+                                    mapping.room_id = None
+                                    mapping.room_created = False
+                                    await self.save_mappings()
+                                    # Recreate the room
+                                    await self.create_or_update_agent_room(agent["id"])
+                                    continue  # Skip invitation acceptance below
+                        except Exception as e:
+                            logger.error(f"Error checking room drift for {agent['name']}: {e}")
+                        
+                        # Ensure invitations are accepted
+                        if mapping.room_id:
                             logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
                             await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
         # TODO: Optionally handle removed agents (deactivate users?)
@@ -567,17 +586,51 @@ class AgentUserManager:
 
             # If both user and room exist, validate the room is still valid
             if existing_mapping.created and existing_mapping.room_created and existing_mapping.room_id:
-                # Validate room still exists and is valid
-                room_exists = await self.space_manager.check_room_exists(existing_mapping.room_id)
-                if room_exists:
-                    logger.info(f"Agent {agent_name} already has user and room configured, skipping")
-                    return
-                else:
-                    logger.warning(f"Room {existing_mapping.room_id} for {agent_name} is invalid, recreating")
-                    existing_mapping.room_id = None
-                    existing_mapping.room_created = False
-                    await self.save_mappings()
-                    # Fall through to create room below
+                # Always try to discover the actual room the agent is in
+                # This handles cases where rooms were recreated or the mapping is stale
+                logger.debug(f"Validating room mapping for {agent_name}")
+                
+                try:
+                    actual_room_id = await self.discover_agent_room(existing_mapping.matrix_user_id)
+                    
+                    if actual_room_id:
+                        # Check if discovered room matches stored room
+                        if actual_room_id != existing_mapping.room_id:
+                            logger.warning(f"Room drift detected for {agent_name}!")
+                            logger.warning(f"  Stored room:  {existing_mapping.room_id}")
+                            logger.warning(f"  Actual room:  {actual_room_id}")
+                            logger.info(f"Updating mapping to use actual room")
+                            existing_mapping.room_id = actual_room_id
+                            await self.save_mappings()
+                            logger.info(f"✅ Fixed room mapping for {agent_name}")
+                        else:
+                            logger.debug(f"Room mapping for {agent_name} is correct")
+                        return
+                    else:
+                        # Could not discover room - check if stored room exists
+                        room_exists = await self.space_manager.check_room_exists(existing_mapping.room_id)
+                        if room_exists:
+                            logger.info(f"Agent {agent_name} has valid room, no drift detected")
+                            return
+                        else:
+                            logger.warning(f"Stored room {existing_mapping.room_id} for {agent_name} is invalid and no room discovered")
+                            existing_mapping.room_id = None
+                            existing_mapping.room_created = False
+                            await self.save_mappings()
+                            # Fall through to create room below
+                            
+                except Exception as e:
+                    logger.error(f"Error during room validation for {agent_name}: {e}")
+                    # Fall back to simple existence check
+                    room_exists = await self.space_manager.check_room_exists(existing_mapping.room_id)
+                    if room_exists:
+                        logger.info(f"Agent {agent_name} has valid room (discovery failed, using basic check)")
+                        return
+                    else:
+                        logger.warning(f"Room {existing_mapping.room_id} for {agent_name} is invalid")
+                        existing_mapping.room_id = None
+                        existing_mapping.room_created = False
+                        await self.save_mappings()
 
 
             # If user exists but room doesn't, just create the room
@@ -636,6 +689,40 @@ class AgentUserManager:
         else:
             logger.error(f"Failed to create Matrix user for agent {agent_name}")
 
+    async def discover_agent_room(self, agent_user_id: str) -> Optional[str]:
+        """
+        Discover the actual room for an agent by checking the JSON file.
+        The JSON file is the source of truth for current room assignments.
+        Returns the room_id if found, None otherwise.
+        """
+        try:
+            # Read from the JSON file which is updated when rooms are joined
+            json_path = "/app/data/agent_user_mappings.json"
+            if not os.path.exists(json_path):
+                logger.warning(f"JSON mapping file not found: {json_path}")
+                return None
+            
+            with open(json_path, 'r') as f:
+                json_mappings = json.load(f)
+            
+            # Find the agent by matrix_user_id
+            for agent_id, mapping in json_mappings.items():
+                if mapping.get("matrix_user_id") == agent_user_id:
+                    room_id = mapping.get("room_id")
+                    if room_id:
+                        logger.info(f"Found room in JSON for {agent_user_id}: {room_id}")
+                        return room_id
+                    else:
+                        logger.warning(f"Agent {agent_user_id} has no room_id in JSON")
+                        return None
+            
+            logger.warning(f"Agent {agent_user_id} not found in JSON mappings")
+            return None
+                    
+        except Exception as e:
+            logger.error(f"Error discovering room from JSON for {agent_user_id}: {e}")
+            return None
+    
     async def get_agent_user_mapping(self, agent_id: str) -> Optional[AgentUserMapping]:
         """Get the Matrix user mapping for a specific agent"""
         return self.mappings.get(agent_id)

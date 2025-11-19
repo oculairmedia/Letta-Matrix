@@ -34,6 +34,7 @@ services:
     volumes:
       - ./matrix_store:/app/matrix_store
       - ./matrix_client_data:/app/data
+      - ./src:/app/src:ro  # Mount source code for development
       - ./custom_matrix_client.py:/app/custom_matrix_client.py:ro
       - ./agent_user_manager.py:/app/agent_user_manager.py:ro
       - ./matrix_auth.py:/app/matrix_auth.py:ro

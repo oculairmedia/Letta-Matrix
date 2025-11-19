@@ -63,6 +63,8 @@ class InvitationStatus(Base):
 
 
 # Database connection setup
+_engine = None  # Singleton engine instance
+
 def get_database_url() -> str:
     """Get database URL from environment or use default"""
     return os.environ.get(
@@ -72,26 +74,47 @@ def get_database_url() -> str:
 
 
 def get_engine():
-    """Get SQLAlchemy engine with SQLite or PostgreSQL support"""
-    url = get_database_url()
+    """Get SQLAlchemy engine with SQLite or PostgreSQL support (singleton)"""
+    global _engine
+    
+    if _engine is None:
+        url = get_database_url()
 
-    # SQLite configuration (for testing)
-    if url.startswith('sqlite'):
-        return create_engine(
-            url,
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-            echo=False  # Set to True for SQL debugging
-        )
-
-    # PostgreSQL configuration (for production)
-    return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20)
+        # SQLite configuration (for testing)
+        if url.startswith('sqlite'):
+            _engine = create_engine(
+                url,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+                echo=False  # Set to True for SQL debugging
+            )
+        else:
+            # PostgreSQL configuration (for production)
+            # Use pool_pre_ping to verify connections are alive
+            # Disable query caching with expire_on_commit=False in sessionmaker
+            _engine = create_engine(
+                url, 
+                pool_pre_ping=True, 
+                pool_size=10, 
+                max_overflow=20,
+                pool_recycle=3600,  # Recycle connections after 1 hour
+                isolation_level="READ COMMITTED"  # Ensure we see committed changes
+            )
+    
+    return _engine
 
 
 def get_session_maker():
     """Get session maker for creating database sessions"""
     engine = get_engine()
-    return sessionmaker(bind=engine)
+    # expire_on_commit=False prevents stale data after commit
+    # autoflush=True ensures changes are flushed before queries
+    return sessionmaker(
+        bind=engine,
+        expire_on_commit=False,
+        autoflush=True,
+        autocommit=False
+    )
 
 
 def get_db_session() -> Session:
@@ -117,11 +140,12 @@ class AgentMappingDB:
         """Get mapping by agent ID"""
         session = self.Session()
         try:
+            # Expire all cached data to ensure fresh read
+            session.expire_all()
             mapping = session.query(AgentMapping).options(
                 joinedload(AgentMapping.invitations)
             ).filter_by(agent_id=agent_id).first()
             if mapping:
-                # Expunge to detach from session so we can use it after session closes
                 session.expunge(mapping)
             return mapping
         finally:
@@ -131,6 +155,8 @@ class AgentMappingDB:
         """Get mapping by room ID - used for routing messages"""
         session = self.Session()
         try:
+            # Expire all cached data to ensure fresh read
+            session.expire_all()
             mapping = session.query(AgentMapping).options(
                 joinedload(AgentMapping.invitations)
             ).filter_by(room_id=room_id).first()
@@ -144,6 +170,8 @@ class AgentMappingDB:
         """Get mapping by Matrix user ID"""
         session = self.Session()
         try:
+            # Expire all cached data to ensure fresh read
+            session.expire_all()
             mapping = session.query(AgentMapping).options(
                 joinedload(AgentMapping.invitations)
             ).filter_by(matrix_user_id=matrix_user_id).first()
@@ -157,6 +185,8 @@ class AgentMappingDB:
         """Get all mappings"""
         session = self.Session()
         try:
+            # Expire all cached data to ensure fresh read
+            session.expire_all()
             mappings = session.query(AgentMapping).options(
                 joinedload(AgentMapping.invitations)
             ).all()

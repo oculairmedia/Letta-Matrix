@@ -132,6 +132,51 @@ async def retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.0
                              extra={"attempt": attempt + 1, "delay": delay, "error": str(e)})
             await asyncio.sleep(delay)
 
+async def get_agent_from_room_members(room_id: str, config: Config, logger: logging.Logger) -> Optional[tuple]:
+    """
+    Extract agent ID from room members by finding agent Matrix users.
+    Returns (agent_id, agent_name) or None if not found.
+    """
+    try:
+        # Get room members using Matrix API
+        admin_token = config.matrix_token
+        members_url = f"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/members"
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(members_url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Failed to get room members: {resp.status}")
+                    return None
+                
+                members_data = await resp.json()
+                members = members_data.get('chunk', [])
+                
+                # Look for agent users in room members
+                # Agent user IDs follow pattern: @agent_<UUID>:matrix.oculair.ca
+                from src.models.agent_mapping import AgentMappingDB
+                db = AgentMappingDB()
+                all_mappings = db.get_all()
+                
+                for member in members:
+                    user_id = member.get('state_key')  # Matrix user ID
+                    if not user_id:
+                        continue
+                    
+                    # Check if this user_id matches any agent mapping
+                    for mapping in all_mappings:
+                        if mapping.matrix_user_id == user_id:
+                            logger.info(f"Found agent via room members: {mapping.agent_name} ({mapping.agent_id})")
+                            return (mapping.agent_id, mapping.agent_name)
+                
+                logger.warning(f"No agent users found in room {room_id} members")
+                return None
+                
+    except Exception as e:
+        logger.warning(f"Error extracting agent from room members: {e}", exc_info=True)
+        return None
+
+
 async def send_to_letta_api(message_body: str, sender_id: str, config: Config, logger: logging.Logger, room_id: Optional[str] = None) -> str:
     """
     Sends a message to the Letta API using the letta-client SDK and returns the response.
@@ -161,19 +206,19 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
                 routing_method = "database_room_id"
                 logger.info(f"Found agent mapping in DB for room {room_id}: {mapping.agent_name} ({mapping.agent_id})")
             else:
-                # Strategy 2: Extract agent ID from room members
-                # Get room members and look for agent user IDs
+                # Strategy 2: Extract agent ID from room members (self-healing fallback)
                 logger.info(f"No direct mapping for room {room_id}, checking room members...")
                 
-                # Get all agent mappings and check if any agent user is in this room
-                # We'll check this by looking at the matrix_user_id pattern
-                all_mappings = db.get_all()
-                
-                # Try to infer from the room - this is a fallback
-                # In a properly configured room, the agent's Matrix user should be a member
-                # For now, log that we couldn't find it
-                logger.warning(f"No agent mapping found in DB for room {room_id}, using default agent")
-                logger.info(f"Room has no mapping. Total mappings in DB: {len(all_mappings)}")
+                member_result = await get_agent_from_room_members(room_id, config, logger)
+                if member_result:
+                    agent_id_to_use, agent_name_found = member_result
+                    routing_method = "room_members"
+                    logger.info(f"Resolved agent via room members: {agent_name_found} ({agent_id_to_use})")
+                else:
+                    # Get all agent mappings for debugging
+                    all_mappings = db.get_all()
+                    logger.warning(f"No agent mapping found for room {room_id}, using default agent")
+                    logger.info(f"Room has no mapping. Total mappings in DB: {len(all_mappings)}")
                 
         except Exception as e:
             logger.warning(f"Could not query agent mappings database: {e}")
