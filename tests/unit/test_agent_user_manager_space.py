@@ -524,8 +524,8 @@ class TestCheckRoomExists:
                         with patch('src.core.space_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                             exists = await manager.check_room_exists("!room123:matrix.oculair.ca")
 
-                            # Changed: 403 now treated as invalid (returns False) to trigger recreation
-                            assert exists is False
+                            # Changed: 403 now treated as existing (returns True) to prevent recreation
+                            assert exists is True
 
 
     @pytest.mark.asyncio
