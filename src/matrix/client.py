@@ -685,11 +685,17 @@ async def join_room_if_needed(client_instance, room_id_or_alias, logger: logging
         }, exc_info=True)
         return None
 
-async def periodic_agent_sync(config, logger, interval=0.5):  # Reduced to 0.5 seconds for faster agent detection
+async def periodic_agent_sync(config, logger, interval=None):
     """Periodically sync Letta agents to Matrix users via OpenAI endpoint"""
+    # Allow override via environment variable, default to 60 seconds
+    if interval is None:
+        interval = int(os.getenv("MATRIX_AGENT_SYNC_INTERVAL", "60"))
+    
+    logger.info(f"Starting periodic agent sync with interval: {interval}s")
+    
     while True:
         await asyncio.sleep(interval)
-        logger.debug("Running periodic agent sync via OpenAI endpoint...")  # Changed to debug to reduce log noise
+        logger.debug("Running periodic agent sync via OpenAI endpoint...")
         try:
             await run_agent_sync(config)
             logger.debug("Periodic agent sync completed successfully")

@@ -59,6 +59,9 @@ class MatrixRoomManager:
         self.admin_username = admin_username
         self.get_admin_token = get_admin_token_callback
         self.save_mappings = save_mappings_callback
+        # Cache to track which users are already joined to which rooms
+        # Format: {(room_id, username): True}
+        self._membership_cache: Dict[tuple, bool] = {}
 
     async def update_room_name(self, room_id: str, new_name: str) -> bool:
         """Update the name of an existing room"""
@@ -128,6 +131,41 @@ class MatrixRoomManager:
 
         except Exception as e:
             logger.error(f"Error checking admin membership in room {room_id}: {e}")
+            return False
+
+    async def check_user_in_room(self, room_id: str, user_id: str) -> bool:
+        """Check if a specific user is a member of the given room using Matrix API"""
+        try:
+            admin_token = await self.get_admin_token()
+            if not admin_token:
+                logger.warning("Failed to get admin token, cannot check room membership")
+                return False
+
+            # Use Matrix API to check room members
+            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/joined_members"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json"
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        members = data.get("joined", {})
+                        is_member = user_id in members
+                        logger.debug(f"Membership check for {user_id} in room {room_id}: {is_member}")
+                        return is_member
+                    elif response.status == 403:
+                        # Not in room (forbidden access)
+                        logger.debug(f"User {user_id} not in room {room_id} (403 forbidden)")
+                        return False
+                    else:
+                        logger.warning(f"Failed to check room members: {response.status}")
+                        return False
+
+        except Exception as e:
+            logger.error(f"Error checking membership for {user_id} in room {room_id}: {e}")
             return False
 
     async def invite_admin_to_room(self, room_id: str, agent_name: str) -> bool:
@@ -432,6 +470,24 @@ class MatrixRoomManager:
             if not username or not password:
                 continue
 
+            # Check cache first - if user is already joined, skip
+            cache_key = (room_id, username)
+            if cache_key in self._membership_cache and self._membership_cache[cache_key]:
+                logger.debug(f"User {username} already joined room {room_id} (cached)")
+                if mapping.invitation_status:
+                    mapping.invitation_status[username] = "joined"
+                continue
+
+            # Check Matrix API for actual membership before attempting login
+            # This is the authoritative source and prevents unnecessary login attempts
+            is_member = await self.check_user_in_room(room_id, username)
+            if is_member:
+                logger.info(f"User {username} already in room {room_id} (verified via API), updating cache")
+                self._membership_cache[cache_key] = True
+                if mapping.invitation_status:
+                    mapping.invitation_status[username] = "joined"
+                continue
+
             try:
                 # Login as the user
                 login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
@@ -473,12 +529,16 @@ class MatrixRoomManager:
                             logger.info(f"User {username} successfully joined room {room_id}")
                             if mapping.invitation_status:
                                 mapping.invitation_status[username] = "joined"
+                            # Cache the successful join
+                            self._membership_cache[cache_key] = True
                         elif response.status == 403:
                             error_text = await response.text()
                             if "already in the room" in error_text or "already joined" in error_text:
                                 logger.info(f"User {username} is already in room {room_id}")
                                 if mapping.invitation_status:
                                     mapping.invitation_status[username] = "joined"
+                                # Cache the membership
+                                self._membership_cache[cache_key] = True
                             else:
                                 logger.warning(f"User {username} forbidden from joining room {room_id}: {error_text}")
                                 if mapping.invitation_status:

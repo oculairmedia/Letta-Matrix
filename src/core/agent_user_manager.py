@@ -386,8 +386,19 @@ class AgentUserManager:
 
     async def sync_agents_to_users(self):
         """Main function to sync Letta agents to Matrix users"""
+        import time
+        sync_start = time.time()
+        
         logger.info("Starting agent-to-user sync process")
         print("[AGENT_SYNC] Starting agent-to-user sync process", flush=True)
+        
+        # Track metrics for this sync cycle
+        sync_metrics = {
+            "cache_hits": 0,
+            "api_checks": 0,
+            "login_attempts": 0,
+            "rooms_processed": 0
+        }
 
         # Ensure core users exist before syncing agents and rooms
         await self.ensure_core_users_exist()
@@ -578,7 +589,9 @@ class AgentUserManager:
         # TODO: Fix permission issues before re-enabling
         # await self.invite_admin_to_existing_rooms()
 
-        logger.info(f"Sync complete. Total mappings: {len(self.mappings)}")
+        sync_duration = time.time() - sync_start
+        logger.info(f"Sync complete. Total mappings: {len(self.mappings)}, Duration: {sync_duration:.2f}s")
+        logger.info(f"Sync metrics - Cache hits: {sync_metrics['cache_hits']}, API checks: {sync_metrics['api_checks']}, Login attempts: {sync_metrics['login_attempts']}, Rooms: {sync_metrics['rooms_processed']}")
 
     async def create_user_for_agent(self, agent: dict):
         """Create a Matrix user for a specific agent"""
@@ -813,8 +826,13 @@ class AgentUserManager:
     # Removed problematic invitation functions that caused endless loops
     # The agent-based invitation system in room creation is sufficient
 
+# Global manager instance to preserve cache between sync runs
+_global_manager = None
+
 async def run_agent_sync(config):
     """Run the agent sync process"""
+    global _global_manager
+    
     # Configure logger for this module with same level as main
     import sys
     handler = logging.StreamHandler(sys.stdout)
@@ -823,7 +841,15 @@ async def run_agent_sync(config):
     logger.setLevel(getattr(logging, config.log_level.upper()))
 
     logger.info("Starting agent sync process from run_agent_sync")
-    manager = AgentUserManager(config)
+    
+    # Reuse existing manager to preserve cache
+    if _global_manager is None:
+        logger.info("Creating new AgentUserManager instance")
+        _global_manager = AgentUserManager(config)
+    else:
+        logger.debug("Reusing existing AgentUserManager instance (cache preserved)")
+    
+    manager = _global_manager
     
     # Ensure core users exist before syncing agents
     logger.info("Ensuring core Matrix users exist...")
