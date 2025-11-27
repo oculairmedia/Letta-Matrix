@@ -861,11 +861,12 @@ async def main():
                 {"msgtype": "m.text", "body": message}
             )
 
-    # Initialize file handler
+    # Initialize file handler with Matrix access token
     file_handler = LettaFileHandler(
         homeserver_url=config.homeserver_url,
         letta_api_url=config.letta_api_url,
         letta_token=config.letta_token,
+        matrix_access_token=client.access_token,
         notify_callback=notify_room
     )
     logger.info("File handler initialized")

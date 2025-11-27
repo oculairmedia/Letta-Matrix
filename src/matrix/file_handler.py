@@ -66,6 +66,7 @@ class LettaFileHandler:
         homeserver_url: str,
         letta_api_url: str,
         letta_token: str,
+        matrix_access_token: Optional[str] = None,
         notify_callback: Optional[Callable[[str, str], Awaitable[None]]] = None,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         max_retries: int = 3,
@@ -78,6 +79,7 @@ class LettaFileHandler:
             homeserver_url: Matrix homeserver URL
             letta_api_url: Letta API base URL
             letta_token: Letta API authentication token
+            matrix_access_token: Matrix access token for downloading authenticated media
             notify_callback: Optional callback function to send notifications to Matrix
             embedding_model: Embedding model to use for folders (default: letta/letta-free)
             max_retries: Maximum number of retries for API calls
@@ -86,6 +88,7 @@ class LettaFileHandler:
         self.homeserver_url = homeserver_url
         self.letta_api_url = letta_api_url
         self.letta_token = letta_token
+        self.matrix_access_token = matrix_access_token
         self.notify_callback = notify_callback
         self.embedding_model = embedding_model
         self.max_retries = max_retries
@@ -288,9 +291,14 @@ class LettaFileHandler:
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         temp_path = temp_file.name
         
+        # Prepare headers with authentication if available
+        headers = {}
+        if self.matrix_access_token:
+            headers["Authorization"] = f"Bearer {self.matrix_access_token}"
+        
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(download_url) as response:
+                async with session.get(download_url, headers=headers) as response:
                     if response.status != 200:
                         error_text = await response.text()
                         raise FileUploadError(f"Failed to download file: {response.status} - {error_text}")
