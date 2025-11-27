@@ -48,6 +48,12 @@ class Config:
     letta_token: str
     letta_agent_id: str
     log_level: str = "INFO"
+    # Embedding configuration for Letta file uploads
+    embedding_model: str = "letta/letta-free"
+    embedding_endpoint: str = ""  # e.g., http://192.168.50.80:11434/v1 for Ollama
+    embedding_endpoint_type: str = "openai"
+    embedding_dim: int = 1536
+    embedding_chunk_size: int = 300
     
     @classmethod
     def from_env(cls) -> "Config":
@@ -62,7 +68,13 @@ class Config:
                 letta_api_url=os.getenv("LETTA_API_URL", "https://letta.oculair.ca"),
                 letta_token=os.getenv("LETTA_TOKEN", "lettaSecurePass123"),
                 letta_agent_id=os.getenv("LETTA_AGENT_ID", "agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444"),
-                log_level=os.getenv("LOG_LEVEL", "INFO")
+                log_level=os.getenv("LOG_LEVEL", "INFO"),
+                # Embedding configuration
+                embedding_model=os.getenv("LETTA_EMBEDDING_MODEL", "letta/letta-free"),
+                embedding_endpoint=os.getenv("LETTA_EMBEDDING_ENDPOINT", ""),
+                embedding_endpoint_type=os.getenv("LETTA_EMBEDDING_ENDPOINT_TYPE", "openai"),
+                embedding_dim=int(os.getenv("LETTA_EMBEDDING_DIM", "1536")),
+                embedding_chunk_size=int(os.getenv("LETTA_EMBEDDING_CHUNK_SIZE", "300"))
             )
         except Exception as e:
             raise ConfigurationError(f"Failed to load configuration: {e}")
@@ -862,14 +874,22 @@ async def main():
             )
 
     # Initialize file handler with Matrix access token
+    matrix_token = client.access_token
+    logger.info(f"Matrix access token available: {bool(matrix_token)}, length: {len(matrix_token) if matrix_token else 0}")
+    
     file_handler = LettaFileHandler(
         homeserver_url=config.homeserver_url,
         letta_api_url=config.letta_api_url,
         letta_token=config.letta_token,
-        matrix_access_token=client.access_token,
-        notify_callback=notify_room
+        matrix_access_token=matrix_token,
+        notify_callback=notify_room,
+        embedding_model=config.embedding_model,
+        embedding_endpoint=config.embedding_endpoint or None,
+        embedding_endpoint_type=config.embedding_endpoint_type,
+        embedding_dim=config.embedding_dim,
+        embedding_chunk_size=config.embedding_chunk_size
     )
-    logger.info("File handler initialized")
+    logger.info(f"File handler initialized with embedding: model={config.embedding_model}, endpoint={config.embedding_endpoint or 'default'}, dim={config.embedding_dim}")
 
     # Add the callback for text messages with config and logger
     async def callback_wrapper(room, event):

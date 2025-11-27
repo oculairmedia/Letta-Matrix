@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import aiohttp
 from nio import Event
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("matrix_client.file_handler")
 
 # Supported file types from Letta Filesystem API
 SUPPORTED_FILE_TYPES = {
@@ -69,6 +69,10 @@ class LettaFileHandler:
         matrix_access_token: Optional[str] = None,
         notify_callback: Optional[Callable[[str, str], Awaitable[None]]] = None,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        embedding_endpoint: Optional[str] = None,
+        embedding_endpoint_type: str = "openai",
+        embedding_dim: int = 1536,
+        embedding_chunk_size: int = 300,
         max_retries: int = 3,
         retry_delay: float = 1.0
     ):
@@ -82,6 +86,10 @@ class LettaFileHandler:
             matrix_access_token: Matrix access token for downloading authenticated media
             notify_callback: Optional callback function to send notifications to Matrix
             embedding_model: Embedding model to use for folders (default: letta/letta-free)
+            embedding_endpoint: Embedding API endpoint (e.g., http://localhost:11434/v1 for Ollama)
+            embedding_endpoint_type: Type of embedding endpoint (openai, huggingface, etc.)
+            embedding_dim: Embedding dimension (1536 for OpenAI, 2560 for some Ollama models)
+            embedding_chunk_size: Chunk size for text splitting
             max_retries: Maximum number of retries for API calls
             retry_delay: Base delay between retries (exponential backoff)
         """
@@ -91,10 +99,18 @@ class LettaFileHandler:
         self.matrix_access_token = matrix_access_token
         self.notify_callback = notify_callback
         self.embedding_model = embedding_model
+        self.embedding_endpoint = embedding_endpoint
+        self.embedding_endpoint_type = embedding_endpoint_type
+        self.embedding_dim = embedding_dim
+        self.embedding_chunk_size = embedding_chunk_size
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self._folder_cache: Dict[str, str] = {}  # room_id -> folder_id cache
         self._cache_lock = asyncio.Lock()  # Protect cache from race conditions
+        
+        # Log token status at init
+        logger.info(f"LettaFileHandler initialized - matrix_access_token present: {bool(self.matrix_access_token)}, length: {len(self.matrix_access_token) if self.matrix_access_token else 0}")
+        logger.info(f"Embedding config: model={embedding_model}, endpoint={embedding_endpoint}, dim={embedding_dim}")
     
     async def _notify(self, room_id: str, message: str):
         """Send notification to Matrix room if callback is configured"""
@@ -176,16 +192,16 @@ class LettaFileHandler:
                 folder_id = await self._get_or_create_folder(room_id, agent_id)
                 
                 # Upload to Letta
-                job_id = await self._upload_to_letta(file_path, folder_id, metadata)
+                file_id = await self._upload_to_letta(file_path, folder_id, metadata)
                 
-                # Poll for completion
-                success = await self._poll_job_completion(job_id)
+                # Poll for completion (using file status endpoint)
+                success = await self._poll_file_status(folder_id, file_id)
                 
                 if success:
                     logger.info(f"Successfully processed file {metadata.file_name} in Letta")
                     await self._notify(room_id, f"✅ File {metadata.file_name} uploaded successfully and indexed")
                 else:
-                    logger.warning(f"File processing job {job_id} did not complete successfully")
+                    logger.warning(f"File processing for {file_id} did not complete successfully")
                     await self._notify(room_id, f"⚠️ File processing timed out for {metadata.file_name}")
                 
                 return success
@@ -282,7 +298,9 @@ class LettaFileHandler:
             raise FileUploadError(f"Malformed mxc:// URL: {mxc_url}")
         
         server_name, media_id = parts
-        download_url = f"{self.homeserver_url}/_matrix/media/v3/download/{server_name}/{media_id}"
+        # Use authenticated media endpoint (MSC3916) - requires auth token
+        # The legacy /_matrix/media/v3/download endpoint may be disabled on some servers
+        download_url = f"{self.homeserver_url}/_matrix/client/v1/media/download/{server_name}/{media_id}"
         
         logger.debug(f"Downloading file from {download_url}")
         
@@ -293,8 +311,12 @@ class LettaFileHandler:
         
         # Prepare headers with authentication if available
         headers = {}
+        logger.debug(f"Download - matrix_access_token present: {bool(self.matrix_access_token)}")
         if self.matrix_access_token:
             headers["Authorization"] = f"Bearer {self.matrix_access_token}"
+            logger.info(f"Using Matrix auth token for download (length: {len(self.matrix_access_token)})")
+        else:
+            logger.warning("No Matrix access token available for download - may fail with 403")
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -356,20 +378,76 @@ class LettaFileHandler:
                                 logger.info(f"Found existing source {folder_name}: {folder_id}")
                                 return folder_id
                 
+                # Fetch agent's embedding config to use for the source
+                embedding_config = None
+                if agent_id:
+                    agent_url = f"{self.letta_api_url}/v1/agents/{agent_id}"
+                    async with session.get(agent_url, headers=headers) as agent_resp:
+                        if agent_resp.status == 200:
+                            agent_data = await agent_resp.json()
+                            agent_embedding = agent_data.get('embedding_config')
+                            if agent_embedding:
+                                # Use the agent's embedding config
+                                embedding_config = {
+                                    "embedding_model": agent_embedding.get('embedding_model'),
+                                    "embedding_endpoint_type": agent_embedding.get('embedding_endpoint_type', 'openai'),
+                                    "embedding_dim": agent_embedding.get('embedding_dim'),
+                                    "embedding_chunk_size": agent_embedding.get('embedding_chunk_size', 300)
+                                }
+                                # Include endpoint if present
+                                if agent_embedding.get('embedding_endpoint'):
+                                    embedding_config["embedding_endpoint"] = agent_embedding['embedding_endpoint']
+                                logger.info(f"Using agent's embedding config: model={embedding_config['embedding_model']}, dim={embedding_config['embedding_dim']}")
+                        else:
+                            logger.warning(f"Failed to fetch agent config: {agent_resp.status}")
+                
+                # Fall back to instance defaults if agent config not available
+                if not embedding_config:
+                    embedding_config = {
+                        "embedding_model": self.embedding_model,
+                        "embedding_endpoint_type": self.embedding_endpoint_type,
+                        "embedding_dim": self.embedding_dim,
+                        "embedding_chunk_size": self.embedding_chunk_size
+                    }
+                    if self.embedding_endpoint:
+                        embedding_config["embedding_endpoint"] = self.embedding_endpoint
+                    logger.info(f"Using fallback embedding config: model={self.embedding_model}, dim={self.embedding_dim}")
+                
                 # Create new source
                 create_url = f"{self.letta_api_url}/v1/sources/"
+                
                 source_data = {
                     "name": folder_name,
                     "description": f"Documents from Matrix room {room_id}",
-                    "embedding_config": {
-                        "embedding_model": self.embedding_model,
-                        "embedding_endpoint_type": "openai",
-                        "embedding_dim": 1536,
-                        "embedding_chunk_size": 300
-                    }
+                    "embedding_config": embedding_config
                 }
                 
                 async with session.post(create_url, headers=headers, json=source_data) as response:
+                    if response.status == 409:
+                        # Source already exists (conflict) - need to find it with pagination
+                        logger.info(f"Source {folder_name} already exists, searching with pagination...")
+                        # Search through all pages to find the source
+                        offset = 0
+                        page_size = 100
+                        while True:
+                            paginated_url = f"{self.letta_api_url}/v1/sources/?limit={page_size}&offset={offset}"
+                            async with session.get(paginated_url, headers=headers) as list_resp:
+                                if list_resp.status != 200:
+                                    break
+                                sources_page = await list_resp.json()
+                                if not sources_page:
+                                    break
+                                for source in sources_page:
+                                    if source.get('name') == folder_name:
+                                        folder_id = source['id']
+                                        logger.info(f"Found existing source via pagination: {folder_id}")
+                                        return folder_id
+                                offset += page_size
+                                if len(sources_page) < page_size:
+                                    break
+                        # If still not found, raise error
+                        raise FileUploadError(f"Source {folder_name} exists but could not be found")
+                    
                     if response.status not in [200, 201]:
                         error_text = await response.text()
                         raise FileUploadError(f"Failed to create source: {response.status} - {error_text}")
@@ -461,27 +539,29 @@ class LettaFileHandler:
         
         return await self._retry_async(_do_upload, "Letta file upload")
     
-    async def _poll_job_completion(self, job_id: str, timeout: int = 300, interval: int = 2) -> bool:
+    async def _poll_file_status(self, source_id: str, file_id: str, timeout: int = 300, interval: int = 2) -> bool:
         """
-        Poll Letta job until completion
+        Poll Letta file status until processing completes
         
         Args:
-            job_id: Job ID to poll
+            source_id: Source/folder ID containing the file
+            file_id: File ID to poll
             timeout: Maximum time to wait (seconds)
             interval: Polling interval (seconds)
             
         Returns:
-            True if job completed successfully
+            True if file processed successfully
         """
         # Handle sync-complete case (file was processed immediately)
-        if job_id == "sync-complete":
+        if file_id == "sync-complete":
             return True
         
         headers = {
             "Authorization": f"Bearer {self.letta_token}"
         }
         
-        job_url = f"{self.letta_api_url}/v1/jobs/{job_id}"
+        # Use the file status endpoint: /v1/sources/{source_id}/files/{file_id}
+        file_url = f"{self.letta_api_url}/v1/sources/{source_id}/files/{file_id}"
         elapsed = 0
         consecutive_errors = 0
         max_consecutive_errors = 3
@@ -489,48 +569,53 @@ class LettaFileHandler:
         async with aiohttp.ClientSession() as session:
             while elapsed < timeout:
                 try:
-                    async with session.get(job_url, headers=headers) as response:
+                    async with session.get(file_url, headers=headers) as response:
                         if response.status == 404:
-                            # Job might not exist yet or was processed sync
-                            logger.info(f"Job {job_id} not found, assuming completed")
-                            return True
+                            # File might not exist yet
+                            logger.warning(f"File {file_id} not found in source {source_id}")
+                            consecutive_errors += 1
+                            if consecutive_errors >= max_consecutive_errors:
+                                return False
+                            await asyncio.sleep(interval)
+                            elapsed += interval
+                            continue
                         
                         if response.status != 200:
                             consecutive_errors += 1
                             if consecutive_errors >= max_consecutive_errors:
-                                logger.error(f"Failed to get job status after {max_consecutive_errors} attempts")
+                                logger.error(f"Failed to get file status after {max_consecutive_errors} attempts")
                                 return False
-                            logger.warning(f"Failed to get job status: {response.status}")
+                            logger.warning(f"Failed to get file status: {response.status}")
                             await asyncio.sleep(interval)
                             elapsed += interval
                             continue
                         
                         consecutive_errors = 0  # Reset on success
-                        job_data = await response.json()
-                        status = job_data.get('status', '').lower()
+                        file_data = await response.json()
+                        status = file_data.get('processing_status', '').lower()
                         
-                        logger.debug(f"Job {job_id} status: {status}")
+                        logger.debug(f"File {file_id} processing_status: {status}")
                         
-                        if status in ['completed', 'success', 'done']:
-                            logger.info(f"Job {job_id} completed successfully")
+                        if status in ['completed', 'success', 'done', 'embedded']:
+                            logger.info(f"File {file_id} processed successfully")
                             return True
-                        elif status in ['failed', 'cancelled', 'error']:
-                            error_msg = job_data.get('error', 'Unknown error')
-                            logger.error(f"Job {job_id} {status}: {error_msg}")
+                        elif status in ['error', 'failed']:
+                            error_msg = file_data.get('error_message', 'Unknown error')
+                            logger.error(f"File {file_id} processing failed: {error_msg}")
                             return False
                         
-                        # Still processing
+                        # Still processing (parsing, embedding, etc.)
                         await asyncio.sleep(interval)
                         elapsed += interval
                         
                 except aiohttp.ClientError as e:
                     consecutive_errors += 1
                     if consecutive_errors >= max_consecutive_errors:
-                        logger.error(f"Network error polling job after {max_consecutive_errors} attempts: {e}")
+                        logger.error(f"Network error polling file status after {max_consecutive_errors} attempts: {e}")
                         return False
-                    logger.warning(f"Network error polling job: {e}")
+                    logger.warning(f"Network error polling file status: {e}")
                     await asyncio.sleep(interval)
                     elapsed += interval
         
-        logger.warning(f"Job {job_id} polling timed out after {timeout}s")
+        logger.warning(f"File {file_id} polling timed out after {timeout}s")
         return False

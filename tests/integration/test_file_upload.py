@@ -132,7 +132,8 @@ class TestFileHandler:
     async def test_download_matrix_file(self, file_handler, sample_file_metadata):
         """Test downloading file from Matrix media repository"""
         with aioresponses() as mocked:
-            download_url = "http://test-matrix.local/_matrix/media/v3/download/matrix.org/abc123"
+            # Uses authenticated endpoint (MSC3916)
+            download_url = "http://test-matrix.local/_matrix/client/v1/media/download/matrix.org/abc123"
             mocked.get(download_url, body=b"test pdf content")
             
             file_path = await file_handler._download_matrix_file(sample_file_metadata)
@@ -151,7 +152,8 @@ class TestFileHandler:
     async def test_download_matrix_file_error(self, file_handler, sample_file_metadata):
         """Test download error handling"""
         with aioresponses() as mocked:
-            download_url = "http://test-matrix.local/_matrix/media/v3/download/matrix.org/abc123"
+            # Uses authenticated endpoint (MSC3916)
+            download_url = "http://test-matrix.local/_matrix/client/v1/media/download/matrix.org/abc123"
             mocked.get(download_url, status=404, body="Not found")
             
             with pytest.raises(FileUploadError) as exc_info:
@@ -218,6 +220,21 @@ class TestFileHandler:
                 payload=[]
             )
             
+            # Mock get agent config (for embedding config)
+            mocked.get(
+                "http://test-letta.local/v1/agents/agent-456",
+                payload={
+                    "id": "agent-456",
+                    "name": "test-agent",
+                    "embedding_config": {
+                        "embedding_model": "text-embedding-3-small",
+                        "embedding_endpoint_type": "openai",
+                        "embedding_dim": 1536,
+                        "embedding_chunk_size": 300
+                    }
+                }
+            )
+            
             # Mock create source
             mocked.post(
                 "http://test-letta.local/v1/sources/",
@@ -235,55 +252,60 @@ class TestFileHandler:
             assert folder_id == "source-agent-123"
     
     @pytest.mark.asyncio
-    async def test_poll_job_completion_success(self, file_handler):
-        """Test polling for successful job completion"""
-        job_id = "job-123"
+    async def test_poll_file_status_success(self, file_handler):
+        """Test polling for successful file processing"""
+        source_id = "source-123"
+        file_id = "file-123"
         
         with aioresponses() as mocked:
             mocked.get(
-                f"http://test-letta.local/v1/jobs/{job_id}",
-                payload={"status": "completed"}
+                f"http://test-letta.local/v1/sources/{source_id}/files/{file_id}",
+                payload={"processing_status": "completed"}
             )
             
-            success = await file_handler._poll_job_completion(job_id, timeout=5, interval=0.1)
+            success = await file_handler._poll_file_status(source_id, file_id, timeout=5, interval=0.1)
             
             assert success is True
     
     @pytest.mark.asyncio
-    async def test_poll_job_completion_failure(self, file_handler):
-        """Test polling for failed job"""
-        job_id = "job-123"
+    async def test_poll_file_status_failure(self, file_handler):
+        """Test polling for failed file processing"""
+        source_id = "source-123"
+        file_id = "file-123"
         
         with aioresponses() as mocked:
             mocked.get(
-                f"http://test-letta.local/v1/jobs/{job_id}",
-                payload={"status": "failed", "error": "Processing error"}
+                f"http://test-letta.local/v1/sources/{source_id}/files/{file_id}",
+                payload={"processing_status": "error", "error_message": "Processing error"}
             )
             
-            success = await file_handler._poll_job_completion(job_id, timeout=5, interval=0.1)
+            success = await file_handler._poll_file_status(source_id, file_id, timeout=5, interval=0.1)
             
             assert success is False
     
     @pytest.mark.asyncio
-    async def test_poll_job_completion_sync(self, file_handler):
-        """Test sync-complete job returns immediately"""
-        success = await file_handler._poll_job_completion("sync-complete")
+    async def test_poll_file_status_sync(self, file_handler):
+        """Test sync-complete file returns immediately"""
+        success = await file_handler._poll_file_status("source-123", "sync-complete")
         assert success is True
     
     @pytest.mark.asyncio
-    async def test_poll_job_completion_not_found(self, file_handler):
-        """Test job not found assumes success"""
-        job_id = "job-missing"
+    async def test_poll_file_status_not_found(self, file_handler):
+        """Test file not found returns failure after retries"""
+        source_id = "source-123"
+        file_id = "file-missing"
         
         with aioresponses() as mocked:
-            mocked.get(
-                f"http://test-letta.local/v1/jobs/{job_id}",
-                status=404
-            )
+            # Mock multiple 404 responses (up to max_consecutive_errors)
+            for _ in range(3):
+                mocked.get(
+                    f"http://test-letta.local/v1/sources/{source_id}/files/{file_id}",
+                    status=404
+                )
             
-            success = await file_handler._poll_job_completion(job_id, timeout=5, interval=0.1)
+            success = await file_handler._poll_file_status(source_id, file_id, timeout=5, interval=0.1)
             
-            assert success is True  # 404 assumes completed
+            assert success is False  # 404 should fail after retries
     
     @pytest.mark.asyncio
     async def test_upload_to_letta(self, file_handler, sample_file_metadata):
@@ -317,8 +339,8 @@ class TestFileHandler:
         # Mock all the necessary API calls
         with patch.object(file_handler, '_download_matrix_file', return_value='/tmp/test.pdf') as mock_download, \
              patch.object(file_handler, '_get_or_create_folder', return_value='source-123') as mock_folder, \
-             patch.object(file_handler, '_upload_to_letta', return_value='job-123') as mock_upload, \
-             patch.object(file_handler, '_poll_job_completion', return_value=True) as mock_poll, \
+             patch.object(file_handler, '_upload_to_letta', return_value='file-123') as mock_upload, \
+             patch.object(file_handler, '_poll_file_status', return_value=True) as mock_poll, \
              patch.object(file_handler, '_notify', new_callable=AsyncMock) as mock_notify, \
              patch('os.path.exists', return_value=True), \
              patch('os.unlink'):
@@ -329,7 +351,7 @@ class TestFileHandler:
             mock_download.assert_called_once()
             mock_folder.assert_called_once_with(room_id, agent_id)
             mock_upload.assert_called_once()
-            mock_poll.assert_called_once()
+            mock_poll.assert_called_once_with('source-123', 'file-123')
             # Should have notified start and success
             assert mock_notify.call_count >= 2
     
