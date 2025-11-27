@@ -7,12 +7,15 @@ import uuid
 import aiohttp
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
-from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset
+from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset, RoomMessageMedia
 from nio.responses import JoinError
 from nio.exceptions import RemoteProtocolError
 
 # Import our authentication manager
 from src.matrix.auth import MatrixAuthManager
+
+# Import file handler
+from src.matrix.file_handler import LettaFileHandler, FileUploadError
 
 # Import agent user manager
 from src.core.agent_user_manager import run_agent_sync
@@ -414,6 +417,43 @@ async def send_as_agent(room_id: str, message: str, config: Config, logger: logg
         logger.error(f"[SEND_AS_AGENT] Exception occurred: {e}", exc_info=True)
         return False
 
+async def file_callback(room, event, config: Config, logger: logging.Logger, file_handler: Optional[LettaFileHandler] = None):
+    """Callback function for handling file uploads."""
+    if not file_handler:
+        logger.warning("File handler not initialized, skipping file event")
+        return
+    
+    try:
+        # Check for duplicate events
+        event_id = getattr(event, 'event_id', None)
+        if event_id and is_duplicate_event(event_id, logger):
+            return
+        
+        logger.info(f"File upload detected in room {room.room_id}")
+        
+        # Determine which agent to use for this room
+        agent_id = config.letta_agent_id  # Default
+        
+        try:
+            from src.models.agent_mapping import AgentMappingDB
+            db = AgentMappingDB()
+            mapping = db.get_by_room_id(room.room_id)
+            if mapping:
+                agent_id = mapping.agent_id
+                logger.info(f"Using agent {mapping.agent_name} ({agent_id}) for room {room.room_id}")
+        except Exception as e:
+            logger.warning(f"Could not query agent mappings: {e}")
+        
+        # Handle the file upload (notifications are sent by file_handler)
+        await file_handler.handle_file_event(event, room.room_id, agent_id)
+    
+    except FileUploadError as e:
+        logger.error(f"File upload error: {e}")
+        # File handler will send notifications
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in file callback: {e}", exc_info=True)
+
 async def message_callback(room, event, config: Config, logger: logging.Logger, client: Optional[AsyncClient] = None):
     """Callback function for handling new text messages."""
     if isinstance(event, RoomMessageText):
@@ -810,13 +850,39 @@ async def main():
     
     logger.info(f"Joined {agent_rooms_joined} agent rooms")
 
+    # Create notification callback for file handler
+    async def notify_room(room_id: str, message: str):
+        """Send notification to room"""
+        sent_as_agent = await send_as_agent(room_id, message, config, logger)
+        if not sent_as_agent:
+            await client.room_send(
+                room_id,
+                "m.room.message",
+                {"msgtype": "m.text", "body": message}
+            )
+
+    # Initialize file handler
+    file_handler = LettaFileHandler(
+        homeserver_url=config.homeserver_url,
+        letta_api_url=config.letta_api_url,
+        letta_token=config.letta_token,
+        notify_callback=notify_room
+    )
+    logger.info("File handler initialized")
+
     # Add the callback for text messages with config and logger
     async def callback_wrapper(room, event):
         await message_callback(room, event, config, logger, client)
     
     client.add_event_callback(callback_wrapper, RoomMessageText)
+    
+    # Add the callback for file messages
+    async def file_callback_wrapper(room, event):
+        await file_callback(room, event, config, logger, file_handler)
+    
+    client.add_event_callback(file_callback_wrapper, RoomMessageMedia)
 
-    logger.info("Starting sync loop to listen for messages")
+    logger.info("Starting sync loop to listen for messages and file uploads")
     
     # Do an initial sync with limit=0 to skip historical messages
     initial_sync_filter = {
