@@ -554,8 +554,7 @@ class MatrixRoomManager:
                 if mapping.invitation_status:
                     mapping.invitation_status[username] = "failed"
 
-        # Save updated invitation status
-        await self.save_mappings()
+        # Note: save_mappings() removed here - caller should batch saves at end of sync
 
     async def import_recent_history(
         self,

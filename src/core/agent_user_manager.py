@@ -390,7 +390,6 @@ class AgentUserManager:
         sync_start = time.time()
         
         logger.info("Starting agent-to-user sync process")
-        print("[AGENT_SYNC] Starting agent-to-user sync process", flush=True)
         
         # Track metrics for this sync cycle
         sync_metrics = {
@@ -407,32 +406,26 @@ class AgentUserManager:
         # Load existing mappings and space config
         await self.load_existing_mappings()
         await self.space_manager.load_space_config()
-        print(f"[AGENT_SYNC] Loaded {len(self.mappings)} existing mappings", flush=True)
 
         # Ensure the Letta Agents space exists
         space_just_created = False
         if not self.space_manager.get_space_id():
             logger.info("Creating Letta Agents space")
-            print("[AGENT_SYNC] Creating Letta Agents space", flush=True)
             space_id = await self.space_manager.create_letta_agents_space()
             if space_id:
                 logger.info(f"Successfully created Letta Agents space: {space_id}")
-                print(f"[AGENT_SYNC] Successfully created Letta Agents space: {space_id}", flush=True)
                 space_just_created = True
             else:
                 logger.warning("Failed to create Letta Agents space, rooms will not be organized")
-                print("[AGENT_SYNC] Failed to create Letta Agents space, rooms will not be organized", flush=True)
         else:
             # Validate existing space
             existing_space_id = self.space_manager.get_space_id()
             if existing_space_id:
                 logger.info(f"Validating existing Letta Agents space: {existing_space_id}")
-                print(f"[AGENT_SYNC] Validating existing Letta Agents space: {existing_space_id}", flush=True)
                 
                 space_valid = await self.space_manager.check_room_exists(existing_space_id)
                 if not space_valid:
                     logger.warning(f"Space {existing_space_id} is invalid, will recreate")
-                    print(f"[AGENT_SYNC] Space {existing_space_id} is invalid, will recreate", flush=True)
                     
                     # Clear the invalid space ID but don't save yet
                     old_space_id = existing_space_id
@@ -442,29 +435,24 @@ class AgentUserManager:
                     space_id = await self.space_manager.create_letta_agents_space()
                     if space_id:
                         logger.info(f"Successfully recreated Letta Agents space: {space_id}")
-                        print(f"[AGENT_SYNC] Successfully recreated Letta Agents space: {space_id}", flush=True)
                         
                         # Validate the new space works before proceeding
                         new_space_valid = await self.space_manager.check_room_exists(space_id)
                         if new_space_valid:
                             logger.info(f"New space {space_id} validated successfully")
-                            print(f"[AGENT_SYNC] New space {space_id} validated successfully", flush=True)
                             space_just_created = True
                         else:
                             logger.error(f"New space {space_id} failed validation, keeping old space config")
-                            print(f"[AGENT_SYNC] New space {space_id} failed validation", flush=True)
                             # Restore old space ID to prevent recreation loop
                             self.space_manager.space_id = old_space_id
                             await self.space_manager.save_space_config()
                     else:
                         logger.error("Failed to recreate Letta Agents space")
-                        print("[AGENT_SYNC] Failed to recreate Letta Agents space", flush=True)
                         # Restore old space ID to prevent recreation loop
                         self.space_manager.space_id = old_space_id
                         await self.space_manager.save_space_config()
                 else:
                     logger.info(f"Using existing Letta Agents space: {existing_space_id}")
-                    print(f"[AGENT_SYNC] Using existing Letta Agents space: {existing_space_id}", flush=True)
 
         # Get current Letta agents
         agents = await self.get_letta_agents()
@@ -480,18 +468,15 @@ class AgentUserManager:
 
         # Also check existing agents that haven't been successfully created or don't have rooms
         logger.info(f"Checking {len(existing_agent_ids)} existing agents for failed creation status or missing rooms")
-        print(f"[AGENT_SYNC] Checking {len(existing_agent_ids)} existing agents for failed creation status or missing rooms", flush=True)
         for agent in agents:
             if agent["id"] in existing_agent_ids:
                 mapping = self.mappings.get(agent["id"])
                 logger.debug(f"Agent {agent['name']} - created: {mapping.created if mapping else 'No mapping'}, room: {mapping.room_created if mapping else 'No room'}")
-                print(f"[AGENT_SYNC] Agent {agent['name']} - created: {mapping.created if mapping else 'No mapping'}, room: {mapping.room_created if mapping else 'No room'}", flush=True)
 
                 if mapping:
                     # Check if agent name has changed
                     if mapping.agent_name != agent['name']:
                         logger.info(f"Agent name changed from '{mapping.agent_name}' to '{agent['name']}'")
-                        print(f"[AGENT_SYNC] Agent name changed from '{mapping.agent_name}' to '{agent['name']}'", flush=True)
 
                         # Update the stored agent name
                         old_name = mapping.agent_name
@@ -502,28 +487,26 @@ class AgentUserManager:
                             logger.info(f"Updating room name for {mapping.room_id}")
                             success = await self.update_room_name(mapping.room_id, agent['name'])
                             if success:
-                                print(f"[AGENT_SYNC] Successfully updated room name from '{old_name}' to '{agent['name']}'", flush=True)
+                                logger.debug(f"Successfully updated room name to '{agent['name']}'")
                             else:
-                                print(f"[AGENT_SYNC] Failed to update room name", flush=True)
+                                logger.warning(f"Failed to update room name for {mapping.room_id}")
 
                         # Update display name for the Matrix user
                         if mapping.matrix_user_id:
                             logger.info(f"Updating display name for {mapping.matrix_user_id}")
                             display_success = await self.update_display_name(mapping.matrix_user_id, agent['name'])
                             if display_success:
-                                print(f"[AGENT_SYNC] Successfully updated display name for '{mapping.matrix_user_id}' to '{agent['name']}'", flush=True)
+                                logger.debug(f"Successfully updated display name for {mapping.matrix_user_id}")
                             else:
-                                print(f"[AGENT_SYNC] Failed to update display name", flush=True)
+                                logger.warning(f"Failed to update display name for {mapping.matrix_user_id}")
 
                     # Retry user creation if failed
                     if not mapping.created:
                         logger.info(f"Retrying creation for existing agent {agent['name']} with failed status")
-                        print(f"[AGENT_SYNC] Retrying creation for existing agent {agent['name']} with failed status", flush=True)
                         await self.create_user_for_agent(agent)
                     # Create room if user exists but room doesn't
                     elif mapping.created and not mapping.room_created:
                         logger.info(f"Creating room for existing agent {agent['name']}")
-                        print(f"[AGENT_SYNC] Creating room for existing agent {agent['name']}", flush=True)
                         await self.create_or_update_agent_room(agent["id"])
                     # If room exists, validate it and check for room drift
                     elif mapping.created and mapping.room_created and mapping.room_id:
@@ -535,20 +518,15 @@ class AgentUserManager:
                                 logger.warning(f"🔄 Room drift detected for {agent['name']}!")
                                 logger.warning(f"  Stored room:  {mapping.room_id}")
                                 logger.warning(f"  Actual room:  {actual_room_id}")
-                                print(f"[AGENT_SYNC] 🔄 Room drift detected for {agent['name']}: {mapping.room_id} -> {actual_room_id}", flush=True)
                                 mapping.room_id = actual_room_id
-                                await self.save_mappings()
                                 logger.info(f"✅ Fixed room mapping for {agent['name']}")
-                                print(f"[AGENT_SYNC] ✅ Fixed room mapping for {agent['name']}", flush=True)
                             elif not actual_room_id:
                                 # Could not discover room - fall back to existence check
                                 room_exists = await self.space_manager.check_room_exists(mapping.room_id)
                                 if not room_exists:
                                     logger.warning(f"Room {mapping.room_id} for {agent['name']} is invalid, recreating")
-                                    print(f"[AGENT_SYNC] Room {mapping.room_id} for {agent['name']} is invalid, recreating", flush=True)
                                     mapping.room_id = None
                                     mapping.room_created = False
-                                    await self.save_mappings()
                                     # Recreate the room
                                     await self.create_or_update_agent_room(agent["id"])
                                     continue  # Skip invitation acceptance below
@@ -580,10 +558,8 @@ class AgentUserManager:
         # If space was just created, migrate all existing rooms to it
         if space_just_created and self.space_manager.get_space_id():
             logger.info("Migrating existing agent rooms to the new space")
-            print("[AGENT_SYNC] Migrating existing agent rooms to the new space", flush=True)
             migrated = await self.space_manager.migrate_existing_rooms_to_space(self.mappings)
             logger.info(f"Migrated {migrated} rooms to space")
-            print(f"[AGENT_SYNC] Migrated {migrated} rooms to space", flush=True)
 
         # Temporarily disabled to prevent blocking message processing
         # TODO: Fix permission issues before re-enabling
