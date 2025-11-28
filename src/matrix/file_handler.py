@@ -529,11 +529,9 @@ class LettaFileHandler:
                     logger.info(f"Folder {source_id} already attached to agent {agent_id}")
                     return
             
-            # Attach folder to agent (SDK v1.x: attach returns None)
+            # Attach folder to agent (SDK v1.x: folder_id positional, agent_id keyword)
             await self._run_sync(
-                self.letta_client.agents.folders.attach,
-                agent_id,
-                source_id
+                lambda: self.letta_client.agents.folders.attach(source_id, agent_id=agent_id)
             )
             logger.info(f"Attached folder {source_id} to agent {agent_id}")
             

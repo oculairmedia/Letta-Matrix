@@ -383,8 +383,8 @@ class TestFileHandler:
         
         await file_handler._attach_source_to_agent(folder_id, agent_id)
         
-        # Verify attach was called
-        file_handler.letta_client.agents.folders.attach.assert_called_once_with(agent_id, folder_id)
+        # Verify attach was called with folder_id positional and agent_id as keyword
+        file_handler.letta_client.agents.folders.attach.assert_called_once_with(folder_id, agent_id=agent_id)
     
     @pytest.mark.asyncio
     async def test_attach_source_to_agent_already_attached(self, file_handler):
