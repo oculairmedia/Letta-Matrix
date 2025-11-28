@@ -266,7 +266,8 @@ async def send_to_letta_api_streaming(
     handler = StreamingMessageHandler(
         send_message=send_message,
         delete_message=delete_message,
-        room_id=room_id
+        room_id=room_id,
+        delete_progress=False  # Keep progress messages visible
     )
     
     # Track the final response

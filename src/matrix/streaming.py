@@ -127,33 +127,71 @@ class StepStreamReader:
         
         try:
             # Run streaming in executor since SDK is synchronous
+            # Use a queue to bridge sync stream to async iteration
+            import queue
+            import threading
+            
+            chunk_queue = queue.Queue()
+            error_holder = []
+            
+            def _consume_stream():
+                """Consume stream in background thread and put chunks in queue"""
+                try:
+                    logger.debug(f"[STREAM] Creating stream for agent {agent_id}")
+                    stream = self.client.agents.messages.stream(
+                        agent_id=agent_id,
+                        input=message,
+                        streaming=True,
+                        stream_tokens=False,  # Step streaming only
+                        include_pings=self.include_pings,
+                        background=background,
+                    )
+                    logger.debug("[STREAM] Stream created, consuming chunks...")
+                    chunk_count = 0
+                    for chunk in stream:
+                        chunk_count += 1
+                        logger.debug(f"[STREAM] Got chunk {chunk_count}")
+                        chunk_queue.put(('chunk', chunk))
+                    logger.debug(f"[STREAM] Stream complete, {chunk_count} chunks")
+                    chunk_queue.put(('done', None))
+                except Exception as e:
+                    logger.error(f"[STREAM] Error in stream consumption: {e}", exc_info=True)
+                    error_holder.append(e)
+                    chunk_queue.put(('error', e))
+            
+            # Start background thread
+            thread = threading.Thread(target=_consume_stream, daemon=True)
+            thread.start()
+            
+            # Consume from queue asynchronously
             loop = asyncio.get_event_loop()
+            start_time = asyncio.get_event_loop().time()
             
-            def _create_stream():
-                return self.client.agents.messages.stream(
-                    agent_id=agent_id,
-                    input=message,
-                    streaming=True,
-                    stream_tokens=False,  # Step streaming only
-                    include_pings=self.include_pings,
-                    background=background,
-                )
-            
-            stream = await loop.run_in_executor(None, _create_stream)
-            
-            # Process stream chunks
-            def _iter_stream():
-                return list(stream)
-            
-            chunks = await asyncio.wait_for(
-                loop.run_in_executor(None, _iter_stream),
-                timeout=self.timeout
-            )
-            
-            for chunk in chunks:
-                event = self._parse_chunk(chunk)
-                if event:
-                    yield event
+            while True:
+                # Check timeout
+                if loop.time() - start_time > self.timeout:
+                    logger.error(f"[STREAM] Timeout after {self.timeout}s")
+                    raise asyncio.TimeoutError()
+                
+                # Try to get chunk with timeout
+                try:
+                    item_type, item_data = await loop.run_in_executor(
+                        None,
+                        lambda: chunk_queue.get(timeout=1.0)
+                    )
+                except queue.Empty:
+                    continue
+                
+                if item_type == 'done':
+                    logger.debug("[STREAM] Stream completed normally")
+                    break
+                elif item_type == 'error':
+                    raise item_data
+                elif item_type == 'chunk':
+                    event = self._parse_chunk(item_data)
+                    if event:
+                        logger.debug(f"[STREAM] Yielding event: {event.type.value}")
+                        yield event
                     
         except asyncio.TimeoutError:
             logger.error(f"Stream timeout after {self.timeout}s")
@@ -268,10 +306,8 @@ class StreamingMessageHandler:
     """
     Handles streaming events and manages Matrix message lifecycle.
     
-    Implements the progress-then-delete pattern:
-    - Progress messages (tool calls) are sent and tracked
-    - When the next event arrives, previous progress is deleted
-    - Final assistant message remains in room
+    Shows progress messages for tool calls that remain visible in the room,
+    providing an activity trail of what the agent did.
     """
     
     def __init__(
@@ -279,6 +315,7 @@ class StreamingMessageHandler:
         send_message: Callable[[str, str], Any],
         delete_message: Callable[[str, str], Any],
         room_id: str,
+        delete_progress: bool = False,
     ):
         """
         Initialize the handler.
@@ -287,10 +324,12 @@ class StreamingMessageHandler:
             send_message: Async function(room_id, content) -> event_id
             delete_message: Async function(room_id, event_id) -> None
             room_id: Matrix room ID
+            delete_progress: If True, delete progress messages when next event arrives
         """
         self.send_message = send_message
         self.delete_message = delete_message
         self.room_id = room_id
+        self.delete_progress = delete_progress
         self._progress_event_id: Optional[str] = None
     
     async def handle_event(self, event: StreamEvent) -> Optional[str]:
@@ -303,8 +342,8 @@ class StreamingMessageHandler:
         Returns:
             Event ID of sent message (if any)
         """
-        # Delete previous progress message if exists
-        if self._progress_event_id and (event.is_progress or event.is_final or event.is_error):
+        # Optionally delete previous progress message
+        if self.delete_progress and self._progress_event_id and (event.is_progress or event.is_final or event.is_error):
             try:
                 await self.delete_message(self.room_id, self._progress_event_id)
                 logger.debug(f"Deleted progress message {self._progress_event_id}")
@@ -318,10 +357,11 @@ class StreamingMessageHandler:
             return None
         
         elif event.is_progress:
-            # Send progress message and track for deletion
+            # Send progress message (kept visible unless delete_progress=True)
             progress_text = event.format_progress()
             event_id = await self.send_message(self.room_id, progress_text)
-            self._progress_event_id = event_id
+            if self.delete_progress:
+                self._progress_event_id = event_id
             return event_id
         
         elif event.is_final:
@@ -347,8 +387,8 @@ class StreamingMessageHandler:
         return None
     
     async def cleanup(self):
-        """Clean up any remaining progress messages"""
-        if self._progress_event_id:
+        """Clean up any remaining progress messages (only if delete_progress=True)"""
+        if self.delete_progress and self._progress_event_id:
             try:
                 await self.delete_message(self.room_id, self._progress_event_id)
             except Exception as e:
