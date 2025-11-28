@@ -127,10 +127,15 @@ class LettaFileHandler:
         # SDK v1.x uses api_key instead of token
         self.letta_client = Letta(base_url=letta_api_url, api_key=letta_token)
         
+        # Create a separate client for folder operations that bypasses the proxy
+        # The proxy has issues with folder attach endpoints
+        direct_url = letta_api_url.replace(':8289', ':8283')  # Use direct Letta server
+        self.letta_direct_client = Letta(base_url=direct_url, api_key=letta_token)
+        
         # Log token status at init
         logger.info(f"LettaFileHandler initialized - matrix_access_token present: {bool(self.matrix_access_token)}, length: {len(self.matrix_access_token) if self.matrix_access_token else 0}")
         logger.info(f"Embedding config: model={embedding_model}, endpoint={embedding_endpoint}, dim={embedding_dim}")
-        logger.info(f"Using Letta SDK for API calls")
+        logger.info(f"Using Letta SDK for API calls (proxy: {letta_api_url}, direct: {direct_url})")
     
     async def _run_sync(self, func, *args, **kwargs):
         """Run a synchronous function in a thread pool"""
@@ -530,8 +535,9 @@ class LettaFileHandler:
                     return
             
             # Attach folder to agent (SDK v1.x: folder_id positional, agent_id keyword)
+            # Use direct client to bypass proxy (proxy has issues with folder attach)
             await self._run_sync(
-                lambda: self.letta_client.agents.folders.attach(source_id, agent_id=agent_id)
+                lambda: self.letta_direct_client.agents.folders.attach(source_id, agent_id=agent_id)
             )
             logger.info(f"Attached folder {source_id} to agent {agent_id}")
             
