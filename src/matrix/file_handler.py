@@ -276,7 +276,8 @@ class LettaFileHandler:
             content = event.source.get('content', {})
             msgtype = content.get('msgtype')
             
-            if msgtype != 'm.file':
+            # Accept both m.file and m.image message types
+            if msgtype not in ['m.file', 'm.image']:
                 return None
             
             # Extract file information
