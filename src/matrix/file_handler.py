@@ -304,11 +304,11 @@ class LettaFileHandler:
             
             # Send multimodal message to agent using SDK
             # Format: content array with text and image parts
-            # Note: Agent must use send_message tool to respond, so we phrase this as a request
+            # Simple prompt as shown in Letta docs - let agent respond naturally
             message_content = [
                 {
                     "type": "text",
-                    "text": f"User uploaded an image: {metadata.file_name}. Please analyze this image and use send_message to tell the user what you see in detail."
+                    "text": f"The user uploaded an image ({metadata.file_name}). Describe what you see in this image."
                 },
                 {
                     "type": "image",
@@ -335,7 +335,10 @@ class LettaFileHandler:
                 return True
             else:
                 logger.error(f"Failed to send image to agent")
-                await self._notify(room_id, f"⚠️ Failed to send image to agent")
+                await self._notify(room_id, 
+                    f"⚠️ Image upload failed. Your agent may need to be configured without strict tool requirements for image analysis. "
+                    f"Try using an agent with a vision-capable model (GPT-4o, Claude Sonnet 4, Gemini 2.5) and flexible tool rules."
+                )
                 return False
                 
         finally:
