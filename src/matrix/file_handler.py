@@ -222,13 +222,14 @@ class LettaFileHandler:
             
             logger.info(f"Processing file upload: {metadata.file_name} from {metadata.sender} in room {room_id}")
             
-            # Check if this is an image and notify about vision model requirements
+            # Check if this is an image - handle differently via multimodal message
             is_image = metadata.file_type.startswith('image/')
             if is_image:
-                logger.info(f"Image uploaded: {metadata.file_name}. Note: Agent must use a vision-capable model (GPT-4o, Gemini 1.5 Pro, Claude 3.5 Sonnet) to view images.")
+                logger.info(f"Image uploaded: {metadata.file_name}. Sending as multimodal message to agent.")
+                return await self._handle_image_upload(metadata, room_id, agent_id)
             
-            # Notify user that processing has started
-            await self._notify(room_id, f"📄 Processing file: {metadata.file_name}")
+            # For documents (PDF, text, etc.) - use file upload flow
+            await self._notify(room_id, f"📄 Processing document: {metadata.file_name}")
             
             # Download file from Matrix
             file_path = await self._download_matrix_file(metadata)
@@ -265,6 +266,158 @@ class LettaFileHandler:
         except Exception as e:
             logger.error(f"Error handling file event: {e}", exc_info=True)
             raise FileUploadError(f"Failed to process file upload: {e}")
+    
+    async def _handle_image_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> bool:
+        """
+        Handle image upload by sending as multimodal message to agent.
+        
+        Images are sent as base64-encoded data in a multipart message format
+        that vision-capable models (GPT-4o, Claude 3.5, Gemini) can process.
+        
+        Args:
+            metadata: File metadata
+            room_id: Room ID where image was uploaded
+            agent_id: Agent ID to send image to
+            
+        Returns:
+            True if image was processed successfully
+        """
+        import base64
+        
+        if not agent_id:
+            logger.warning("No agent_id provided for image upload, cannot send multimodal message")
+            await self._notify(room_id, f"⚠️ Cannot process image: no agent configured for this room")
+            return False
+        
+        # Notify user that we're processing the image
+        await self._notify(room_id, f"🖼️ Processing image: {metadata.file_name}")
+        
+        # Download image from Matrix
+        file_path = await self._download_matrix_file(metadata)
+        
+        try:
+            # Read and encode image as base64
+            with open(file_path, 'rb') as f:
+                image_data = base64.standard_b64encode(f.read()).decode('utf-8')
+            
+            logger.info(f"Encoded image {metadata.file_name} as base64 ({len(image_data)} chars)")
+            
+            # Send multimodal message to agent using SDK
+            # Format: content array with text and image parts
+            message_content = [
+                {
+                    "type": "text",
+                    "text": f"User uploaded an image: {metadata.file_name}. Please describe what you see."
+                },
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": metadata.file_type,
+                        "data": image_data,
+                    }
+                }
+            ]
+            
+            # Send to agent via SDK
+            response = await self._send_multimodal_message(agent_id, message_content)
+            
+            if response:
+                logger.info(f"Successfully sent image {metadata.file_name} to agent {agent_id}")
+                await self._notify(room_id, f"✅ Image sent to agent for analysis")
+                
+                # Extract and send agent response back to Matrix
+                assistant_response = self._extract_assistant_response(response)
+                if assistant_response:
+                    await self._notify(room_id, assistant_response)
+                
+                return True
+            else:
+                logger.error(f"Failed to send image to agent")
+                await self._notify(room_id, f"⚠️ Failed to send image to agent")
+                return False
+                
+        finally:
+            # Clean up temporary file
+            if file_path and os.path.exists(file_path):
+                os.unlink(file_path)
+                logger.debug(f"Cleaned up temporary file {file_path}")
+    
+    async def _send_multimodal_message(self, agent_id: str, content: list) -> Optional[Any]:
+        """
+        Send a multimodal message (with images) to a Letta agent.
+        
+        Args:
+            agent_id: Agent ID to send message to
+            content: Message content array with text and image parts
+            
+        Returns:
+            Agent response or None on error
+        """
+        try:
+            async def _do_send():
+                return await self._run_sync(
+                    self.letta_client.agents.messages.create,
+                    agent_id=agent_id,
+                    messages=[{
+                        "role": "user",
+                        "content": content
+                    }]
+                )
+            
+            response = await self._retry_async(_do_send, "Multimodal message send")
+            logger.debug(f"Multimodal message response: {type(response)}")
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error sending multimodal message: {e}", exc_info=True)
+            return None
+    
+    def _extract_assistant_response(self, response: Any) -> Optional[str]:
+        """
+        Extract assistant message text from Letta response.
+        
+        Args:
+            response: Letta API response object
+            
+        Returns:
+            Assistant message text or None
+        """
+        try:
+            # Handle SDK response object
+            if hasattr(response, 'messages'):
+                messages = response.messages
+            elif hasattr(response, 'model_dump'):
+                data = response.model_dump()
+                messages = data.get('messages', [])
+            elif isinstance(response, dict):
+                messages = response.get('messages', [])
+            else:
+                return None
+            
+            # Look for assistant messages
+            assistant_texts = []
+            for msg in messages:
+                # Handle SDK message objects
+                if hasattr(msg, 'message_type'):
+                    msg_type = msg.message_type
+                    if msg_type == 'assistant_message' and hasattr(msg, 'content'):
+                        assistant_texts.append(str(msg.content))
+                # Handle dict messages
+                elif isinstance(msg, dict):
+                    msg_type = msg.get('message_type')
+                    if msg_type == 'assistant_message':
+                        content = msg.get('content')
+                        if content:
+                            assistant_texts.append(str(content))
+            
+            if assistant_texts:
+                return '\n'.join(assistant_texts)
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error extracting assistant response: {e}")
+            return None
     
     def _extract_file_metadata(self, event: Event, room_id: str) -> Optional[FileMetadata]:
         """Extract file metadata from Matrix event"""
