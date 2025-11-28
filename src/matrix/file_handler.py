@@ -304,11 +304,11 @@ class LettaFileHandler:
             
             # Send multimodal message to agent using SDK
             # Format: content array with text and image parts
-            # Simple prompt as shown in Letta docs - let agent respond naturally
+            # Include explicit instruction to use send_message tool for agents with tool_rules
             message_content = [
                 {
                     "type": "text",
-                    "text": f"The user uploaded an image ({metadata.file_name}). Describe what you see in this image."
+                    "text": f"[Image Upload: {metadata.file_name}]\n\nThe user has shared an image with you. Please analyze the image and respond to the user by calling the send_message tool with your description of what you see."
                 },
                 {
                     "type": "image",
@@ -366,8 +366,7 @@ class LettaFileHandler:
                     messages=[{
                         "role": "user",
                         "content": content
-                    }],
-                    use_assistant_message=True  # Allow direct responses without tool calls for images
+                    }]
                 )
             
             response = await self._retry_async(_do_send, "Multimodal message send")
