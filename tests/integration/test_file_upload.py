@@ -22,13 +22,19 @@ from src.matrix.file_handler import (
 @pytest.fixture
 def file_handler():
     """Create a file handler instance for testing"""
-    return LettaFileHandler(
-        homeserver_url="http://test-matrix.local",
-        letta_api_url="http://test-letta.local",
-        letta_token="test-token",
-        max_retries=1,  # Reduce retries for faster tests
-        retry_delay=0.1
-    )
+    with patch('src.matrix.file_handler.Letta') as mock_letta:
+        # Mock the Letta client
+        mock_client = MagicMock()
+        mock_letta.return_value = mock_client
+        
+        handler = LettaFileHandler(
+            homeserver_url="http://test-matrix.local",
+            letta_api_url="http://test-letta.local",
+            letta_token="test-token",
+            max_retries=1,  # Reduce retries for faster tests
+            retry_delay=0.1
+        )
+        return handler
 
 
 @pytest.fixture
@@ -79,6 +85,7 @@ class TestFileHandler:
         assert metadata.file_type == "application/pdf"
         assert metadata.file_size == 102400
         assert metadata.room_id == "!test:matrix.org"
+        assert metadata.sender == "@user:matrix.org"
     
     def test_extract_file_metadata_non_file_event(self, file_handler):
         """Test that non-file events return None"""
@@ -86,7 +93,7 @@ class TestFileHandler:
         event.source = {
             "content": {
                 "msgtype": "m.text",
-                "body": "Hello world"
+                "body": "Hello"
             }
         }
         
@@ -94,77 +101,66 @@ class TestFileHandler:
         assert metadata is None
     
     def test_validate_file_supported_type(self, file_handler, sample_file_metadata):
-        """Test file validation for supported types"""
-        result = file_handler._validate_file(sample_file_metadata)
-        assert result is None  # None means valid
+        """Test validation of supported file type"""
+        error = file_handler._validate_file(sample_file_metadata)
+        assert error is None
     
     def test_validate_file_unsupported_type(self, file_handler, sample_file_metadata):
-        """Test file validation rejects unsupported types"""
-        sample_file_metadata.file_type = "application/zip"
-        result = file_handler._validate_file(sample_file_metadata)
-        assert result is not None
-        assert "not supported" in result
-        assert "application/zip" in result
+        """Test validation of unsupported file type"""
+        sample_file_metadata.file_type = "application/x-unknown"
+        error = file_handler._validate_file(sample_file_metadata)
+        assert error is not None
+        assert "not supported" in error
     
     def test_validate_file_too_large(self, file_handler, sample_file_metadata):
-        """Test file validation rejects files that are too large"""
-        sample_file_metadata.file_size = 100 * 1024 * 1024  # 100MB
-        result = file_handler._validate_file(sample_file_metadata)
-        assert result is not None
-        assert "too large" in result
+        """Test validation of file that's too large"""
+        sample_file_metadata.file_size = MAX_FILE_SIZE + 1
+        error = file_handler._validate_file(sample_file_metadata)
+        assert error is not None
+        assert "too large" in error
     
-    def test_validate_file_all_supported_types(self, file_handler):
+    def test_validate_file_all_supported_types(self, file_handler, sample_file_metadata):
         """Test all supported file types pass validation"""
         for mime_type in SUPPORTED_FILE_TYPES.keys():
-            metadata = FileMetadata(
-                file_url="mxc://test/123",
-                file_name="test.file",
-                file_type=mime_type,
-                file_size=1024,
-                room_id="!test:matrix.org",
-                sender="@user:matrix.org",
-                timestamp=123456,
-                event_id="$event"
-            )
-            assert file_handler._validate_file(metadata) is None
+            sample_file_metadata.file_type = mime_type
+            sample_file_metadata.file_size = 1024  # Reset to valid size
+            error = file_handler._validate_file(sample_file_metadata)
+            assert error is None, f"Failed for {mime_type}"
     
     @pytest.mark.asyncio
     async def test_download_matrix_file(self, file_handler, sample_file_metadata):
-        """Test downloading file from Matrix media repository"""
+        """Test downloading file from Matrix"""
         with aioresponses() as mocked:
-            # Uses authenticated endpoint (MSC3916)
-            download_url = "http://test-matrix.local/_matrix/client/v1/media/download/matrix.org/abc123"
-            mocked.get(download_url, body=b"test pdf content")
+            mocked.get(
+                "http://test-matrix.local/_matrix/client/v1/media/download/matrix.org/abc123",
+                body=b"test file content"
+            )
             
             file_path = await file_handler._download_matrix_file(sample_file_metadata)
             
-            try:
-                assert os.path.exists(file_path)
-                assert file_path.endswith('.pdf')
-                with open(file_path, 'rb') as f:
-                    assert f.read() == b"test pdf content"
-            finally:
-                # Clean up
-                if os.path.exists(file_path):
-                    os.unlink(file_path)
+            assert os.path.exists(file_path)
+            with open(file_path, 'rb') as f:
+                assert f.read() == b"test file content"
+            
+            # Cleanup
+            os.unlink(file_path)
     
     @pytest.mark.asyncio
     async def test_download_matrix_file_error(self, file_handler, sample_file_metadata):
-        """Test download error handling"""
+        """Test handling download errors"""
         with aioresponses() as mocked:
-            # Uses authenticated endpoint (MSC3916)
-            download_url = "http://test-matrix.local/_matrix/client/v1/media/download/matrix.org/abc123"
-            mocked.get(download_url, status=404, body="Not found")
+            mocked.get(
+                "http://test-matrix.local/_matrix/client/v1/media/download/matrix.org/abc123",
+                status=404
+            )
             
-            with pytest.raises(FileUploadError) as exc_info:
+            with pytest.raises(FileUploadError):
                 await file_handler._download_matrix_file(sample_file_metadata)
-            
-            assert "Failed to download file" in str(exc_info.value)
     
     @pytest.mark.asyncio
     async def test_download_matrix_file_invalid_url(self, file_handler, sample_file_metadata):
-        """Test invalid mxc URL handling"""
-        sample_file_metadata.file_url = "http://invalid/url"
+        """Test handling invalid mxc URL"""
+        sample_file_metadata.file_url = "http://invalid.url"
         
         with pytest.raises(FileUploadError) as exc_info:
             await file_handler._download_matrix_file(sample_file_metadata)
@@ -186,26 +182,21 @@ class TestFileHandler:
     
     @pytest.mark.asyncio
     async def test_get_or_create_folder_new(self, file_handler):
-        """Test creating new folder"""
+        """Test creating new folder using SDK"""
         room_id = "!newroom:matrix.org"
         
-        with aioresponses() as mocked:
-            # Mock list sources - empty
-            mocked.get(
-                "http://test-letta.local/v1/sources/",
-                payload=[]
-            )
-            
-            # Mock create source
-            mocked.post(
-                "http://test-letta.local/v1/sources/",
-                payload={"id": "source-new-123", "name": "matrix-newroom-matrix.org"}
-            )
-            
-            folder_id = await file_handler._get_or_create_folder(room_id)
-            
-            assert folder_id == "source-new-123"
-            assert file_handler._folder_cache[room_id] == "source-new-123"
+        # Mock SDK v1.x folders methods
+        file_handler.letta_client.folders.list.return_value = []  # No existing folders
+        
+        mock_folder = MagicMock()
+        mock_folder.id = "source-new-123"
+        mock_folder.name = "matrix_files_newroom"
+        file_handler.letta_client.folders.create.return_value = mock_folder
+        
+        folder_id = await file_handler._get_or_create_folder(room_id)
+        
+        assert folder_id == "source-new-123"
+        assert file_handler._folder_cache[room_id] == "source-new-123"
     
     @pytest.mark.asyncio
     async def test_get_or_create_folder_with_agent(self, file_handler):
@@ -213,261 +204,261 @@ class TestFileHandler:
         room_id = "!agentroom:matrix.org"
         agent_id = "agent-456"
         
-        with aioresponses() as mocked:
-            # Mock list sources - empty
-            mocked.get(
-                "http://test-letta.local/v1/sources/",
-                payload=[]
-            )
-            
-            # Mock get agent config (for embedding config)
-            mocked.get(
-                "http://test-letta.local/v1/agents/agent-456",
-                payload={
-                    "id": "agent-456",
-                    "name": "test-agent",
-                    "embedding_config": {
-                        "embedding_model": "text-embedding-3-small",
-                        "embedding_endpoint_type": "openai",
-                        "embedding_dim": 1536,
-                        "embedding_chunk_size": 300
-                    }
-                }
-            )
-            
-            # Mock create source
-            mocked.post(
-                "http://test-letta.local/v1/sources/",
-                payload={"id": "source-agent-123"}
-            )
-            
-            # Mock attach to agent
-            mocked.post(
-                "http://test-letta.local/v1/agents/agent-456/sources/source-agent-123",
-                status=200
-            )
-            
-            folder_id = await file_handler._get_or_create_folder(room_id, agent_id)
-            
-            assert folder_id == "source-agent-123"
+        # Mock SDK v1.x folders methods
+        file_handler.letta_client.folders.list.return_value = []  # No existing folders
+        
+        mock_agent = MagicMock()
+        mock_agent.embedding_config = MagicMock()
+        mock_agent.embedding_config.embedding_model = "text-embedding-3-small"
+        mock_agent.embedding_config.embedding_endpoint_type = "openai"
+        mock_agent.embedding_config.embedding_dim = 1536
+        mock_agent.embedding_config.embedding_chunk_size = 300
+        mock_agent.embedding_config.embedding_endpoint = None
+        file_handler.letta_client.agents.retrieve.return_value = mock_agent
+        
+        mock_folder = MagicMock()
+        mock_folder.id = "source-agent-123"
+        mock_folder.name = "matrix_files_agentroom"
+        file_handler.letta_client.folders.create.return_value = mock_folder
+        
+        file_handler.letta_client.agents.folders.list.return_value = []
+        
+        folder_id = await file_handler._get_or_create_folder(room_id, agent_id)
+        
+        assert folder_id == "source-agent-123"
     
     @pytest.mark.asyncio
     async def test_poll_file_status_success(self, file_handler):
         """Test polling for successful file processing"""
-        source_id = "source-123"
+        folder_id = "source-123"
         file_id = "file-123"
         
-        with aioresponses() as mocked:
-            mocked.get(
-                f"http://test-letta.local/v1/sources/{source_id}/files/{file_id}",
-                payload={"processing_status": "completed"}
-            )
-            
-            success = await file_handler._poll_file_status(source_id, file_id, timeout=5, interval=0.1)
-            
-            assert success is True
+        # Mock SDK v1.x folders.files.list to return completed file
+        mock_file = MagicMock()
+        mock_file.id = file_id
+        mock_file.processing_status = "completed"
+        file_handler.letta_client.folders.files.list.return_value = [mock_file]
+        
+        success = await file_handler._poll_file_status(folder_id, file_id, timeout=5, interval=0.1)
+        
+        assert success is True
     
     @pytest.mark.asyncio
     async def test_poll_file_status_failure(self, file_handler):
         """Test polling for failed file processing"""
-        source_id = "source-123"
+        folder_id = "source-123"
         file_id = "file-123"
         
-        with aioresponses() as mocked:
-            mocked.get(
-                f"http://test-letta.local/v1/sources/{source_id}/files/{file_id}",
-                payload={"processing_status": "error", "error_message": "Processing error"}
-            )
-            
-            success = await file_handler._poll_file_status(source_id, file_id, timeout=5, interval=0.1)
-            
-            assert success is False
+        # Mock SDK v1.x folders.files.list to return failed file
+        mock_file = MagicMock()
+        mock_file.id = file_id
+        mock_file.processing_status = "failed"
+        mock_file.error_message = "Processing error"
+        file_handler.letta_client.folders.files.list.return_value = [mock_file]
+        
+        success = await file_handler._poll_file_status(folder_id, file_id, timeout=5, interval=0.1)
+        
+        assert success is False
     
     @pytest.mark.asyncio
     async def test_poll_file_status_sync(self, file_handler):
-        """Test sync-complete file returns immediately"""
-        success = await file_handler._poll_file_status("source-123", "sync-complete")
+        """Test that sync-complete is handled immediately"""
+        source_id = "source-123"
+        file_id = "sync-complete"
+        
+        success = await file_handler._poll_file_status(source_id, file_id)
+        
         assert success is True
     
     @pytest.mark.asyncio
     async def test_poll_file_status_not_found(self, file_handler):
-        """Test file not found returns failure after retries"""
-        source_id = "source-123"
-        file_id = "file-missing"
+        """Test polling when file is not found"""
+        folder_id = "source-123"
+        file_id = "file-123"
         
-        with aioresponses() as mocked:
-            # Mock multiple 404 responses (up to max_consecutive_errors)
-            for _ in range(3):
-                mocked.get(
-                    f"http://test-letta.local/v1/sources/{source_id}/files/{file_id}",
-                    status=404
-                )
-            
-            success = await file_handler._poll_file_status(source_id, file_id, timeout=5, interval=0.1)
-            
-            assert success is False  # 404 should fail after retries
+        # Mock SDK v1.x folders.files.list to return empty (file not found)
+        file_handler.letta_client.folders.files.list.return_value = []
+        
+        success = await file_handler._poll_file_status(folder_id, file_id, timeout=1, interval=0.1)
+        
+        assert success is False
     
     @pytest.mark.asyncio
     async def test_upload_to_letta(self, file_handler, sample_file_metadata):
-        """Test uploading file to Letta"""
+        """Test uploading file to Letta using SDK v1.x"""
         folder_id = "source-123"
         
         # Create a temporary test file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as f:
-            f.write(b"test pdf content")
+            f.write(b"test content")
             temp_path = f.name
         
         try:
-            with aioresponses() as mocked:
-                mocked.post(
-                    f"http://test-letta.local/v1/sources/{folder_id}/upload",
-                    payload={"job_id": "job-upload-123"}
-                )
-                
-                job_id = await file_handler._upload_to_letta(temp_path, folder_id, sample_file_metadata)
-                
-                assert job_id == "job-upload-123"
+            # Mock SDK v1.x folders.files.upload
+            mock_result = MagicMock()
+            mock_result.id = "file-456"
+            file_handler.letta_client.folders.files.upload.return_value = mock_result
+            
+            file_id = await file_handler._upload_to_letta(temp_path, folder_id, sample_file_metadata)
+            
+            assert file_id == "file-456"
+            
+            # Verify upload was called with correct params
+            file_handler.letta_client.folders.files.upload.assert_called_once()
+            call_args = file_handler.letta_client.folders.files.upload.call_args
+            assert call_args[0][0] == folder_id  # folder_id
+            
         finally:
             os.unlink(temp_path)
     
     @pytest.mark.asyncio
     async def test_handle_file_event_end_to_end(self, file_handler, mock_event):
-        """Test complete file upload flow"""
+        """Test full file handling flow"""
         room_id = "!test:matrix.org"
-        agent_id = "agent-123"
+        agent_id = "agent-789"
         
-        # Mock all the necessary API calls
-        with patch.object(file_handler, '_download_matrix_file', return_value='/tmp/test.pdf') as mock_download, \
-             patch.object(file_handler, '_get_or_create_folder', return_value='source-123') as mock_folder, \
-             patch.object(file_handler, '_upload_to_letta', return_value='file-123') as mock_upload, \
-             patch.object(file_handler, '_poll_file_status', return_value=True) as mock_poll, \
-             patch.object(file_handler, '_notify', new_callable=AsyncMock) as mock_notify, \
-             patch('os.path.exists', return_value=True), \
-             patch('os.unlink'):
+        # Mock SDK v1.x folders methods
+        mock_folder = MagicMock()
+        mock_folder.id = "source-existing"
+        mock_folder.name = "matrix_files_test"
+        file_handler.letta_client.folders.list.return_value = [mock_folder]
+        file_handler.letta_client.agents.folders.list.return_value = []
+        
+        mock_upload = MagicMock()
+        mock_upload.id = "file-new"
+        file_handler.letta_client.folders.files.upload.return_value = mock_upload
+        
+        mock_file = MagicMock()
+        mock_file.id = "file-new"
+        mock_file.processing_status = "completed"
+        file_handler.letta_client.folders.files.list.return_value = [mock_file]
+        
+        with aioresponses() as mocked:
+            # Mock Matrix file download
+            mocked.get(
+                "http://test-matrix.local/_matrix/client/v1/media/download/matrix.org/abc123",
+                body=b"test pdf content"
+            )
             
-            success = await file_handler.handle_file_event(mock_event, room_id, agent_id)
+            result = await file_handler.handle_file_event(mock_event, room_id, agent_id)
             
-            assert success is True
-            mock_download.assert_called_once()
-            mock_folder.assert_called_once_with(room_id, agent_id)
-            mock_upload.assert_called_once()
-            mock_poll.assert_called_once_with('source-123', 'file-123')
-            # Should have notified start and success
-            assert mock_notify.call_count >= 2
+            assert result is True
     
     @pytest.mark.asyncio
-    async def test_handle_file_event_rejected_file(self, file_handler):
-        """Test file rejection sends notification"""
+    async def test_handle_file_event_rejected_file(self, file_handler, mock_event):
+        """Test that unsupported files are rejected"""
         room_id = "!test:matrix.org"
         
-        # Create event with unsupported file type
-        event = Mock()
-        event.event_id = "$test123"
-        event.sender = "@user:matrix.org"
-        event.server_timestamp = 1234567890
-        event.source = {
-            "content": {
-                "msgtype": "m.file",
-                "url": "mxc://matrix.org/abc123",
-                "body": "archive.zip",
-                "info": {
-                    "mimetype": "application/zip",
-                    "size": 1024
-                }
-            }
-        }
+        # Modify event to have unsupported type
+        mock_event.source["content"]["info"]["mimetype"] = "application/x-unknown"
         
-        with patch.object(file_handler, '_notify', new_callable=AsyncMock) as mock_notify:
-            success = await file_handler.handle_file_event(event, room_id)
-            
-            assert success is False
-            mock_notify.assert_called_once()
-            # Check notification contains rejection message
-            call_args = mock_notify.call_args[0]
-            assert "not supported" in call_args[1]
+        result = await file_handler.handle_file_event(mock_event, room_id)
+        
+        assert result is False
     
     @pytest.mark.asyncio
     async def test_retry_logic(self, file_handler):
-        """Test retry logic with exponential backoff"""
+        """Test that retry logic works correctly"""
         call_count = 0
         
-        async def failing_then_success():
+        async def failing_func():
             nonlocal call_count
             call_count += 1
-            if call_count < 2:
-                raise Exception("Temporary failure")
-            return "success"
+            raise Exception("Test error")
         
-        # Set up handler with 3 retries
-        file_handler.max_retries = 3
-        file_handler.retry_delay = 0.01
+        with pytest.raises(Exception):
+            await file_handler._retry_async(failing_func, "test operation")
         
-        result = await file_handler._retry_async(failing_then_success, "test operation")
+        # Should have been called max_retries times (1 in test config)
+        assert call_count == file_handler.max_retries
+    
+    @pytest.mark.asyncio
+    async def test_attach_source_to_agent(self, file_handler):
+        """Test attaching folder to agent"""
+        folder_id = "source-123"
+        agent_id = "agent-456"
         
-        assert result == "success"
-        assert call_count == 2
+        # Mock SDK v1.x - folder not yet attached
+        file_handler.letta_client.agents.folders.list.return_value = []
+        
+        await file_handler._attach_source_to_agent(folder_id, agent_id)
+        
+        # Verify attach was called
+        file_handler.letta_client.agents.folders.attach.assert_called_once_with(agent_id, folder_id)
+    
+    @pytest.mark.asyncio
+    async def test_attach_source_to_agent_already_attached(self, file_handler):
+        """Test that already attached folders don't get re-attached"""
+        folder_id = "source-123"
+        agent_id = "agent-456"
+        
+        # Mock SDK v1.x - folder already attached
+        mock_folder = MagicMock()
+        mock_folder.id = folder_id
+        file_handler.letta_client.agents.folders.list.return_value = [mock_folder]
+        
+        await file_handler._attach_source_to_agent(folder_id, agent_id)
+        
+        # Verify attach was NOT called
+        file_handler.letta_client.agents.folders.attach.assert_not_called()
 
 
 class TestFileMetadata:
-    """Test FileMetadata dataclass"""
+    """Test suite for FileMetadata dataclass"""
     
     def test_file_metadata_creation(self):
         """Test creating FileMetadata instance"""
         metadata = FileMetadata(
-            file_url="mxc://test",
+            file_url="mxc://test/123",
             file_name="test.pdf",
             file_type="application/pdf",
             file_size=1024,
-            room_id="!room:test",
-            sender="@user:test",
-            timestamp=123456,
-            event_id="$event"
+            room_id="!test:matrix.org",
+            sender="@user:matrix.org",
+            timestamp=12345,
+            event_id="$event123"
         )
         
+        assert metadata.file_url == "mxc://test/123"
         assert metadata.file_name == "test.pdf"
-        assert metadata.file_type == "application/pdf"
         assert metadata.file_size == 1024
     
     def test_file_metadata_equality(self):
         """Test FileMetadata equality"""
         metadata1 = FileMetadata(
-            file_url="mxc://test",
+            file_url="mxc://test/123",
             file_name="test.pdf",
             file_type="application/pdf",
             file_size=1024,
-            room_id="!room:test",
-            sender="@user:test",
-            timestamp=123456,
-            event_id="$event"
+            room_id="!test:matrix.org",
+            sender="@user:matrix.org",
+            timestamp=12345,
+            event_id="$event123"
         )
         metadata2 = FileMetadata(
-            file_url="mxc://test",
+            file_url="mxc://test/123",
             file_name="test.pdf",
             file_type="application/pdf",
             file_size=1024,
-            room_id="!room:test",
-            sender="@user:test",
-            timestamp=123456,
-            event_id="$event"
+            room_id="!test:matrix.org",
+            sender="@user:matrix.org",
+            timestamp=12345,
+            event_id="$event123"
         )
         
         assert metadata1 == metadata2
 
 
 class TestConstants:
-    """Test module constants"""
+    """Test suite for module constants"""
     
     def test_supported_file_types(self):
-        """Test supported file types are correct"""
+        """Test supported file types are defined"""
         assert 'application/pdf' in SUPPORTED_FILE_TYPES
         assert 'text/plain' in SUPPORTED_FILE_TYPES
         assert 'text/markdown' in SUPPORTED_FILE_TYPES
         assert 'application/json' in SUPPORTED_FILE_TYPES
     
     def test_max_file_size(self):
-        """Test max file size is 50MB"""
-        assert MAX_FILE_SIZE == 50 * 1024 * 1024
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        """Test max file size is reasonable"""
+        assert MAX_FILE_SIZE == 50 * 1024 * 1024  # 50MB

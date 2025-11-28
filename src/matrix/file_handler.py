@@ -7,37 +7,51 @@ filesystem API for document processing and embedding.
 Flow:
 1. Detect file upload events (m.room.message with msgtype=m.file)
 2. Download file from Matrix media repository
-3. Get or create Letta folder for the room
-4. Upload file to Letta folder
-5. Poll for processing completion
-6. Notify user in Matrix room
+3. Get or create Letta source for the room
+4. Upload file to Letta source
+5. Attach source to agent
+6. Poll for processing completion
+7. Notify user in Matrix room
 """
 
 import asyncio
-import json
+import functools
 import logging
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, Callable, Awaitable
 from dataclasses import dataclass
 import aiohttp
 from nio import Event
 
+# Import Letta SDK
+from letta_client import Letta
+
 logger = logging.getLogger("matrix_client.file_handler")
 
 # Supported file types from Letta Filesystem API
+# Note: Some clients send application/octet-stream for unknown types
 SUPPORTED_FILE_TYPES = {
     'application/pdf': '.pdf',
     'text/plain': '.txt',
     'text/markdown': '.md',
+    'text/x-markdown': '.md',
     'application/json': '.json',
+    'application/octet-stream': None,  # Accept but determine by extension
 }
+
+# File extensions to accept when MIME type is application/octet-stream
+SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.md', '.json', '.markdown'}
 
 # File size limit (50MB)
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
 # Default embedding model
 DEFAULT_EMBEDDING_MODEL = "letta/letta-free"
+
+# Thread pool for running sync SDK calls
+_executor = ThreadPoolExecutor(max_workers=4)
 
 
 @dataclass
@@ -59,7 +73,7 @@ class FileUploadError(Exception):
 
 
 class LettaFileHandler:
-    """Handles Matrix file uploads and Letta integration"""
+    """Handles Matrix file uploads and Letta integration using Letta SDK"""
     
     def __init__(
         self,
@@ -85,7 +99,7 @@ class LettaFileHandler:
             letta_token: Letta API authentication token
             matrix_access_token: Matrix access token for downloading authenticated media
             notify_callback: Optional callback function to send notifications to Matrix
-            embedding_model: Embedding model to use for folders (default: letta/letta-free)
+            embedding_model: Embedding model to use for sources (default: letta/letta-free)
             embedding_endpoint: Embedding API endpoint (e.g., http://localhost:11434/v1 for Ollama)
             embedding_endpoint_type: Type of embedding endpoint (openai, huggingface, etc.)
             embedding_dim: Embedding dimension (1536 for OpenAI, 2560 for some Ollama models)
@@ -105,12 +119,26 @@ class LettaFileHandler:
         self.embedding_chunk_size = embedding_chunk_size
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self._folder_cache: Dict[str, str] = {}  # room_id -> folder_id cache
+        self._source_cache: Dict[str, str] = {}  # room_id -> source_id cache
+        self._folder_cache = self._source_cache  # Alias for backward compatibility
         self._cache_lock = asyncio.Lock()  # Protect cache from race conditions
+        
+        # Initialize Letta SDK client
+        # SDK v1.x uses api_key instead of token
+        self.letta_client = Letta(base_url=letta_api_url, api_key=letta_token)
         
         # Log token status at init
         logger.info(f"LettaFileHandler initialized - matrix_access_token present: {bool(self.matrix_access_token)}, length: {len(self.matrix_access_token) if self.matrix_access_token else 0}")
         logger.info(f"Embedding config: model={embedding_model}, endpoint={embedding_endpoint}, dim={embedding_dim}")
+        logger.info(f"Using Letta SDK for API calls")
+    
+    async def _run_sync(self, func, *args, **kwargs):
+        """Run a synchronous function in a thread pool"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _executor,
+            functools.partial(func, *args, **kwargs)
+        )
     
     async def _notify(self, room_id: str, message: str):
         """Send notification to Matrix room if callback is configured"""
@@ -160,7 +188,7 @@ class LettaFileHandler:
         Args:
             event: Matrix event object
             room_id: Room ID where file was uploaded
-            agent_id: Optional agent ID to attach folder to
+            agent_id: Optional agent ID to attach source to
             
         Returns:
             True if file was processed successfully
@@ -188,14 +216,18 @@ class LettaFileHandler:
             file_path = await self._download_matrix_file(metadata)
             
             try:
-                # Get or create Letta folder for this room
-                folder_id = await self._get_or_create_folder(room_id, agent_id)
+                # Get or create Letta source for this room
+                source_id = await self._get_or_create_source(room_id, agent_id)
                 
                 # Upload to Letta
-                file_id = await self._upload_to_letta(file_path, folder_id, metadata)
+                file_id = await self._upload_to_letta(file_path, source_id, metadata)
+                
+                # Attach source to agent (idempotent)
+                if agent_id:
+                    await self._attach_source_to_agent(source_id, agent_id)
                 
                 # Poll for completion (using file status endpoint)
-                success = await self._poll_file_status(folder_id, file_id)
+                success = await self._poll_file_status(source_id, file_id)
                 
                 if success:
                     logger.info(f"Successfully processed file {metadata.file_name} in Letta")
@@ -263,16 +295,33 @@ class LettaFileHandler:
         Returns:
             Error message if validation fails, None if valid
         """
+        import os
+        
         # Check file size
         if metadata.file_size > MAX_FILE_SIZE:
             size_mb = metadata.file_size / (1024 * 1024)
             max_mb = MAX_FILE_SIZE / (1024 * 1024)
             return f"File '{metadata.file_name}' is too large ({size_mb:.1f}MB). Maximum size is {max_mb:.0f}MB."
         
-        # Check file type
+        # Check file type - also check by extension for application/octet-stream
         if metadata.file_type not in SUPPORTED_FILE_TYPES:
-            supported = ", ".join(SUPPORTED_FILE_TYPES.keys())
+            supported = ", ".join(k for k in SUPPORTED_FILE_TYPES.keys() if k != 'application/octet-stream')
             return f"File type '{metadata.file_type}' is not supported. Supported types: {supported}"
+        
+        # For application/octet-stream, verify the extension is supported
+        if metadata.file_type == 'application/octet-stream':
+            _, ext = os.path.splitext(metadata.file_name.lower())
+            if ext not in SUPPORTED_EXTENSIONS:
+                return f"File extension '{ext}' is not supported for unknown MIME type. Supported: {', '.join(SUPPORTED_EXTENSIONS)}"
+            # Update the file_type based on extension for better handling
+            if ext in ['.md', '.markdown']:
+                metadata.file_type = 'text/markdown'
+            elif ext == '.txt':
+                metadata.file_type = 'text/plain'
+            elif ext == '.pdf':
+                metadata.file_type = 'application/pdf'
+            elif ext == '.json':
+                metadata.file_type = 'application/json'
         
         return None
     
@@ -339,203 +388,190 @@ class LettaFileHandler:
                 os.unlink(temp_path)
             raise FileUploadError(f"Error downloading file: {e}")
     
-    async def _get_or_create_folder(self, room_id: str, agent_id: Optional[str] = None) -> str:
+    def _get_embedding_config(self, agent_id: Optional[str] = None) -> dict:
         """
-        Get or create Letta folder (source) for Matrix room
+        Get embedding configuration, optionally from agent
+        
+        Args:
+            agent_id: Optional agent ID to fetch config from
+            
+        Returns:
+            Embedding config dict
+        """
+        # Try to get agent's embedding config
+        if agent_id:
+            try:
+                agent = self.letta_client.agents.retrieve(agent_id)
+                if agent and agent.embedding_config:
+                    ec = agent.embedding_config
+                    config = {
+                        "embedding_model": ec.embedding_model,
+                        "embedding_endpoint_type": ec.embedding_endpoint_type or "openai",
+                        "embedding_dim": ec.embedding_dim,
+                        "embedding_chunk_size": ec.embedding_chunk_size or 300
+                    }
+                    if ec.embedding_endpoint:
+                        config["embedding_endpoint"] = ec.embedding_endpoint
+                    logger.info(f"Using agent's embedding config: model={config['embedding_model']}, dim={config['embedding_dim']}")
+                    return config
+            except Exception as e:
+                logger.warning(f"Failed to fetch agent embedding config: {e}")
+        
+        # Fall back to instance defaults
+        config = {
+            "embedding_model": self.embedding_model,
+            "embedding_endpoint_type": self.embedding_endpoint_type,
+            "embedding_dim": self.embedding_dim,
+            "embedding_chunk_size": self.embedding_chunk_size
+        }
+        if self.embedding_endpoint:
+            config["embedding_endpoint"] = self.embedding_endpoint
+        logger.info(f"Using fallback embedding config: model={self.embedding_model}, dim={self.embedding_dim}")
+        return config
+    
+    async def _get_or_create_source(self, room_id: str, agent_id: Optional[str] = None) -> str:
+        """
+        Get or create Letta folder (source) for Matrix room using SDK v1.x
+        
+        Note: In SDK v1.x, "sources" are now called "folders"
         
         Args:
             room_id: Matrix room ID
-            agent_id: Optional agent ID to attach folder to
+            agent_id: Optional agent ID to get embedding config from
             
         Returns:
-            Letta source/folder ID
+            Letta folder ID
         """
         # Check cache first (with lock for thread safety)
         async with self._cache_lock:
-            if room_id in self._folder_cache:
-                return self._folder_cache[room_id]
+            if room_id in self._source_cache:
+                return self._source_cache[room_id]
+        
+        # Sanitize room_id for use in folder name (remove special chars)
+        safe_room_id = room_id.replace("!", "").replace(":", "-")
+        folder_name = f"matrix-{safe_room_id}"
         
         async def _do_get_or_create() -> str:
-            # Sanitize room_id for use in folder name (remove special chars)
-            safe_room_id = room_id.replace("!", "").replace(":", "-")
-            folder_name = f"matrix-{safe_room_id}"
+            # Try to get existing folder by name (SDK v1.x: use folders.list with name filter)
+            try:
+                folders_page = await self._run_sync(
+                    self.letta_client.folders.list,
+                    name=folder_name
+                )
+                # SDK v1.x returns paginated result with .items
+                folders = folders_page.items if hasattr(folders_page, 'items') else folders_page
+                if folders and len(folders) > 0:
+                    folder_id = folders[0].id
+                    logger.info(f"Found existing folder by name: {folder_id}")
+                    return folder_id
+            except Exception as e:
+                logger.debug(f"Folder not found by name: {e}")
             
-            headers = {
-                "Authorization": f"Bearer {self.letta_token}",
-                "Content-Type": "application/json"
-            }
+            # Create new folder
+            logger.info(f"Creating new folder: {folder_name}")
+            embedding_config = await self._run_sync(self._get_embedding_config, agent_id)
             
-            async with aiohttp.ClientSession() as session:
-                # List sources to find existing one
-                # Letta uses "sources" for file storage (folders are an alias)
-                list_url = f"{self.letta_api_url}/v1/sources/"
-                async with session.get(list_url, headers=headers) as response:
-                    if response.status == 200:
-                        sources = await response.json()
-                        for source in sources:
-                            if source.get('name') == folder_name:
-                                folder_id = source['id']
-                                logger.info(f"Found existing source {folder_name}: {folder_id}")
-                                return folder_id
-                
-                # Fetch agent's embedding config to use for the source
-                embedding_config = None
-                if agent_id:
-                    agent_url = f"{self.letta_api_url}/v1/agents/{agent_id}"
-                    async with session.get(agent_url, headers=headers) as agent_resp:
-                        if agent_resp.status == 200:
-                            agent_data = await agent_resp.json()
-                            agent_embedding = agent_data.get('embedding_config')
-                            if agent_embedding:
-                                # Use the agent's embedding config
-                                embedding_config = {
-                                    "embedding_model": agent_embedding.get('embedding_model'),
-                                    "embedding_endpoint_type": agent_embedding.get('embedding_endpoint_type', 'openai'),
-                                    "embedding_dim": agent_embedding.get('embedding_dim'),
-                                    "embedding_chunk_size": agent_embedding.get('embedding_chunk_size', 300)
-                                }
-                                # Include endpoint if present
-                                if agent_embedding.get('embedding_endpoint'):
-                                    embedding_config["embedding_endpoint"] = agent_embedding['embedding_endpoint']
-                                logger.info(f"Using agent's embedding config: model={embedding_config['embedding_model']}, dim={embedding_config['embedding_dim']}")
-                        else:
-                            logger.warning(f"Failed to fetch agent config: {agent_resp.status}")
-                
-                # Fall back to instance defaults if agent config not available
-                if not embedding_config:
-                    embedding_config = {
-                        "embedding_model": self.embedding_model,
-                        "embedding_endpoint_type": self.embedding_endpoint_type,
-                        "embedding_dim": self.embedding_dim,
-                        "embedding_chunk_size": self.embedding_chunk_size
-                    }
-                    if self.embedding_endpoint:
-                        embedding_config["embedding_endpoint"] = self.embedding_endpoint
-                    logger.info(f"Using fallback embedding config: model={self.embedding_model}, dim={self.embedding_dim}")
-                
-                # Create new source
-                create_url = f"{self.letta_api_url}/v1/sources/"
-                
-                source_data = {
-                    "name": folder_name,
-                    "description": f"Documents from Matrix room {room_id}",
-                    "embedding_config": embedding_config
-                }
-                
-                async with session.post(create_url, headers=headers, json=source_data) as response:
-                    if response.status == 409:
-                        # Source already exists (conflict) - need to find it with pagination
-                        logger.info(f"Source {folder_name} already exists, searching with pagination...")
-                        # Search through all pages to find the source
-                        offset = 0
-                        page_size = 100
-                        while True:
-                            paginated_url = f"{self.letta_api_url}/v1/sources/?limit={page_size}&offset={offset}"
-                            async with session.get(paginated_url, headers=headers) as list_resp:
-                                if list_resp.status != 200:
-                                    break
-                                sources_page = await list_resp.json()
-                                if not sources_page:
-                                    break
-                                for source in sources_page:
-                                    if source.get('name') == folder_name:
-                                        folder_id = source['id']
-                                        logger.info(f"Found existing source via pagination: {folder_id}")
-                                        return folder_id
-                                offset += page_size
-                                if len(sources_page) < page_size:
-                                    break
-                        # If still not found, raise error
-                        raise FileUploadError(f"Source {folder_name} exists but could not be found")
-                    
-                    if response.status not in [200, 201]:
-                        error_text = await response.text()
-                        raise FileUploadError(f"Failed to create source: {response.status} - {error_text}")
-                    
-                    source_response = await response.json()
-                    folder_id = source_response['id']
-                    logger.info(f"Created new source {folder_name}: {folder_id}")
-                
-                # Attach to agent if provided
-                if agent_id:
-                    attach_url = f"{self.letta_api_url}/v1/agents/{agent_id}/sources/{folder_id}"
-                    
-                    async with session.post(attach_url, headers=headers) as response:
-                        if response.status in [200, 201, 204]:
-                            logger.info(f"Attached source {folder_id} to agent {agent_id}")
-                        else:
-                            error_text = await response.text()
-                            logger.warning(f"Failed to attach source to agent: {response.status} - {error_text}")
-                
-                return folder_id
+            try:
+                folder = await self._run_sync(
+                    self.letta_client.folders.create,
+                    name=folder_name,
+                    description=f"Documents from Matrix room {room_id}"
+                )
+                logger.info(f"Created new folder {folder_name}: {folder.id}")
+                return folder.id
+            except Exception as e:
+                error_str = str(e)
+                if "409" in error_str or "already exists" in error_str.lower() or "unique" in error_str.lower():
+                    # Folder exists but wasn't found - try list again
+                    logger.info(f"Folder {folder_name} already exists (conflict), fetching...")
+                    try:
+                        folders_page = await self._run_sync(
+                            self.letta_client.folders.list,
+                            name=folder_name
+                        )
+                        folders = folders_page.items if hasattr(folders_page, 'items') else folders_page
+                        if folders and len(folders) > 0:
+                            folder_id = folders[0].id
+                            logger.info(f"Found folder after conflict: {folder_id}")
+                            return folder_id
+                    except Exception as e2:
+                        logger.error(f"Failed to get folder after 409: {e2}")
+                raise FileUploadError(f"Failed to create folder: {e}")
         
-        folder_id = await self._retry_async(_do_get_or_create, "Get/create Letta source")
+        folder_id = await self._retry_async(_do_get_or_create, "Get/create Letta folder")
         
         # Cache the folder ID
         async with self._cache_lock:
-            self._folder_cache[room_id] = folder_id
+            self._source_cache[room_id] = folder_id
         
         return folder_id
     
-    async def _upload_to_letta(self, file_path: str, folder_id: str, metadata: FileMetadata) -> str:
+    async def _attach_source_to_agent(self, source_id: str, agent_id: str):
         """
-        Upload file to Letta folder
+        Attach a folder to an agent using SDK v1.x (idempotent)
+        
+        Note: In SDK v1.x, use agents.folders instead of agents.sources
+        
+        Args:
+            source_id: Letta folder ID
+            agent_id: Letta agent ID
+        """
+        try:
+            # Check if already attached (SDK v1.x returns paginated result)
+            attached_page = await self._run_sync(
+                self.letta_client.agents.folders.list,
+                agent_id
+            )
+            attached_folders = attached_page.items if hasattr(attached_page, 'items') else attached_page
+            
+            for folder in attached_folders:
+                if folder.id == source_id:
+                    logger.info(f"Folder {source_id} already attached to agent {agent_id}")
+                    return
+            
+            # Attach folder to agent (SDK v1.x: attach returns None)
+            await self._run_sync(
+                self.letta_client.agents.folders.attach,
+                agent_id,
+                source_id
+            )
+            logger.info(f"Attached folder {source_id} to agent {agent_id}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to attach folder to agent: {e}")
+            # Don't raise - attachment failure shouldn't block the upload
+    
+    async def _upload_to_letta(self, file_path: str, source_id: str, metadata: FileMetadata) -> str:
+        """
+        Upload file to Letta folder using SDK v1.x
+        
+        Note: In SDK v1.x, use folders.files instead of sources.files
         
         Args:
             file_path: Local path to file
-            folder_id: Letta folder ID
+            source_id: Letta folder ID
             metadata: File metadata
             
         Returns:
-            Job ID for tracking upload progress
+            File ID for tracking upload progress
         """
         async def _do_upload() -> str:
-            headers = {
-                "Authorization": f"Bearer {self.letta_token}"
-            }
+            # Read file content
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
             
-            # Prepare metadata as JSON string
-            file_metadata = json.dumps({
-                "source": "matrix",
-                "room_id": metadata.room_id,
-                "sender": metadata.sender,
-                "timestamp": str(metadata.timestamp),
-                "original_filename": metadata.file_name,
-                "event_id": metadata.event_id
-            })
+            # Upload file using SDK v1.x - file param expects tuple (filename, content, content_type)
+            result = await self._run_sync(
+                self.letta_client.folders.files.upload,
+                source_id,
+                file=(metadata.file_name, file_content, metadata.file_type)
+            )
             
-            upload_url = f"{self.letta_api_url}/v1/sources/{folder_id}/upload"
+            # Get file ID from result (returns Job object)
+            file_id = result.id if hasattr(result, 'id') else str(result)
             
-            async with aiohttp.ClientSession() as session:
-                # Read file content and properly close handle
-                with open(file_path, 'rb') as f:
-                    file_content = f.read()
-                
-                # Create multipart form data
-                data = aiohttp.FormData()
-                data.add_field(
-                    'file',
-                    file_content,
-                    filename=metadata.file_name,
-                    content_type=metadata.file_type
-                )
-                
-                async with session.post(upload_url, headers=headers, data=data) as response:
-                    if response.status not in [200, 201, 202]:
-                        error_text = await response.text()
-                        raise FileUploadError(f"Failed to upload file to Letta: {response.status} - {error_text}")
-                    
-                    result = await response.json()
-                    # Letta returns job info for async processing
-                    job_id = result.get('job_id') or result.get('id')
-                    
-                    if not job_id:
-                        # If no job_id, file was processed synchronously
-                        logger.info(f"File uploaded to Letta (sync): {metadata.file_name}")
-                        return "sync-complete"
-                    
-                    logger.info(f"File uploaded to Letta, job ID: {job_id}")
-                    return job_id
+            logger.info(f"File uploaded to Letta, file ID: {file_id}")
+            return file_id
         
         return await self._retry_async(_do_upload, "Letta file upload")
     
@@ -543,8 +579,10 @@ class LettaFileHandler:
         """
         Poll Letta file status until processing completes
         
+        Note: In SDK v1.x, use folders.files instead of sources.files
+        
         Args:
-            source_id: Source/folder ID containing the file
+            source_id: Folder ID containing the file
             file_id: File ID to poll
             timeout: Maximum time to wait (seconds)
             interval: Polling interval (seconds)
@@ -556,66 +594,65 @@ class LettaFileHandler:
         if file_id == "sync-complete":
             return True
         
-        headers = {
-            "Authorization": f"Bearer {self.letta_token}"
-        }
-        
-        # Use the file status endpoint: /v1/sources/{source_id}/files/{file_id}
-        file_url = f"{self.letta_api_url}/v1/sources/{source_id}/files/{file_id}"
         elapsed = 0
         consecutive_errors = 0
         max_consecutive_errors = 3
         
-        async with aiohttp.ClientSession() as session:
-            while elapsed < timeout:
-                try:
-                    async with session.get(file_url, headers=headers) as response:
-                        if response.status == 404:
-                            # File might not exist yet
-                            logger.warning(f"File {file_id} not found in source {source_id}")
-                            consecutive_errors += 1
-                            if consecutive_errors >= max_consecutive_errors:
-                                return False
-                            await asyncio.sleep(interval)
-                            elapsed += interval
-                            continue
-                        
-                        if response.status != 200:
-                            consecutive_errors += 1
-                            if consecutive_errors >= max_consecutive_errors:
-                                logger.error(f"Failed to get file status after {max_consecutive_errors} attempts")
-                                return False
-                            logger.warning(f"Failed to get file status: {response.status}")
-                            await asyncio.sleep(interval)
-                            elapsed += interval
-                            continue
-                        
-                        consecutive_errors = 0  # Reset on success
-                        file_data = await response.json()
-                        status = file_data.get('processing_status', '').lower()
-                        
-                        logger.debug(f"File {file_id} processing_status: {status}")
-                        
-                        if status in ['completed', 'success', 'done', 'embedded']:
-                            logger.info(f"File {file_id} processed successfully")
-                            return True
-                        elif status in ['error', 'failed']:
-                            error_msg = file_data.get('error_message', 'Unknown error')
-                            logger.error(f"File {file_id} processing failed: {error_msg}")
-                            return False
-                        
-                        # Still processing (parsing, embedding, etc.)
-                        await asyncio.sleep(interval)
-                        elapsed += interval
-                        
-                except aiohttp.ClientError as e:
+        while elapsed < timeout:
+            try:
+                # Get file status using SDK v1.x (returns paginated result)
+                files_page = await self._run_sync(
+                    self.letta_client.folders.files.list,
+                    source_id
+                )
+                files = files_page.items if hasattr(files_page, 'items') else files_page
+                
+                # Find our file
+                file_data = None
+                for f in files:
+                    if f.id == file_id:
+                        file_data = f
+                        break
+                
+                if not file_data:
+                    logger.warning(f"File {file_id} not found in folder {source_id}")
                     consecutive_errors += 1
                     if consecutive_errors >= max_consecutive_errors:
-                        logger.error(f"Network error polling file status after {max_consecutive_errors} attempts: {e}")
                         return False
-                    logger.warning(f"Network error polling file status: {e}")
                     await asyncio.sleep(interval)
                     elapsed += interval
+                    continue
+                
+                consecutive_errors = 0  # Reset on success
+                status = (file_data.processing_status or '').lower()
+                
+                logger.debug(f"File {file_id} processing_status: {status}")
+                
+                if status in ['completed', 'success', 'done', 'embedded']:
+                    logger.info(f"File {file_id} processed successfully")
+                    return True
+                elif status in ['error', 'failed']:
+                    error_msg = getattr(file_data, 'error_message', 'Unknown error')
+                    logger.error(f"File {file_id} processing failed: {error_msg}")
+                    return False
+                
+                # Still processing (parsing, embedding, etc.)
+                await asyncio.sleep(interval)
+                elapsed += interval
+                
+            except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"Error polling file status after {max_consecutive_errors} attempts: {e}")
+                    return False
+                logger.warning(f"Error polling file status: {e}")
+                await asyncio.sleep(interval)
+                elapsed += interval
         
         logger.warning(f"File {file_id} polling timed out after {timeout}s")
         return False
+    
+    # Alias for backward compatibility with tests
+    async def _get_or_create_folder(self, room_id: str, agent_id: Optional[str] = None) -> str:
+        """Alias for _get_or_create_source for backward compatibility"""
+        return await self._get_or_create_source(room_id, agent_id)
