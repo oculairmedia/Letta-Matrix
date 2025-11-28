@@ -24,7 +24,7 @@ services:
       - "homepage.href=http://matrix.oculair.ca"
       - "homepage.description=Tuwunel Matrix homeserver with Element web client"
   matrix-client:
-    image: ghcr.io/oculairmedia/letta-matrix-client:latest
+    image: letta-matrix-client:local
     restart: unless-stopped
     env_file:
       - .env

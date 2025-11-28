@@ -1,0 +1,18 @@
+id: meta
+as_token: 7efb34256712a0446eb40d531897d5aacf8bb451cb8de9f8d5d3279c6e7a787b
+hs_token: abbc4ccd765ee35b84dbd4136298ea562783fb203375ab1744dec22f4be66f15
+namespaces:
+  users:
+  - exclusive: true
+    regex: '@meta_.*:matrix\.oculair\.ca'
+  - exclusive: true
+    regex: '@metabot:matrix\.oculair\.ca'
+  aliases:
+  - exclusive: true
+    regex: '#meta_.*:matrix\.oculair\.ca'
+  rooms: []
+url: http://mautrix-meta:29319
+sender_localpart: metabot
+rate_limited: false
+de.sorunome.msc2409.push_ephemeral: true
+push_ephemeral: true
