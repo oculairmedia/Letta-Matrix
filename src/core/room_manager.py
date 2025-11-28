@@ -6,25 +6,13 @@ import asyncio
 import logging
 import aiohttp
 from typing import Dict, List, Optional
-from dataclasses import dataclass
+
+from .types import AgentUserMapping
 
 logger = logging.getLogger("matrix_client.room_manager")
 
 # Default timeout for all requests
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
-
-
-@dataclass
-class AgentUserMapping:
-    """Data class for agent-to-user mappings (shared with AgentUserManager)"""
-    agent_id: str
-    agent_name: str
-    matrix_user_id: str
-    matrix_password: str
-    created: bool = False
-    room_id: Optional[str] = None
-    room_created: bool = False
-    invitation_status: Optional[Dict[str, str]] = None
 
 
 class MatrixRoomManager:

@@ -10,12 +10,11 @@ import time
 import aiohttp
 import random
 from typing import Dict, List, Optional, Set
-from dataclasses import dataclass
-# Removed Letta client imports - now using OpenAI endpoint
 
 from .space_manager import MatrixSpaceManager
 from .user_manager import MatrixUserManager
 from .room_manager import MatrixRoomManager
+from .types import AgentUserMapping
 
 logger = logging.getLogger("matrix_client.agent_user_manager")
 
@@ -50,16 +49,7 @@ async def get_global_session():
         )
     return global_session
 
-@dataclass
-class AgentUserMapping:
-    agent_id: str
-    agent_name: str
-    matrix_user_id: str
-    matrix_password: str
-    created: bool = False
-    room_id: Optional[str] = None
-    room_created: bool = False
-    invitation_status: Optional[Dict[str, str]] = None  # user_id -> "invited"|"joined"|"failed"
+
 
 class AgentUserManager:
     """Manages Matrix users for Letta agents"""
@@ -135,7 +125,8 @@ class AgentUserManager:
                 # Handle backward compatibility for new invitation_status field
                 if "invitation_status" not in mapping_dict:
                     mapping_dict["invitation_status"] = None
-                self.mappings[db_mapping.agent_id] = AgentUserMapping(**mapping_dict)
+                agent_id = str(db_mapping.agent_id)
+                self.mappings[agent_id] = AgentUserMapping(**mapping_dict)
 
             logger.info(f"Loaded {len(self.mappings)} existing agent-user mappings from database")
         except Exception as e:
@@ -232,108 +223,52 @@ class AgentUserManager:
                 logger.error(f"Fallback to JSON also failed: {fallback_error}")
 
     async def get_letta_agents(self) -> List[dict]:
-        """Get all Letta agents from agents endpoint with pagination support"""
+        """Get all Letta agents using the Letta SDK with pagination support"""
         try:
-            # Use Letta proxy endpoint (port 8289) as recommended
-            # The proxy provides better stability and performance improvements
-            base_endpoint = "http://192.168.50.90:8289/v1/agents"
+            from src.letta.client import get_letta_client, LettaConfig
+            from concurrent.futures import ThreadPoolExecutor
+            import asyncio
 
-            # Set up authentication headers
-            headers = {
-                "Authorization": "Bearer lettaSecurePass123",
-                "Content-Type": "application/json"
-            }
+            # Configure SDK client
+            sdk_config = LettaConfig(
+                base_url="http://192.168.50.90:8289",  # Use Letta proxy endpoint
+                api_key="lettaSecurePass123",
+                timeout=30.0,
+                max_retries=3
+            )
+            client = get_letta_client(sdk_config)
 
             agent_list = []
             seen_agent_ids = set()
-            after_cursor = None
-            page_count = 0
-            max_pages = 10  # Safety limit to prevent infinite loops (56 agents / 50 per page = ~2 pages needed)
-            last_cursor = None  # Track if cursor is changing
+            
+            # Run sync SDK call in thread pool (SDK is synchronous)
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                # SDK handles pagination internally - just request a high limit
+                agents = await loop.run_in_executor(
+                    executor,
+                    lambda: list(client.agents.list(limit=500))  # Get all agents
+                )
 
-            # Create a fresh session to avoid timeout context errors
-            async with aiohttp.ClientSession() as session:
-                while page_count < max_pages:
-                    page_count += 1
-                    # Build URL with pagination cursor if available
-                    if after_cursor:
-                        agents_endpoint = f"{base_endpoint}?after={after_cursor}&limit=100"
-                    else:
-                        agents_endpoint = f"{base_endpoint}?limit=100"
+            logger.info(f"Retrieved {len(agents)} agents from SDK")
 
-                    logger.info(f"Fetching agents page {page_count} from: {agents_endpoint}")
+            for agent in agents:
+                # SDK returns AgentState objects with id and name attributes
+                agent_id = str(agent.id) if agent.id else ""
+                agent_name = str(agent.name) if agent.name else agent_id
 
-                    async with session.get(agents_endpoint, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                        if response.status != 200:
-                            error_body = await response.text()
-                            logger.error(f"Failed to get agents from agents endpoint: {response.status} - {error_body[:500]}")
-                            break
+                if agent_id and agent_id not in seen_agent_ids:
+                    seen_agent_ids.add(agent_id)
+                    agent_list.append({
+                        "id": agent_id,
+                        "name": agent_name
+                    })
 
-                        agents_data = await response.json()
-
-                        # Handle /v1/agents response format (returns array directly)
-                        agents_array = agents_data.get("data", []) if isinstance(agents_data, dict) else agents_data
-
-                        if not agents_array:
-                            logger.info(f"No more agents found on page {page_count}, ending pagination")
-                            break
-
-                        logger.info(f"Page {page_count}: Received {len(agents_array)} agents from API")
-
-                        # Track new agents added this page
-                        new_agents_this_page = 0
-                        first_agent_id = None
-                        last_agent_id = None
-
-                        for agent in agents_array:
-                            agent_id = agent.get("id", "")
-                            agent_name = agent.get("name", agent_id)
-
-                            if not first_agent_id:
-                                first_agent_id = agent_id
-                            last_agent_id = agent_id
-
-                            if agent_id and agent_id not in seen_agent_ids:
-                                seen_agent_ids.add(agent_id)
-                                agent_list.append({
-                                    "id": agent_id,
-                                    "name": agent_name
-                                })
-                                new_agents_this_page += 1
-
-                        logger.info(f"Page {page_count}: Added {new_agents_this_page} new unique agents (total so far: {len(agent_list)})")
-                        logger.debug(f"Page {page_count}: First agent: {first_agent_id}, Last agent: {last_agent_id}")
-
-                        # If we got less than 50 agents, this is the last page
-                        if len(agents_array) < 50:
-                            logger.info(f"Page {page_count} has {len(agents_array)} agents (less than 50), this is the last page")
-                            break
-
-                        # If cursor hasn't changed, we're in an infinite loop
-                        if last_cursor == last_agent_id:
-                            logger.warning(f"Cursor hasn't changed from {last_cursor}, stopping to prevent infinite loop")
-                            break
-
-                        # If no new agents were found and we got a full page, we might be seeing duplicates
-                        if new_agents_this_page == 0 and len(agents_array) >= 50:
-                            logger.warning(f"No new agents on page {page_count} but got full page - possible API pagination issue")
-                            break
-
-                        # Use the last agent ID as the cursor for the next page
-                        after_cursor = last_agent_id
-                        last_cursor = last_agent_id
-
-                        if not after_cursor:
-                            logger.warning("No ID found for last agent, stopping pagination")
-                            break
-
-                        logger.info(f"Next page will use cursor: {after_cursor}")
-
-                logger.info(f"Found {len(agent_list)} Letta agents across {page_count} pages from agents endpoint")
-                return agent_list
+            logger.info(f"Found {len(agent_list)} unique Letta agents via SDK")
+            return agent_list
 
         except Exception as e:
-            logger.error(f"Error getting Letta agents from agents endpoint: {e}")
+            logger.error(f"Error getting Letta agents via SDK: {e}")
             return []
     async def get_admin_token(self) -> Optional[str]:
         """Get an admin access token - delegates to user_manager"""
@@ -621,7 +556,7 @@ class AgentUserManager:
                 except Exception as e:
                     logger.error(f"Error during room validation for {agent_name}: {e}")
                     # Fall back to simple existence check
-                    room_exists = await self.space_manager.check_room_exists(existing_mapping.room_id)
+                    room_exists = await self.space_manager.check_room_exists(existing_mapping.room_id or "")
                     if room_exists:
                         logger.info(f"Agent {agent_name} has valid room (discovery failed, using basic check)")
                         return

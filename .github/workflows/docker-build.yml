@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - develop
+      - feature/sdk-migration
     tags:
       - 'v*'
   pull_request:

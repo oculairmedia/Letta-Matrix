@@ -54,6 +54,8 @@ class Config:
     embedding_endpoint_type: str = "openai"
     embedding_dim: int = 1536
     embedding_chunk_size: int = 300
+    # Matrix access token (set after login)
+    matrix_token: Optional[str] = None
     
     @classmethod
     def from_env(cls) -> "Config":
@@ -216,10 +218,10 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
             # Strategy 1: Direct room_id lookup in database
             mapping = db.get_by_room_id(room_id)
             if mapping:
-                agent_id_to_use = mapping.agent_id
-                agent_name_found = mapping.agent_name
+                agent_id_to_use = str(mapping.agent_id)
+                agent_name_found = str(mapping.agent_name)
                 routing_method = "database_room_id"
-                logger.info(f"Found agent mapping in DB for room {room_id}: {mapping.agent_name} ({mapping.agent_id})")
+                logger.info(f"Found agent mapping in DB for room {room_id}: {agent_name_found} ({agent_id_to_use})")
             else:
                 # Strategy 2: Extract agent ID from room members (self-healing fallback)
                 logger.info(f"No direct mapping for room {room_id}, checking room members...")
@@ -480,7 +482,7 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
             db = AgentMappingDB()
             mapping = db.get_by_room_id(room.room_id)
             if mapping:
-                agent_id = mapping.agent_id
+                agent_id = str(mapping.agent_id)
                 logger.info(f"Using agent {mapping.agent_name} ({agent_id}) for room {room.room_id}")
         except Exception as e:
             logger.warning(f"Could not query agent mappings: {e}")
@@ -830,6 +832,9 @@ async def main():
         "user_id": client.user_id,
         "device_id": client.device_id
     })
+    
+    # Store the access token in config for functions that need Matrix API access
+    config.matrix_token = client.access_token
 
     # Join the optional base room, but do not treat failures as fatal
     joined_room_id = None
@@ -895,7 +900,7 @@ async def main():
     async def notify_room(room_id: str, message: str):
         """Send notification to room"""
         sent_as_agent = await send_as_agent(room_id, message, config, logger)
-        if not sent_as_agent:
+        if not sent_as_agent and client is not None:
             await client.room_send(
                 room_id,
                 "m.room.message",

@@ -217,31 +217,51 @@ class TestRetryWithBackoff:
 
 @pytest.mark.unit
 class TestSendToLettaApi:
-    """Test Letta API communication"""
+    """Test Letta API communication via SDK"""
+
+    @pytest.fixture(autouse=True)
+    def reset_letta_client(self):
+        """Reset the Letta client singleton before each test"""
+        from src.letta.client import reset_client
+        reset_client()
+        yield
+        reset_client()
+
+    def _create_mock_sdk_response(self, messages: list):
+        """Helper to create a mock SDK response object"""
+        mock_response = Mock()
+        mock_response.messages = []
+        for msg in messages:
+            mock_msg = Mock()
+            mock_msg.message_type = msg.get("message_type", "unknown")
+            mock_msg.content = msg.get("content")
+            # Handle tool_call for inter-agent messages
+            if "tool_call" in msg:
+                mock_msg.tool_call = Mock()
+                mock_msg.tool_call.name = msg["tool_call"]["name"]
+                mock_msg.tool_call.arguments = msg["tool_call"]["arguments"]
+            else:
+                mock_msg.tool_call = None
+            mock_response.messages.append(mock_msg)
+        
+        # Add model_dump method for serialization
+        mock_response.model_dump = Mock(return_value={"messages": messages})
+        return mock_response
 
     @pytest.mark.asyncio
     async def test_send_to_letta_api_success_with_assistant_message(self, mock_config, mock_logger):
         """Test successful API call with assistant message response"""
-        # Mock successful HTTP response
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={
-            "messages": [
-                {
-                    "message_type": "assistant_message",
-                    "content": "Hello! This is the agent's response."
-                }
-            ]
-        })
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
+        # Create mock SDK client
+        mock_client = Mock()
+        mock_sdk_response = self._create_mock_sdk_response([
+            {
+                "message_type": "assistant_message",
+                "content": "Hello! This is the agent's response."
+            }
+        ])
+        mock_client.agents.messages.create = Mock(return_value=mock_sdk_response)
 
-        mock_session = AsyncMock()
-        mock_session.post = Mock(return_value=mock_response)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
-
-        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.letta.client.get_letta_client', return_value=mock_client):
             response = await send_to_letta_api(
                 message_body="Test message",
                 sender_id="@user:test.com",
@@ -250,33 +270,25 @@ class TestSendToLettaApi:
             )
 
         assert response == "Hello! This is the agent's response."
-        mock_session.post.assert_called_once()
+        mock_client.agents.messages.create.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_send_to_letta_api_with_tool_call_message(self, mock_config, mock_logger):
         """Test API response with tool call (inter-agent message)"""
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={
-            "messages": [
-                {
-                    "message_type": "tool_call_message",
-                    "tool_call": {
-                        "name": "matrix_agent_message",
-                        "arguments": json.dumps({"message": "Inter-agent communication"})
-                    }
+        # Create mock SDK client
+        mock_client = Mock()
+        mock_sdk_response = self._create_mock_sdk_response([
+            {
+                "message_type": "tool_call_message",
+                "tool_call": {
+                    "name": "matrix_agent_message",
+                    "arguments": json.dumps({"message": "Inter-agent communication"})
                 }
-            ]
-        })
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
+            }
+        ])
+        mock_client.agents.messages.create = Mock(return_value=mock_sdk_response)
 
-        mock_session = AsyncMock()
-        mock_session.post = Mock(return_value=mock_response)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
-
-        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.letta.client.get_letta_client', return_value=mock_client):
             response = await send_to_letta_api(
                 message_body="Test message",
                 sender_id="@user:test.com",
@@ -289,19 +301,19 @@ class TestSendToLettaApi:
     @pytest.mark.asyncio
     async def test_send_to_letta_api_handles_http_error(self, mock_config, mock_logger):
         """Test handling of HTTP errors from Letta API"""
-        mock_response = AsyncMock()
-        mock_response.status = 500
-        mock_response.text = AsyncMock(return_value="Internal Server Error")
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
+        from letta_client._exceptions import APIStatusError
+        
+        # Create mock SDK client that raises an error
+        mock_client = Mock()
+        # Create a mock response for the error
+        mock_err_response = Mock()
+        mock_err_response.status_code = 500
+        mock_client.agents.messages.create = Mock(
+            side_effect=APIStatusError(message="Internal Server Error", response=mock_err_response, body=None)
+        )
 
-        mock_session = AsyncMock()
-        mock_session.post = Mock(return_value=mock_response)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
-
-        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
-            with pytest.raises(LettaApiError) as exc_info:
+        with patch('src.letta.client.get_letta_client', return_value=mock_client):
+            with pytest.raises(Exception) as exc_info:
                 await send_to_letta_api(
                     message_body="Test message",
                     sender_id="@user:test.com",
@@ -309,25 +321,20 @@ class TestSendToLettaApi:
                     logger=mock_logger
                 )
 
-        assert "500" in str(exc_info.value)
+        # SDK raises APIStatusError which gets propagated
+        assert "Internal Server Error" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_send_to_letta_api_routes_to_correct_agent(self, mock_config, mock_logger):
         """Test that messages route to the correct agent based on room_id"""
         import sys
         
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={
-            "messages": [{"message_type": "assistant_message", "content": "Response"}]
-        })
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
-
-        mock_session = AsyncMock()
-        mock_session.post = Mock(return_value=mock_response)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
+        # Create mock SDK client
+        mock_client = Mock()
+        mock_sdk_response = self._create_mock_sdk_response([
+            {"message_type": "assistant_message", "content": "Response"}
+        ])
+        mock_client.agents.messages.create = Mock(return_value=mock_sdk_response)
 
         # Mock the database mapping lookup
         mock_mapping = Mock()
@@ -347,7 +354,7 @@ class TestSendToLettaApi:
         sys.modules['src.models.agent_mapping'] = mock_module
 
         try:
-            with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+            with patch('src.letta.client.get_letta_client', return_value=mock_client):
                 response = await send_to_letta_api(
                     message_body="Test message",
                     sender_id="@user:test.com",
@@ -356,9 +363,9 @@ class TestSendToLettaApi:
                     room_id="!agentroom:test.com"  # Should route to agent-001
                 )
 
-            # Check that the correct agent URL was called
-            call_args = mock_session.post.call_args
-            assert "agent-001" in call_args[0][0]  # URL should contain agent-001
+            # Check that the correct agent was called via SDK
+            call_args = mock_client.agents.messages.create.call_args
+            assert call_args.kwargs.get('agent_id') == "agent-001"
         finally:
             # Restore original module
             if original_module is not None:
@@ -369,20 +376,14 @@ class TestSendToLettaApi:
     @pytest.mark.asyncio
     async def test_send_to_letta_api_extracts_username_from_sender(self, mock_config, mock_logger):
         """Test that username is correctly extracted from Matrix user ID"""
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={
-            "messages": [{"message_type": "assistant_message", "content": "Response"}]
-        })
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
+        # Create mock SDK client
+        mock_client = Mock()
+        mock_sdk_response = self._create_mock_sdk_response([
+            {"message_type": "assistant_message", "content": "Response"}
+        ])
+        mock_client.agents.messages.create = Mock(return_value=mock_sdk_response)
 
-        mock_session = AsyncMock()
-        mock_session.post = Mock(return_value=mock_response)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
-
-        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.letta.client.get_letta_client', return_value=mock_client):
             await send_to_letta_api(
                 message_body="Test",
                 sender_id="@johndoe:matrix.org",  # Should extract "johndoe"
@@ -397,20 +398,12 @@ class TestSendToLettaApi:
     @pytest.mark.asyncio
     async def test_send_to_letta_api_empty_response(self, mock_config, mock_logger):
         """Test handling of empty response from Letta API"""
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={
-            "messages": []  # Empty messages
-        })
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
+        # Create mock SDK client with empty messages
+        mock_client = Mock()
+        mock_sdk_response = self._create_mock_sdk_response([])  # Empty messages
+        mock_client.agents.messages.create = Mock(return_value=mock_sdk_response)
 
-        mock_session = AsyncMock()
-        mock_session.post = Mock(return_value=mock_response)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
-
-        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.letta.client.get_letta_client', return_value=mock_client):
             response = await send_to_letta_api(
                 message_body="Test",
                 sender_id="@user:test.com",

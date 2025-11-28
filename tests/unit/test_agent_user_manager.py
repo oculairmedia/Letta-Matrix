@@ -281,32 +281,42 @@ class TestAdminToken:
 # ============================================================================
 
 class TestAgentDiscovery:
-    """Test Letta agent discovery"""
+    """Test Letta agent discovery via SDK"""
+
+    @pytest.fixture(autouse=True)
+    def reset_letta_client(self):
+        """Reset the Letta client singleton before each test"""
+        from src.letta.client import reset_client
+        reset_client()
+        yield
+        reset_client()
+
+    def _create_mock_agents(self, agent_data: list):
+        """Helper to create mock SDK AgentState objects"""
+        mock_agents = []
+        for data in agent_data:
+            mock_agent = Mock()
+            mock_agent.id = data.get("id", "")
+            mock_agent.name = data.get("name", "")
+            mock_agents.append(mock_agent)
+        return mock_agents
 
     @pytest.mark.asyncio
-    async def test_get_letta_agents_success(self, mock_config, mock_aiohttp_session):
-        """Test successfully retrieving Letta agents"""
-        # Mock the /v1/agents endpoint response
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={
-            "data": [
-                {"id": "agent-001", "name": "Agent 1"},
-                {"id": "agent-002", "name": "Agent 2"},
-                {"id": "agent-003", "name": "Agent 3"}
-            ]
-        })
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
-
-        mock_aiohttp_session.get = Mock(return_value=mock_response)
-        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+    async def test_get_letta_agents_success(self, mock_config):
+        """Test successfully retrieving Letta agents via SDK"""
+        # Create mock SDK client with mock agents
+        mock_client = Mock()
+        mock_agents = self._create_mock_agents([
+            {"id": "agent-001", "name": "Agent 1"},
+            {"id": "agent-002", "name": "Agent 2"},
+            {"id": "agent-003", "name": "Agent 3"}
+        ])
+        mock_client.agents.list = Mock(return_value=mock_agents)
 
         manager = AgentUserManager(mock_config)
 
-        # Patch aiohttp.ClientSession to return our mock session
-        with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+        # Patch the SDK client
+        with patch('src.letta.client.get_letta_client', return_value=mock_client):
             agents = await manager.get_letta_agents()
 
         assert len(agents) == 3
@@ -314,68 +324,50 @@ class TestAgentDiscovery:
         assert agents[2]["id"] == "agent-003"
 
     @pytest.mark.asyncio
-    async def test_get_letta_agents_with_details(self, mock_config, mock_aiohttp_session):
-        """Test retrieving agents with detailed information"""
-        # Mock agent list response with name included
-        list_response = AsyncMock()
-        list_response.status = 200
-        list_response.json = AsyncMock(return_value={
-            "data": [{"id": "agent-001", "name": "DetailedAgent"}]
-        })
-        list_response.__aenter__ = AsyncMock(return_value=list_response)
-        list_response.__aexit__ = AsyncMock(return_value=None)
-
-        # Setup mock session
-        mock_aiohttp_session.get = Mock(return_value=list_response)
-        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+    async def test_get_letta_agents_with_details(self, mock_config):
+        """Test retrieving agents with detailed information via SDK"""
+        # Create mock SDK client with a detailed agent
+        mock_client = Mock()
+        mock_agents = self._create_mock_agents([
+            {"id": "agent-001", "name": "DetailedAgent"}
+        ])
+        mock_client.agents.list = Mock(return_value=mock_agents)
 
         manager = AgentUserManager(mock_config)
 
-        with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+        with patch('src.letta.client.get_letta_client', return_value=mock_client):
             agents = await manager.get_letta_agents()
 
         assert len(agents) == 1
         assert agents[0]["name"] == "DetailedAgent"
 
     @pytest.mark.asyncio
-    async def test_get_letta_agents_empty_list(self, mock_config, mock_aiohttp_session):
-        """Test when no agents are available"""
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={"data": []})
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
-
-        mock_aiohttp_session.get = Mock(return_value=mock_response)
-        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+    async def test_get_letta_agents_empty_list(self, mock_config):
+        """Test when no agents are available via SDK"""
+        # Create mock SDK client with empty list
+        mock_client = Mock()
+        mock_client.agents.list = Mock(return_value=[])
 
         manager = AgentUserManager(mock_config)
 
-        with patch('aiohttp.ClientSession', return_value=mock_aiohttp_session):
+        with patch('src.letta.client.get_letta_client', return_value=mock_client):
             agents = await manager.get_letta_agents()
 
         assert len(agents) == 0
 
     @pytest.mark.asyncio
-    async def test_get_letta_agents_api_error(self, mock_config, mock_aiohttp_session):
-        """Test handling of Letta API errors"""
-        mock_response = AsyncMock()
-        mock_response.status = 500
-        mock_response.text = AsyncMock(return_value="Internal Server Error")
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
-
-        mock_aiohttp_session.get = Mock(return_value=mock_response)
-        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+    async def test_get_letta_agents_api_error(self, mock_config):
+        """Test handling of Letta API errors via SDK"""
+        # Create mock SDK client that raises an exception
+        mock_client = Mock()
+        mock_client.agents.list = Mock(side_effect=Exception("Connection refused"))
 
         manager = AgentUserManager(mock_config)
 
-        with patch('aiohttp.ClientSession', return_value=mock_aiohttp_session):
+        with patch('src.letta.client.get_letta_client', return_value=mock_client):
             agents = await manager.get_letta_agents()
 
+        # Should return empty list on error
         assert agents == []
 
 

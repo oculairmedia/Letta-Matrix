@@ -244,6 +244,8 @@ def patched_http_session(mock_http_session):
     This fixture patches both get_global_session AND aiohttp.ClientSession
     in all relevant modules to return the mocked session, ensuring all HTTP
     calls are intercepted regardless of how sessions are created.
+    
+    Also patches the Letta SDK client for SDK-based API calls.
     """
     async def mock_get_global_session():
         return mock_http_session
@@ -270,11 +272,38 @@ def patched_http_session(mock_http_session):
         patcher.start()
         patchers.append(patcher)
 
+    # Patch Letta SDK client for get_letta_agents() calls
+    # Create mock agents that match the expected HTTP mock responses
+    def _create_mock_agents():
+        """Create mock AgentState objects matching HTTP mock response"""
+        mock_agents = []
+        for agent_data in [
+            {"id": "agent-001", "name": "Alpha Agent"},
+            {"id": "agent-002", "name": "Beta Agent"},
+            {"id": "agent-003", "name": "Gamma Agent"}
+        ]:
+            mock_agent = Mock()
+            mock_agent.id = agent_data["id"]
+            mock_agent.name = agent_data["name"]
+            mock_agents.append(mock_agent)
+        return mock_agents
+
+    mock_letta_client = Mock()
+    mock_letta_client.agents.list = Mock(return_value=_create_mock_agents())
+    
+    # Reset and patch the Letta client singleton
+    from src.letta.client import reset_client
+    reset_client()
+    patcher = patch('src.letta.client.get_letta_client', return_value=mock_letta_client)
+    patcher.start()
+    patchers.append(patcher)
+
     yield mock_http_session
 
-    # Stop all patchers
+    # Stop all patchers and reset SDK client
     for patcher in patchers:
         patcher.stop()
+    reset_client()
 
 
 @pytest.fixture
@@ -323,7 +352,7 @@ async def integration_manager(integration_config, integration_env_setup,
 @pytest.fixture
 def sample_agent_mappings():
     """Provide sample agent mappings for testing"""
-    from src.core.agent_user_manager import AgentUserMapping
+    from src.core.types import AgentUserMapping
 
     return {
         "agent-001": AgentUserMapping(

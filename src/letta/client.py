@@ -22,12 +22,13 @@ Usage:
 
 import os
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from dataclasses import dataclass
 from functools import lru_cache
 
 from letta_client import Letta
 from letta_client.types import AgentState
+from letta_client.types.message_create_param import MessageCreateParam
 
 logger = logging.getLogger(__name__)
 
@@ -197,9 +198,13 @@ class LettaService:
             Response dictionary with messages
         """
         try:
+            msg: MessageCreateParam = {
+                "role": role,  # type: ignore[typeddict-item]
+                "content": message
+            }
             response = self.client.agents.messages.create(
                 agent_id=agent_id,
-                messages=[{"role": role, "content": message}],
+                messages=[msg],
                 timeout=timeout or self.config.timeout
             )
             
@@ -233,9 +238,13 @@ class LettaService:
             Response chunks as they arrive
         """
         try:
+            msg: MessageCreateParam = {
+                "role": role,  # type: ignore[typeddict-item]
+                "content": message
+            }
             stream = self.client.agents.messages.stream(
                 agent_id=agent_id,
-                messages=[{"role": role, "content": message}]
+                messages=[msg]
             )
             
             for chunk in stream:

@@ -6,9 +6,11 @@ Contains:
 - MatrixUserManager: Manages Matrix user accounts (Sprint 3)
 - MatrixSpaceManager: Manages Matrix spaces (Sprint 2)
 - MatrixRoomManager: Manages Matrix rooms (Sprint 4)
+- AgentUserMapping: Shared dataclass for agent-user mappings
 """
 
-from .agent_user_manager import AgentUserManager, AgentUserMapping
+from .types import AgentUserMapping
+from .agent_user_manager import AgentUserManager
 from .user_manager import MatrixUserManager
 from .space_manager import MatrixSpaceManager
 from .room_manager import MatrixRoomManager
