@@ -304,10 +304,11 @@ class LettaFileHandler:
             
             # Send multimodal message to agent using SDK
             # Format: content array with text and image parts
+            # Note: Agent must use send_message tool to respond, so we phrase this as a request
             message_content = [
                 {
                     "type": "text",
-                    "text": f"User uploaded an image: {metadata.file_name}. Please describe what you see."
+                    "text": f"User uploaded an image: {metadata.file_name}. Please analyze this image and use send_message to tell the user what you see in detail."
                 },
                 {
                     "type": "image",
