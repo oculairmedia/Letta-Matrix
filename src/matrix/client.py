@@ -251,37 +251,55 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
     })
 
     async def _send_to_letta():
-        """Inner function to handle the actual API call with retry logic - DIRECT HTTP"""
-        # Use direct HTTP API instead of SDK to avoid pagination issues
+        """Inner function to handle the actual API call with retry logic - Using SDK"""
+        from src.letta.client import get_letta_client, LettaConfig
+        from concurrent.futures import ThreadPoolExecutor
+        import asyncio
+        
         current_agent_id = agent_id_to_use  # Use the agent ID we determined from room mapping
         
-        logger.warning(f"[DEBUG] SENDING TO LETTA API - Agent ID: {current_agent_id}")
+        logger.warning(f"[DEBUG] SENDING TO LETTA API (SDK) - Agent ID: {current_agent_id}")
         
-        # Send message directly via HTTP
-        url = f"{config.letta_api_url}/v1/agents/{current_agent_id}/messages"
-        headers = {
-            "Authorization": f"Bearer {config.letta_token}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "messages": [{
-                "role": "user",
-                "content": message_body
-            }]
-        }
+        # Configure SDK client with extended timeout for long-running agents
+        sdk_config = LettaConfig(
+            base_url=config.letta_api_url,
+            api_key=config.letta_token,
+            timeout=300.0,  # 5 minutes (increased from 180s for agents doing work)
+            max_retries=3
+        )
+        client = get_letta_client(sdk_config)
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise LettaApiError(f"Letta API error: {resp.status} - {error_text[:200]}", resp.status, error_text[:200])
-                
-                response = await resp.json()
+        # Run sync SDK call in thread pool (SDK is synchronous)
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            response = await loop.run_in_executor(
+                executor,
+                lambda: client.agents.messages.create(
+                    agent_id=current_agent_id,
+                    messages=[{"role": "user", "content": message_body}]
+                )
+            )
         
-        # Response is now a dict from JSON
-        logger.debug(f"Received Letta API response: {type(response)}")
+        # Convert SDK response to dict for compatibility with existing code
+        if hasattr(response, 'model_dump'):
+            result = response.model_dump()
+        elif hasattr(response, 'dict'):
+            result = response.dict()
+        else:
+            # Fallback: manually extract messages
+            result = {"messages": []}
+            if hasattr(response, 'messages'):
+                for msg in response.messages:
+                    if hasattr(msg, 'model_dump'):
+                        result["messages"].append(msg.model_dump())
+                    elif hasattr(msg, 'dict'):
+                        result["messages"].append(msg.dict())
+                    else:
+                        result["messages"].append({"message_type": getattr(msg, 'message_type', 'unknown')})
         
-        return response
+        logger.debug(f"Received Letta API response via SDK: {type(response)}")
+        
+        return result
 
     try:
         # Use retry logic for the API call
@@ -338,11 +356,22 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
             return "Letta API connection successful, but no response content."
 
     except aiohttp.ClientResponseError as e:
+        # Legacy aiohttp error handling (kept for backward compatibility)
         logger.error("Letta API HTTP error", extra={"status_code": e.status, "message": str(e.message)[:200]})
         raise LettaApiError(f"Letta API returned error {e.status}", e.status, str(e.message)[:200])
     except Exception as e:
-        logger.error("Unexpected error in Letta API call", extra={"error": str(e)}, exc_info=True)
-        raise LettaApiError(f"An unexpected error occurred with the Letta SDK: {e}")
+        # Handle SDK errors and other exceptions
+        error_str = str(e)
+        if "Error code:" in error_str:
+            # Parse SDK error format: "Error code: 500 - {...}"
+            import re
+            match = re.search(r"Error code: (\d+)", error_str)
+            status_code = int(match.group(1)) if match else 500
+            logger.error("Letta SDK API error", extra={"status_code": status_code, "message": error_str[:200]})
+            raise LettaApiError(f"Letta API returned error {status_code}", status_code, error_str[:200])
+        else:
+            logger.error("Unexpected error in Letta API call", extra={"error": error_str}, exc_info=True)
+            raise LettaApiError(f"An unexpected error occurred with the Letta SDK: {e}")
 
 async def send_as_agent(room_id: str, message: str, config: Config, logger: logging.Logger) -> bool:
     """Send a message as the agent user for this room"""
