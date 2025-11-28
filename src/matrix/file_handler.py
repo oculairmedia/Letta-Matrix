@@ -366,7 +366,8 @@ class LettaFileHandler:
                     messages=[{
                         "role": "user",
                         "content": content
-                    }]
+                    }],
+                    use_assistant_message=True  # Allow direct responses without tool calls for images
                 )
             
             response = await self._retry_async(_do_send, "Multimodal message send")
