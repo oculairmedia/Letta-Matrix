@@ -38,11 +38,24 @@ SUPPORTED_FILE_TYPES = {
     'text/markdown': '.md',
     'text/x-markdown': '.md',
     'application/json': '.json',
+    # Image types (for vision-capable models)
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/png': '.png',
+    'image/gif': '.gif',
+    'image/webp': '.webp',
+    'image/bmp': '.bmp',
+    'image/tiff': '.tiff',
     'application/octet-stream': None,  # Accept but determine by extension
 }
 
 # File extensions to accept when MIME type is application/octet-stream
-SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.md', '.json', '.markdown'}
+SUPPORTED_EXTENSIONS = {
+    # Documents
+    '.pdf', '.txt', '.md', '.json', '.markdown',
+    # Images
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif'
+}
 
 # File size limit (50MB)
 MAX_FILE_SIZE = 50 * 1024 * 1024
@@ -209,6 +222,11 @@ class LettaFileHandler:
             
             logger.info(f"Processing file upload: {metadata.file_name} from {metadata.sender} in room {room_id}")
             
+            # Check if this is an image and notify about vision model requirements
+            is_image = metadata.file_type.startswith('image/')
+            if is_image:
+                logger.info(f"Image uploaded: {metadata.file_name}. Note: Agent must use a vision-capable model (GPT-4o, Gemini 1.5 Pro, Claude 3.5 Sonnet) to view images.")
+            
             # Notify user that processing has started
             await self._notify(room_id, f"📄 Processing file: {metadata.file_name}")
             
@@ -322,6 +340,18 @@ class LettaFileHandler:
                 metadata.file_type = 'application/pdf'
             elif ext == '.json':
                 metadata.file_type = 'application/json'
+            elif ext in ['.jpg', '.jpeg']:
+                metadata.file_type = 'image/jpeg'
+            elif ext == '.png':
+                metadata.file_type = 'image/png'
+            elif ext == '.gif':
+                metadata.file_type = 'image/gif'
+            elif ext == '.webp':
+                metadata.file_type = 'image/webp'
+            elif ext in ['.bmp']:
+                metadata.file_type = 'image/bmp'
+            elif ext in ['.tiff', '.tif']:
+                metadata.file_type = 'image/tiff'
         
         return None
     

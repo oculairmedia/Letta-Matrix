@@ -458,7 +458,97 @@ class TestConstants:
         assert 'text/plain' in SUPPORTED_FILE_TYPES
         assert 'text/markdown' in SUPPORTED_FILE_TYPES
         assert 'application/json' in SUPPORTED_FILE_TYPES
+        # Image types
+        assert 'image/jpeg' in SUPPORTED_FILE_TYPES
+        assert 'image/png' in SUPPORTED_FILE_TYPES
+        assert 'image/gif' in SUPPORTED_FILE_TYPES
+        assert 'image/webp' in SUPPORTED_FILE_TYPES
     
     def test_max_file_size(self):
         """Test max file size is reasonable"""
         assert MAX_FILE_SIZE == 50 * 1024 * 1024  # 50MB
+
+
+class TestImageSupport:
+    """Test suite for image file support"""
+    
+    @pytest.fixture
+    def file_handler(self):
+        """Create a file handler instance"""
+        return LettaFileHandler(
+            homeserver_url="http://test-matrix.local",
+            letta_api_url="http://test-letta.local",
+            letta_token="test_letta_token",
+        )
+    
+    def test_validate_image_jpeg(self, file_handler):
+        """Test JPEG images pass validation"""
+        metadata = FileMetadata(
+            file_url="mxc://test/image",
+            file_name="photo.jpg",
+            file_type="image/jpeg",
+            file_size=1024,
+            room_id="!test:matrix.org",
+            sender="@user:matrix.org",
+            timestamp=12345,
+            event_id="$event"
+        )
+        error = file_handler._validate_file(metadata)
+        assert error is None
+    
+    def test_validate_image_png(self, file_handler):
+        """Test PNG images pass validation"""
+        metadata = FileMetadata(
+            file_url="mxc://test/image",
+            file_name="screenshot.png",
+            file_type="image/png",
+            file_size=2048,
+            room_id="!test:matrix.org",
+            sender="@user:matrix.org",
+            timestamp=12345,
+            event_id="$event"
+        )
+        error = file_handler._validate_file(metadata)
+        assert error is None
+    
+    def test_validate_image_octet_stream_with_extension(self, file_handler):
+        """Test images sent as octet-stream are recognized by extension"""
+        metadata = FileMetadata(
+            file_url="mxc://test/image",
+            file_name="photo.jpg",
+            file_type="application/octet-stream",
+            file_size=1024,
+            room_id="!test:matrix.org",
+            sender="@user:matrix.org",
+            timestamp=12345,
+            event_id="$event"
+        )
+        error = file_handler._validate_file(metadata)
+        assert error is None
+        # Should have been updated to proper MIME type
+        assert metadata.file_type == "image/jpeg"
+    
+    def test_all_image_formats_supported(self, file_handler):
+        """Test all common image formats are supported"""
+        image_formats = [
+            ('image/jpeg', 'photo.jpg'),
+            ('image/png', 'screenshot.png'),
+            ('image/gif', 'animation.gif'),
+            ('image/webp', 'modern.webp'),
+            ('image/bmp', 'bitmap.bmp'),
+            ('image/tiff', 'scan.tiff'),
+        ]
+        
+        for mime_type, filename in image_formats:
+            metadata = FileMetadata(
+                file_url="mxc://test/image",
+                file_name=filename,
+                file_type=mime_type,
+                file_size=1024,
+                room_id="!test:matrix.org",
+                sender="@user:matrix.org",
+                timestamp=12345,
+                event_id="$event"
+            )
+            error = file_handler._validate_file(metadata)
+            assert error is None, f"Failed for {mime_type} / {filename}"
