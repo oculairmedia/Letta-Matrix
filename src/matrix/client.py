@@ -56,6 +56,9 @@ class Config:
     embedding_chunk_size: int = 300
     # Matrix access token (set after login)
     matrix_token: Optional[str] = None
+    # Streaming configuration
+    letta_streaming_enabled: bool = False  # Feature flag for step streaming
+    letta_streaming_timeout: float = 120.0  # Streaming timeout in seconds
     
     @classmethod
     def from_env(cls) -> "Config":
@@ -76,7 +79,10 @@ class Config:
                 embedding_endpoint=os.getenv("LETTA_EMBEDDING_ENDPOINT", ""),
                 embedding_endpoint_type=os.getenv("LETTA_EMBEDDING_ENDPOINT_TYPE", "openai"),
                 embedding_dim=int(os.getenv("LETTA_EMBEDDING_DIM", "1536")),
-                embedding_chunk_size=int(os.getenv("LETTA_EMBEDDING_CHUNK_SIZE", "300"))
+                embedding_chunk_size=int(os.getenv("LETTA_EMBEDDING_CHUNK_SIZE", "300")),
+                # Streaming configuration
+                letta_streaming_enabled=os.getenv("LETTA_STREAMING_ENABLED", "false").lower() == "true",
+                letta_streaming_timeout=float(os.getenv("LETTA_STREAMING_TIMEOUT", "120.0"))
             )
         except Exception as e:
             raise ConfigurationError(f"Failed to load configuration: {e}")
@@ -192,6 +198,110 @@ async def get_agent_from_room_members(room_id: str, config: Config, logger: logg
     except Exception as e:
         logger.warning(f"Error extracting agent from room members: {e}", exc_info=True)
         return None
+
+
+async def send_to_letta_api_streaming(
+    message_body: str, 
+    sender_id: str, 
+    config: Config, 
+    logger: logging.Logger, 
+    room_id: str
+) -> str:
+    """
+    Sends a message to the Letta API using step streaming with progress display.
+    Shows tool calls as progress messages that get deleted when replaced.
+    """
+    from src.matrix.streaming import StepStreamReader, StreamingMessageHandler, StreamEventType
+    from src.letta.client import get_letta_client, LettaConfig
+    
+    # Determine which agent to use based on room_id
+    agent_id_to_use = config.letta_agent_id
+    agent_name_found = "DEFAULT"
+    
+    if room_id:
+        try:
+            from src.models.agent_mapping import AgentMappingDB
+            db = AgentMappingDB()
+            mapping = db.get_by_room_id(room_id)
+            if mapping:
+                agent_id_to_use = str(mapping.agent_id)
+                agent_name_found = str(mapping.agent_name)
+                logger.info(f"[STREAMING] Found agent mapping: {agent_name_found} ({agent_id_to_use})")
+            else:
+                member_result = await get_agent_from_room_members(room_id, config, logger)
+                if member_result:
+                    agent_id_to_use, agent_name_found = member_result
+        except Exception as e:
+            logger.warning(f"[STREAMING] Could not query agent mappings: {e}")
+    
+    logger.info(f"[STREAMING] Sending message with streaming to agent {agent_name_found}")
+    
+    # Create Letta SDK client
+    sdk_config = LettaConfig(
+        base_url=config.letta_api_url,
+        api_key=config.letta_token,
+        timeout=config.letta_streaming_timeout,
+        max_retries=3
+    )
+    letta_client = get_letta_client(sdk_config)
+    
+    # Create stream reader
+    stream_reader = StepStreamReader(
+        letta_client=letta_client,
+        include_reasoning=False,  # Don't show internal reasoning
+        include_pings=True,
+        timeout=config.letta_streaming_timeout
+    )
+    
+    # Create message handlers for Matrix
+    async def send_message(rid: str, content: str) -> str:
+        """Send a message and return event_id"""
+        event_id = await send_as_agent_with_event_id(rid, content, config, logger)
+        return event_id or ""
+    
+    async def delete_message(rid: str, event_id: str) -> None:
+        """Delete a message"""
+        await delete_message_as_agent(rid, event_id, config, logger)
+    
+    handler = StreamingMessageHandler(
+        send_message=send_message,
+        delete_message=delete_message,
+        room_id=room_id
+    )
+    
+    # Track the final response
+    final_response = ""
+    
+    try:
+        # Stream the message and handle events
+        async for event in stream_reader.stream_message(agent_id_to_use, message_body):
+            logger.debug(f"[STREAMING] Event: {event.type.value}")
+            
+            # Handle the event (sends progress messages to Matrix)
+            await handler.handle_event(event)
+            
+            # Capture final assistant response
+            if event.type == StreamEventType.ASSISTANT and event.content:
+                final_response = event.content
+            
+            # Log errors
+            if event.type == StreamEventType.ERROR:
+                logger.error(f"[STREAMING] Error: {event.content}")
+                if not final_response:
+                    final_response = f"Error: {event.content}"
+        
+        # Cleanup any remaining progress messages
+        await handler.cleanup()
+        
+    except Exception as e:
+        logger.error(f"[STREAMING] Exception during streaming: {e}", exc_info=True)
+        await handler.cleanup()
+        raise LettaApiError(f"Streaming error: {e}")
+    
+    if not final_response:
+        final_response = "Agent processed the request (no text response)."
+    
+    return final_response
 
 
 async def send_to_letta_api(message_body: str, sender_id: str, config: Config, logger: logging.Logger, room_id: Optional[str] = None) -> str:
@@ -375,8 +485,8 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
             logger.error("Unexpected error in Letta API call", extra={"error": error_str}, exc_info=True)
             raise LettaApiError(f"An unexpected error occurred with the Letta SDK: {e}")
 
-async def send_as_agent(room_id: str, message: str, config: Config, logger: logging.Logger) -> bool:
-    """Send a message as the agent user for this room"""
+async def delete_message_as_agent(room_id: str, event_id: str, config: Config, logger: logging.Logger) -> bool:
+    """Redact (delete) a message as the agent user for this room"""
     try:
         # Load agent mappings to find which agent owns this room
         mappings_file = "/app/data/agent_user_mappings.json"
@@ -399,13 +509,11 @@ async def send_as_agent(room_id: str, message: str, config: Config, logger: logg
             return False
         
         agent_name = agent_mapping.get("agent_name", "Unknown")
-        logger.info(f"[SEND_AS_AGENT] Attempting to send as agent: {agent_name} in room {room_id}")
+        logger.debug(f"[DELETE_AS_AGENT] Attempting to delete message as agent: {agent_name} in room {room_id}")
         
         # Login as the agent user
         agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
         agent_password = agent_mapping["matrix_password"]
-        
-        logger.debug(f"[SEND_AS_AGENT] Agent username: {agent_username}")
         
         login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
         login_data = {
@@ -416,7 +524,6 @@ async def send_as_agent(room_id: str, message: str, config: Config, logger: logg
         
         async with aiohttp.ClientSession() as session:
             # Login
-            logger.debug(f"[SEND_AS_AGENT] Attempting login to {login_url}")
             async with session.post(login_url, json=login_data) as response:
                 if response.status != 200:
                     error_text = await response.text()
@@ -429,11 +536,90 @@ async def send_as_agent(room_id: str, message: str, config: Config, logger: logg
                 if not agent_token:
                     logger.error(f"No token received for agent {agent_username}")
                     return False
+            
+            # Redact (delete) the message
+            txn_id = str(uuid.uuid4())
+            redact_url = f"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/redact/{event_id}/{txn_id}"
+            headers = {
+                "Authorization": f"Bearer {agent_token}",
+                "Content-Type": "application/json"
+            }
+            
+            # Reason for redaction (optional)
+            redact_data = {
+                "reason": "Progress message replaced"
+            }
+            
+            async with session.put(redact_url, headers=headers, json=redact_data) as response:
+                if response.status == 200:
+                    logger.debug(f"[DELETE_AS_AGENT] Successfully deleted message {event_id}")
+                    return True
+                else:
+                    response_text = await response.text()
+                    logger.warning(f"[DELETE_AS_AGENT] Failed to delete message: {response.status} - {response_text}")
+                    return False
+                    
+    except Exception as e:
+        logger.error(f"[DELETE_AS_AGENT] Exception occurred: {e}", exc_info=True)
+        return False
+
+
+async def send_as_agent_with_event_id(room_id: str, message: str, config: Config, logger: logging.Logger) -> Optional[str]:
+    """
+    Send a message as the agent user for this room and return the event ID.
+    Returns the event_id on success, None on failure.
+    """
+    try:
+        # Load agent mappings to find which agent owns this room
+        mappings_file = "/app/data/agent_user_mappings.json"
+        if not os.path.exists(mappings_file):
+            logger.warning("No agent mappings file found")
+            return None
+            
+        with open(mappings_file, 'r') as f:
+            mappings = json.load(f)
+        
+        # Find the agent for this room
+        agent_mapping = None
+        for agent_id, mapping in mappings.items():
+            if mapping.get("room_id") == room_id:
+                agent_mapping = mapping
+                break
+        
+        if not agent_mapping:
+            logger.warning(f"No agent mapping found for room {room_id}")
+            return None
+        
+        agent_name = agent_mapping.get("agent_name", "Unknown")
+        logger.debug(f"[SEND_AS_AGENT] Sending as agent: {agent_name} in room {room_id}")
+        
+        # Login as the agent user
+        agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
+        agent_password = agent_mapping["matrix_password"]
+        
+        login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
+        login_data = {
+            "type": "m.login.password",
+            "user": agent_username,
+            "password": agent_password
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            # Login
+            async with session.post(login_url, json=login_data) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"Failed to login as agent {agent_username}: {response.status} - {error_text}")
+                    return None
                 
-                logger.info(f"[SEND_AS_AGENT] Successfully logged in as {agent_username}")
+                auth_data = await response.json()
+                agent_token = auth_data.get("access_token")
+                
+                if not agent_token:
+                    logger.error(f"No token received for agent {agent_username}")
+                    return None
             
             # Send message as the agent
-            # Generate a unique transaction ID
             txn_id = str(uuid.uuid4())
             message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
             headers = {
@@ -446,19 +632,27 @@ async def send_as_agent(room_id: str, message: str, config: Config, logger: logg
                 "body": message
             }
             
-            logger.debug(f"[SEND_AS_AGENT] Sending to {message_url}")
             async with session.put(message_url, headers=headers, json=message_data) as response:
                 if response.status == 200:
-                    logger.info(f"[SEND_AS_AGENT] ✅ Successfully sent message as {agent_name} ({agent_username})")
-                    return True
+                    result = await response.json()
+                    event_id = result.get("event_id")
+                    logger.debug(f"[SEND_AS_AGENT] Sent message, event_id: {event_id}")
+                    return event_id
                 else:
                     response_text = await response.text()
-                    logger.error(f"[SEND_AS_AGENT] ❌ Failed to send message as agent: {response.status} - {response_text}")
-                    return False
+                    logger.error(f"[SEND_AS_AGENT] Failed to send message: {response.status} - {response_text}")
+                    return None
                     
     except Exception as e:
         logger.error(f"[SEND_AS_AGENT] Exception occurred: {e}", exc_info=True)
-        return False
+        return None
+
+
+async def send_as_agent(room_id: str, message: str, config: Config, logger: logging.Logger) -> bool:
+    """Send a message as the agent user for this room"""
+    # Use the event_id version and convert to bool
+    event_id = await send_as_agent_with_event_id(room_id, message, config, logger)
+    return event_id is not None
 
 async def file_callback(room, event, config: Config, logger: logging.Logger, file_handler: Optional[LettaFileHandler] = None):
     """Callback function for handling file uploads."""
@@ -618,28 +812,44 @@ collaborate with you.
                 logger.info(f"[INTER-AGENT CONTEXT] Full enhanced message:\n{message_to_send}")
 
             # Send the message to Letta with room context
-            letta_response = await send_to_letta_api(message_to_send, event.sender, config, logger, room.room_id)
-            
-            # Try to send as the agent user first
-            sent_as_agent = await send_as_agent(room.room_id, letta_response, config, logger)
-            
-            if not sent_as_agent:
-                # Fallback to sending as the main letta client if agent send fails
-                if client:
-                    logger.warning("Failed to send as agent, falling back to main client")
-                    await client.room_send(
-                        room.room_id,
-                        "m.room.message",
-                        {"msgtype": "m.text", "body": letta_response}
-                    )
-                else:
-                    logger.error("No client available and agent send failed")
-            
-            logger.info("Successfully sent response to Matrix", extra={
-                "response_length": len(letta_response),
-                "room_id": room.room_id,
-                "sent_as_agent": sent_as_agent
-            })
+            # Use streaming mode if enabled (shows progress messages for tool calls)
+            if config.letta_streaming_enabled:
+                logger.info("[STREAMING] Using streaming mode for Letta API call")
+                # Streaming mode handles sending messages directly (with progress updates)
+                letta_response = await send_to_letta_api_streaming(
+                    message_to_send, event.sender, config, logger, room.room_id
+                )
+                # In streaming mode, the final message is already sent by the handler
+                # We don't need to send it again, just log the result
+                logger.info("Successfully processed streaming response", extra={
+                    "response_length": len(letta_response),
+                    "room_id": room.room_id,
+                    "streaming": True
+                })
+            else:
+                # Non-streaming mode (original behavior)
+                letta_response = await send_to_letta_api(message_to_send, event.sender, config, logger, room.room_id)
+                
+                # Try to send as the agent user first
+                sent_as_agent = await send_as_agent(room.room_id, letta_response, config, logger)
+                
+                if not sent_as_agent:
+                    # Fallback to sending as the main letta client if agent send fails
+                    if client:
+                        logger.warning("Failed to send as agent, falling back to main client")
+                        await client.room_send(
+                            room.room_id,
+                            "m.room.message",
+                            {"msgtype": "m.text", "body": letta_response}
+                        )
+                    else:
+                        logger.error("No client available and agent send failed")
+                
+                logger.info("Successfully sent response to Matrix", extra={
+                    "response_length": len(letta_response),
+                    "room_id": room.room_id,
+                    "sent_as_agent": sent_as_agent
+                })
             
         except LettaApiError as e:
             logger.error("Letta API error in message callback", extra={
