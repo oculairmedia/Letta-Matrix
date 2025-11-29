@@ -835,9 +835,10 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
         
         logger.info(f"File upload detected in room {room.room_id}")
         
-        # Determine which agent to use for this room
-        agent_id = config.letta_agent_id  # Default
-        
+        # Only process files in rooms that have an agent mapping
+        # This prevents processing files in relay/bridge rooms where letta
+        # is just a relay participant, not the designated responder
+        agent_id = None
         try:
             from src.models.agent_mapping import AgentMappingDB
             db = AgentMappingDB()
@@ -845,8 +846,14 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
             if mapping:
                 agent_id = str(mapping.agent_id)
                 logger.info(f"Using agent {mapping.agent_name} ({agent_id}) for room {room.room_id}")
+            else:
+                # No agent mapping for this room - it's likely a relay/bridge room
+                # Skip file processing to avoid spamming relay rooms with processing messages
+                logger.debug(f"No agent mapping for room {room.room_id}, skipping file processing (relay room)")
+                return
         except Exception as e:
-            logger.warning(f"Could not query agent mappings: {e}")
+            logger.warning(f"Could not query agent mappings: {e}, skipping file processing")
+            return
         
         # Handle the file upload (notifications are sent by file_handler)
         await file_handler.handle_file_event(event, room.room_id, agent_id)
@@ -880,16 +887,20 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                 })
                 return
         
-        # Check if the sender is THIS room's agent - ignore only self-messages, not other agents
+        # Only process messages in rooms that have a dedicated agent mapping
+        # This prevents auto-forwarding content in relay/bridge rooms
         mappings_file = "/app/data/agent_user_mappings.json"
+        room_agent_user_id = None
+        room_has_agent = False
+        
         if os.path.exists(mappings_file):
             with open(mappings_file, 'r') as f:
                 mappings = json.load(f)
                 # Find the agent that owns this room
-                room_agent_user_id = None
                 for agent_id, mapping in mappings.items():
                     if mapping.get("room_id") == room.room_id:
                         room_agent_user_id = mapping.get("matrix_user_id")
+                        room_has_agent = True
                         break
 
                 # Only ignore messages from THIS room's own agent (prevent self-loops)
@@ -902,6 +913,12 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                     if mapping.get("matrix_user_id") == event.sender and event.sender != room_agent_user_id:
                         logger.info(f"Received inter-agent message from {event.sender} in {room.display_name}")
                         break
+        
+        # Skip processing for rooms without a dedicated agent (relay/bridge rooms)
+        # Letta can still write to these rooms via MCP tools, but won't auto-respond
+        if not room_has_agent:
+            logger.debug(f"No agent mapping for room {room.room_id}, skipping message processing (relay room)")
+            return
 
         logger.info("Received message from user", extra={
             "sender": event.sender,
