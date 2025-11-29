@@ -534,6 +534,124 @@ class MatrixListRoomsTool(MCPTool):
             return {"error": f"Login error: {str(e)}"}
 
 
+class MatrixSearchRoomsTool(MCPTool):
+    """Tool for searching Matrix rooms by name, topic, or alias"""
+    def __init__(self, matrix_api_url: str, matrix_homeserver: str, letta_username: str, letta_password: str):
+        super().__init__(
+            name="matrix_search_rooms",
+            description="Search for Matrix rooms by name, topic, or alias. Returns rooms matching the query."
+        )
+        self.matrix_api_url = matrix_api_url
+        self.matrix_homeserver = matrix_homeserver
+        self.letta_username = letta_username
+        self.letta_password = letta_password
+        self.access_token = None
+        self.parameters = {
+            "query": {
+                "type": "string",
+                "description": "Search query to match against room names, topics, and aliases (case-insensitive)"
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of results to return (default: 20)",
+                "default": 20
+            }
+        }
+    
+    async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        query = params.get("query", "").lower().strip()
+        limit = params.get("limit", 20)
+        
+        if not query:
+            return {"error": "Missing required parameter: query"}
+        
+        # Get access token if we don't have one
+        if not self.access_token:
+            login_result = await self._login()
+            if "error" in login_result:
+                return login_result
+            self.access_token = login_result["access_token"]
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Get all rooms first
+                url = f"{self.matrix_api_url}/rooms/list"
+                params_dict = {
+                    "access_token": self.access_token,
+                    "homeserver": self.matrix_homeserver
+                }
+                
+                async with session.get(url, params=params_dict) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        return {"error": f"Failed to list rooms: {error_text}"}
+                    
+                    result = await response.json()
+                    
+                    if not result.get("success"):
+                        return {"error": f"Failed to list rooms: {result.get('message', 'Unknown error')}"}
+                    
+                    all_rooms = result.get("rooms", [])
+                    
+                    # Filter rooms by query
+                    matching_rooms = []
+                    for room in all_rooms:
+                        # Support both field naming conventions
+                        room_name = (room.get("room_name") or room.get("name") or "").lower()
+                        room_topic = (room.get("topic") or "").lower()
+                        room_alias = (room.get("canonical_alias") or "").lower()
+                        room_id = (room.get("room_id") or "").lower()
+                        
+                        # Check if query matches any field
+                        if (query in room_name or 
+                            query in room_topic or 
+                            query in room_alias or
+                            query in room_id):
+                            matching_rooms.append(room)
+                            
+                            if len(matching_rooms) >= limit:
+                                break
+                    
+                    return {
+                        "success": True,
+                        "query": params.get("query", ""),
+                        "total_matches": len(matching_rooms),
+                        "rooms": matching_rooms
+                    }
+                        
+        except Exception as e:
+            logger.error(f"Exception in search: {str(e)}")
+            return {"error": f"Error searching rooms: {str(e)}"}
+    
+    async def _login(self) -> Dict[str, Any]:
+        """Login to Matrix and get access token"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.matrix_api_url}/login"
+                payload = {
+                    "homeserver": self.matrix_homeserver,
+                    "user_id": self.letta_username,
+                    "password": self.letta_password,
+                    "device_name": "mcp_search_rooms"
+                }
+                
+                async with session.post(url, json=payload) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        return {"error": f"Login failed: {error_text}"}
+                    
+                    result = await response.json()
+                    if result.get("success"):
+                        return {
+                            "access_token": result.get("access_token"),
+                            "device_id": result.get("device_id")
+                        }
+                    else:
+                        return {"error": f"Login failed: {result.get('message', 'Unknown error')}"}
+        except Exception as e:
+            return {"error": f"Login error: {str(e)}"}
+
+
 class MCPHTTPServer:
     """MCP HTTP Streaming Server implementation"""
     
@@ -581,6 +699,12 @@ class MCPHTTPServer:
             self.letta_password
         )
         self.tools["matrix_create_room"] = MatrixCreateRoomTool(
+            self.matrix_api_url,
+            self.matrix_homeserver,
+            self.letta_username,
+            self.letta_password
+        )
+        self.tools["matrix_search_rooms"] = MatrixSearchRoomsTool(
             self.matrix_api_url,
             self.matrix_homeserver,
             self.letta_username,

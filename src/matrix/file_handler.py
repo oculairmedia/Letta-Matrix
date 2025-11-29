@@ -78,6 +78,7 @@ class FileMetadata:
     sender: str
     timestamp: int
     event_id: str
+    caption: Optional[str] = None  # User's caption/question about the file
 
 
 class FileUploadError(Exception):
@@ -302,13 +303,28 @@ class LettaFileHandler:
             
             logger.info(f"Encoded image {metadata.file_name} as base64 ({len(image_data)} chars)")
             
+            # Build message text based on whether user provided a caption/question
+            if metadata.caption:
+                # User provided a caption/question - include it as the main prompt
+                message_text = (
+                    f"[Image Upload: {metadata.file_name}]\n\n"
+                    f"The user shared an image and asked: \"{metadata.caption}\"\n\n"
+                    f"Please analyze the image and respond to the user's question."
+                )
+                logger.info(f"Including user caption in image message: {metadata.caption[:50]}...")
+            else:
+                # No caption - use default prompt
+                message_text = (
+                    f"[Image Upload: {metadata.file_name}]\n\n"
+                    f"The user has shared an image with you. Please analyze the image and describe what you see."
+                )
+            
             # Send multimodal message to agent using SDK
             # Format: content array with text and image parts
-            # Include explicit instruction to use send_message tool for agents with tool_rules
             message_content = [
                 {
                     "type": "text",
-                    "text": f"[Image Upload: {metadata.file_name}]\n\nThe user has shared an image with you. Please analyze the image and respond to the user by calling the send_message tool with your description of what you see."
+                    "text": message_text
                 },
                 {
                     "type": "image",
@@ -439,22 +455,41 @@ class LettaFileHandler:
             
             # Extract file information
             url = content.get('url')  # mxc:// URL
-            body = content.get('body', 'unnamed_file')  # filename
+            body = content.get('body', 'unnamed_file')  # filename or caption
             info = content.get('info', {})
             
             if not url:
                 logger.warning("File event missing URL")
                 return None
             
+            # Get actual filename from info.filename if available (Matrix spec)
+            # The 'body' field may contain a user caption instead of filename
+            actual_filename = info.get('filename') or body
+            
+            # Determine if body is a caption (different from filename)
+            # If body looks like a filename (has extension), use it as filename
+            # Otherwise, treat it as a caption/question from the user
+            caption = None
+            import os
+            _, ext = os.path.splitext(body)
+            if ext and ext.lower() in SUPPORTED_EXTENSIONS:
+                # body looks like a filename
+                actual_filename = body
+            elif body != actual_filename:
+                # body is different from filename - it's a caption
+                caption = body
+                logger.info(f"Detected caption for image: {caption[:50]}...")
+            
             return FileMetadata(
                 file_url=url,
-                file_name=body,
+                file_name=actual_filename,
                 file_type=info.get('mimetype', 'application/octet-stream'),
                 file_size=info.get('size', 0),
                 room_id=room_id,
                 sender=event.sender,
                 timestamp=event.server_timestamp,
-                event_id=event.event_id
+                event_id=event.event_id,
+                caption=caption
             )
             
         except Exception as e:

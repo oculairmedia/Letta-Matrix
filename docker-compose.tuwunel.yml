@@ -4,7 +4,7 @@ services:
   tuwunel:
     image: ghcr.io/oculairmedia/tuwunel-docker2010:latest
     restart: unless-stopped
-    command: ["-O", "address=\"0.0.0.0\"", "-O", "port=6167"]
+    command: ["-c", "/var/lib/tuwunel/tuwunel.toml", "-O", "address=\"0.0.0.0\"", "-O", "port=6167"]
     environment:
       - TUWUNEL_SERVER_NAME=${MATRIX_SERVER_NAME:-matrix.oculair.ca}
       - TUWUNEL_DATABASE_PATH=/var/lib/tuwunel

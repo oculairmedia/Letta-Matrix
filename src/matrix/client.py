@@ -273,6 +273,11 @@ async def send_to_letta_api_streaming(
     # Track the final response
     final_response = ""
     
+    # NOTE: Typing indicators disabled due to tuwunel/Conduit bug where
+    # typing=false doesn't clear the indicator. Can be re-enabled when
+    # using a server that properly supports typing notifications.
+    # typing_manager = TypingIndicatorManager(room_id, config, logger)
+    
     try:
         # Stream the message and handle events
         async for event in stream_reader.stream_message(agent_id_to_use, message_body):
@@ -562,6 +567,167 @@ async def delete_message_as_agent(room_id: str, event_id: str, config: Config, l
                     
     except Exception as e:
         logger.error(f"[DELETE_AS_AGENT] Exception occurred: {e}", exc_info=True)
+        return False
+
+
+async def set_typing_as_agent(room_id: str, typing: bool, config: Config, logger: logging.Logger, timeout_ms: int = 30000) -> bool:
+    """
+    Set typing indicator as the agent user for this room.
+    
+    Args:
+        room_id: Matrix room ID
+        typing: True to start typing, False to stop
+        config: Configuration object
+        logger: Logger instance
+        timeout_ms: How long the typing indicator should last (default 30s)
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Load agent mappings to find which agent owns this room
+        mappings_file = "/app/data/agent_user_mappings.json"
+        if not os.path.exists(mappings_file):
+            return False
+            
+        with open(mappings_file, 'r') as f:
+            mappings = json.load(f)
+        
+        # Find the agent for this room
+        agent_mapping = None
+        for agent_id, mapping in mappings.items():
+            if mapping.get("room_id") == room_id:
+                agent_mapping = mapping
+                break
+        
+        if not agent_mapping:
+            return False
+        
+        # Login as the agent user
+        agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
+        agent_password = agent_mapping["matrix_password"]
+        
+        login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
+        login_data = {
+            "type": "m.login.password",
+            "user": agent_username,
+            "password": agent_password
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            # Login
+            async with session.post(login_url, json=login_data) as response:
+                if response.status != 200:
+                    return False
+                
+                auth_data = await response.json()
+                agent_token = auth_data.get("access_token")
+                
+                if not agent_token:
+                    return False
+            
+            # Set typing indicator
+            # URL-encode the user ID since it contains @ and :
+            from urllib.parse import quote
+            encoded_user_id = quote(agent_mapping['matrix_user_id'], safe='')
+            typing_url = f"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/typing/{encoded_user_id}"
+            headers = {
+                "Authorization": f"Bearer {agent_token}",
+                "Content-Type": "application/json"
+            }
+            
+            # Per Matrix spec: timeout should only be included when typing=true
+            if typing:
+                typing_data = {
+                    "typing": True,
+                    "timeout": timeout_ms
+                }
+            else:
+                typing_data = {
+                    "typing": False
+                }
+            
+            logger.debug(f"[TYPING] PUT {typing_url} with {typing_data}")
+            async with session.put(typing_url, headers=headers, json=typing_data) as response:
+                response_text = await response.text()
+                if response.status == 200:
+                    logger.debug(f"[TYPING] Set typing={typing} for room {room_id}, response: {response_text}")
+                    
+                    # Workaround for servers that don't properly handle typing=false:
+                    # Also send typing=true with timeout=1 to force immediate expiry
+                    if not typing:
+                        expire_data = {"typing": True, "timeout": 1}
+                        async with session.put(typing_url, headers=headers, json=expire_data) as expire_response:
+                            logger.debug(f"[TYPING] Sent expire workaround, status: {expire_response.status}")
+                    
+                    return True
+                else:
+                    logger.warning(f"[TYPING] Failed to set typing: {response.status} - {response_text}")
+                    return False
+                    
+    except Exception as e:
+        logger.debug(f"[TYPING] Exception: {e}")
+        return False
+
+
+class TypingIndicatorManager:
+    """
+    Manages typing indicators with automatic refresh.
+    
+    Typing indicators timeout after ~30 seconds, so this manager
+    periodically refreshes them while the agent is processing.
+    """
+    
+    def __init__(self, room_id: str, config: Config, logger: logging.Logger):
+        self.room_id = room_id
+        self.config = config
+        self.logger = logger
+        self._typing_task: Optional[asyncio.Task] = None
+        self._stop_event = asyncio.Event()
+    
+    async def _typing_loop(self):
+        """Keep typing indicator active until stopped"""
+        try:
+            while not self._stop_event.is_set():
+                await set_typing_as_agent(self.room_id, True, self.config, self.logger, timeout_ms=30000)
+                # Refresh every 25 seconds (before the 30s timeout)
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=25.0)
+                    break  # Stop event was set
+                except asyncio.TimeoutError:
+                    continue  # Refresh typing
+        except asyncio.CancelledError:
+            pass
+        finally:
+            # Always stop typing when done
+            await set_typing_as_agent(self.room_id, False, self.config, self.logger)
+    
+    async def start(self):
+        """Start showing typing indicator"""
+        self._stop_event.clear()
+        self._typing_task = asyncio.create_task(self._typing_loop())
+        self.logger.debug(f"[TYPING] Started typing indicator for room {self.room_id}")
+    
+    async def stop(self):
+        """Stop showing typing indicator"""
+        self._stop_event.set()
+        if self._typing_task:
+            self._typing_task.cancel()
+            try:
+                await self._typing_task
+            except asyncio.CancelledError:
+                pass
+            self._typing_task = None
+        # Explicitly stop typing
+        await set_typing_as_agent(self.room_id, False, self.config, self.logger)
+        self.logger.debug(f"[TYPING] Stopped typing indicator for room {self.room_id}")
+    
+    async def __aenter__(self):
+        await self.start()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.stop()
         return False
 
 

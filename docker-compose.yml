@@ -96,6 +96,7 @@ services:
       - matrix-api
     volumes:
       - ./mcp_data:/app/data
+      - ./src/mcp/http_server.py:/app/src/mcp/http_server.py:ro
     labels:
       - "homepage.group=Communication"
       - "homepage.name=Matrix MCP Server"
