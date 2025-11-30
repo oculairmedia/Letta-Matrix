@@ -138,6 +138,64 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+  opencode-bridge:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.opencode-bridge
+    image: opencode-matrix-bridge:local
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - MATRIX_HOMESERVER_URL=http://127.0.0.1:6167
+      - MATRIX_ACCESS_TOKEN=${OPENCODE_BRIDGE_ACCESS_TOKEN}
+      - BRIDGE_PORT=3201
+      - AGENT_MAPPINGS_PATH=/app/data/agent_user_mappings.json
+    volumes:
+      - ./matrix_client_data:/app/data
+    labels:
+      - "homepage.group=Communication"
+      - "homepage.name=OpenCode Matrix Bridge"
+      - "homepage.icon=si-matrix"
+      - "homepage.href=http://192.168.50.90:3201"
+      - "homepage.description=Forwards Matrix messages to OpenCode instances"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3201/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+  matrix-messaging-mcp:
+    build:
+      context: /opt/stacks/matrix-messaging-mcp
+      dockerfile: /opt/stacks/matrix-synapse-deployment/docker/Dockerfile.matrix-mcp
+    image: matrix-messaging-mcp:local
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - MATRIX_HOMESERVER_URL=http://127.0.0.1:6167
+      - MATRIX_REGISTRATION_TOKEN=${MATRIX_REGISTRATION_TOKEN}
+      - LETTA_API_URL=${LETTA_API_URL:-http://127.0.0.1:8283}
+      - LETTA_API_KEY=${LETTA_API_KEY}
+      - LETTA_API_TOKEN=${LETTA_TOKEN}
+      - OPENCODE_BRIDGE_URL=http://127.0.0.1:3201
+      - MCP_SERVER_PORT=3100
+      - MCP_SERVER_HOST=0.0.0.0
+      - DATA_DIR=/app/data
+    volumes:
+      - /opt/stacks/matrix-messaging-mcp/data:/app/data
+      - ./matrix_client_data:/app/matrix_data:ro
+    labels:
+      - "homepage.group=Communication"
+      - "homepage.name=Matrix Messaging MCP"
+      - "homepage.icon=si-matrix"
+      - "homepage.href=http://192.168.50.90:3100"
+      - "homepage.description=Universal Matrix messaging MCP with Letta and OpenCode integration"
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "node dist/index.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 networks:
   matrix-internal:
     driver: bridge

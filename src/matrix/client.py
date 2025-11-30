@@ -995,6 +995,26 @@ collaborate with you.
                 logger.info(f"[INTER-AGENT CONTEXT] Sender: {from_agent_name} ({from_agent_id})")
                 logger.info(f"[INTER-AGENT CONTEXT] Full enhanced message:\n{message_to_send}")
 
+            # Check if sender is an OpenCode identity (@oc_*)
+            # If so, inject @mention instruction so agent knows how to respond
+            is_opencode_sender = event.sender.startswith("@oc_")
+            if is_opencode_sender and not is_inter_agent_message:
+                opencode_mxid = event.sender
+                message_to_send = f"""[MESSAGE FROM OPENCODE USER]
+
+{event.body}
+
+---
+RESPONSE INSTRUCTION (OPENCODE BRIDGE):
+This message is from an OpenCode user: {opencode_mxid}
+When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
+in your response so the OpenCode bridge can route your reply to them.
+
+Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response..."
+"""
+                logger.info(f"[OPENCODE] Detected message from OpenCode identity: {opencode_mxid}")
+                logger.info(f"[OPENCODE] Injected @mention instruction for response routing")
+
             # Send the message to Letta with room context
             # Use streaming mode if enabled (shows progress messages for tool calls)
             if config.letta_streaming_enabled:
