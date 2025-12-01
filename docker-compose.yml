@@ -166,7 +166,11 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
+      - MATRIX_API_URL=http://127.0.0.1:8004
       - MATRIX_HOMESERVER_URL=http://127.0.0.1:6167
+      - MATRIX_HOMESERVER_API_URL=http://tuwunel:6167
+      - MATRIX_USERNAME=${MATRIX_USERNAME}
+      - MATRIX_PASSWORD=${MATRIX_PASSWORD}
       - MATRIX_REGISTRATION_TOKEN=${MATRIX_REGISTRATION_TOKEN}
       - LETTA_API_URL=${LETTA_API_URL:-http://127.0.0.1:8283}
       - LETTA_API_KEY=${LETTA_API_KEY}

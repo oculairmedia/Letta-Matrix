@@ -688,7 +688,9 @@ class MCPHTTPServer:
         
         # Configuration
         matrix_api_url = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
-        matrix_homeserver = os.getenv("MATRIX_HOMESERVER_URL", "http://synapse:8008")
+        # Use MATRIX_HOMESERVER_API_URL for API calls (from API's network perspective)
+        # Fall back to MATRIX_HOMESERVER_URL for backward compatibility
+        matrix_homeserver = os.getenv("MATRIX_HOMESERVER_API_URL") or os.getenv("MATRIX_HOMESERVER_URL", "http://synapse:8008")
         letta_username = os.getenv("MATRIX_USERNAME", "@letta:matrix.oculair.ca")
         letta_password = os.getenv("MATRIX_PASSWORD", "letta")
         
