@@ -52,6 +52,90 @@ class Session:
         return f"{self.id}-{self.event_counter}"
 
 
+class MCPTool:
+    """Backward-compatible base class for MCP tools used in tests."""
+    def __init__(self, name: str, description: str, parameters: Optional[Dict[str, Any]] = None):
+        self.name = name
+        self.description = description
+        self.parameters = parameters or {}
+    
+    async def execute(self, params: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
+        raise NotImplementedError("MCPTool.execute must be implemented by subclasses")
+
+
+class MatrixSendMessageTool(MCPTool):
+    """Legacy single-purpose tool kept for test compatibility."""
+    def __init__(self, matrix_api_url: str, matrix_homeserver: str, letta_username: str, letta_password: str):
+        super().__init__(
+            name="matrix_send_message",
+            description="Send a message to a Matrix room via the Matrix API"
+        )
+        self.matrix_api_url = matrix_api_url
+        self.matrix_homeserver = matrix_homeserver
+        self.letta_username = letta_username
+        self.letta_password = letta_password
+        self.access_token: Optional[str] = None
+        self.parameters = {
+            "room_id": {
+                "type": "string",
+                "description": "Matrix room ID to send the message to"
+            },
+            "message": {
+                "type": "string",
+                "description": "Message body to send"
+            }
+        }
+    
+    async def _login(self) -> Dict[str, Any]:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "homeserver": self.matrix_homeserver,
+                "user_id": self.letta_username,
+                "password": self.letta_password,
+                "device_name": "matrix_mcp"
+            }
+            async with session.post(f"{self.matrix_api_url}/login", json=payload) as response:
+                if response.status != 200:
+                    return {"error": await response.text()}
+                result = await response.json()
+                if result.get("success"):
+                    return {"access_token": result.get("access_token")}
+                return {"error": result.get("message", "Login failed")}
+    
+    async def execute(self, params: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
+        room_id = (params.get("room_id", "") or "").strip()
+        message = (params.get("message", "") or "").strip()
+        
+        if not room_id or not message:
+            return {"error": "Missing required parameters: room_id, message"}
+        
+        if not self.access_token:
+            login_result = await self._login()
+            if "error" in login_result:
+                return login_result
+            self.access_token = login_result.get("access_token")
+            if not self.access_token:
+                return {"error": "Login response missing access token"}
+        
+        payload = {
+            "room_id": room_id,
+            "message": message,
+            "access_token": self.access_token,
+            "homeserver": self.matrix_homeserver
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{self.matrix_api_url}/messages/send", json=payload) as response:
+                    if response.status != 200:
+                        return {"error": f"Matrix API request failed: {response.status}"}
+                    result = await response.json()
+                    if result.get("success", True):
+                        return {"success": True, "event_id": result.get("event_id", "")}
+                    return {"error": result.get("message", "Failed to send message")}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+
 class MatrixAuth:
     """Shared authentication manager for Matrix API"""
     def __init__(self, matrix_api_url: str, matrix_homeserver: str, username: str, password: str):
