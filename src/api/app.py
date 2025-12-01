@@ -102,6 +102,11 @@ class WebhookResponse(BaseModel):
     message: str
     timestamp: str
 
+class AutoJoinRequest(BaseModel):
+    user_id: str
+    access_token: str
+    homeserver: str
+
 # Global Matrix client for the API
 class MatrixAPIClient:
     def __init__(self):
@@ -514,6 +519,76 @@ async def get_agent_room(agent_id: str):
     except Exception as e:
         logger.error(f"Error getting agent room for {agent_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.post("/rooms/auto-join")
+async def auto_join_rooms(request: AutoJoinRequest):
+    """Auto-join a user to all agent rooms they're invited to."""
+    user_id = request.user_id
+    access_token = request.access_token
+    homeserver = request.homeserver
+    try:
+        # Get all agent mappings to find all rooms
+        mappings_file = "/app/data/agent_user_mappings.json"
+        if not os.path.exists(mappings_file):
+            return {
+                "success": False,
+                "message": "Agent mappings file not found",
+                "joined_rooms": []
+            }
+
+        with open(mappings_file, 'r') as f:
+            mappings = json.load(f)
+
+        joined_rooms = []
+        failed_rooms = []
+        
+        # Try to join each room
+        for agent_id, mapping in mappings.items():
+            room_id = mapping.get("room_id")
+            if not room_id:
+                continue
+            
+            # Check if already joined
+            check_url = f"{homeserver}/_matrix/client/v3/rooms/{room_id}/joined_members"
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(check_url, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if user_id in data.get("joined", {}):
+                            joined_rooms.append({"room_id": room_id, "agent_name": mapping.get("agent_name"), "status": "already_joined"})
+                            continue
+                
+                # Try to join the room
+                join_url = f"{homeserver}/_matrix/client/v3/rooms/{room_id}/join"
+                async with session.post(join_url, headers=headers, json={}) as join_response:
+                    if join_response.status == 200:
+                        joined_rooms.append({"room_id": room_id, "agent_name": mapping.get("agent_name"), "status": "joined"})
+                        logger.info(f"Auto-joined {user_id} to room {room_id} for agent {mapping.get('agent_name')}")
+                    else:
+                        error_text = await join_response.text()
+                        failed_rooms.append({"room_id": room_id, "agent_name": mapping.get("agent_name"), "error": error_text})
+                        logger.warning(f"Failed to join {user_id} to room {room_id}: {error_text}")
+
+        return {
+            "success": True,
+            "message": f"Joined {len(joined_rooms)} rooms, {len(failed_rooms)} failed",
+            "joined_rooms": joined_rooms,
+            "failed_rooms": failed_rooms
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in auto-join: {e}")
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "joined_rooms": [],
+            "failed_rooms": []
+        }
 
 @app.get("/health")
 async def health_check():

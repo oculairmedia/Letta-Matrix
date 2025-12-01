@@ -168,8 +168,32 @@ class MatrixAuth:
                     self.access_token = result.get("access_token")
                     if not self.access_token:
                         raise Exception("No access token in response")
+                    
+                    # Auto-join all agent rooms after successful login
+                    await self._auto_join_rooms()
+                    
                     return self.access_token
                 raise Exception(f"Login failed: {result.get('message', 'Unknown error')}")
+    
+    async def _auto_join_rooms(self) -> None:
+        """Auto-join all agent rooms after login"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.matrix_api_url}/rooms/auto-join"
+                payload = {
+                    "user_id": self.username,
+                    "access_token": self.access_token,
+                    "homeserver": self.matrix_homeserver
+                }
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Auto-join complete: {result.get('message')}")
+                    else:
+                        error_text = await response.text()
+                        logger.warning(f"Auto-join failed: {error_text}")
+        except Exception as e:
+            logger.error(f"Error in auto-join: {e}")
 
 
 class MatrixRoomTool:
