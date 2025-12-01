@@ -139,10 +139,7 @@ services:
       retries: 3
       start_period: 10s
   opencode-bridge:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.opencode-bridge
-    image: opencode-matrix-bridge:local
+    image: ghcr.io/oculairmedia/letta-matrix-opencode-bridge:latest
     restart: unless-stopped
     network_mode: host
     environment:
@@ -165,10 +162,7 @@ services:
       retries: 3
       start_period: 10s
   matrix-messaging-mcp:
-    build:
-      context: /opt/stacks/matrix-messaging-mcp
-      dockerfile: /opt/stacks/matrix-synapse-deployment/docker/Dockerfile.matrix-mcp
-    image: matrix-messaging-mcp:local
+    image: ghcr.io/oculairmedia/letta-matrix-matrix-mcp:latest
     restart: unless-stopped
     network_mode: host
     environment:
@@ -178,8 +172,8 @@ services:
       - LETTA_API_KEY=${LETTA_API_KEY}
       - LETTA_API_TOKEN=${LETTA_TOKEN}
       - OPENCODE_BRIDGE_URL=http://127.0.0.1:3201
-      - MCP_SERVER_PORT=3100
-      - MCP_SERVER_HOST=0.0.0.0
+      - MCP_HTTP_PORT=3100
+      - MCP_HTTP_HOST=0.0.0.0
       - DATA_DIR=/app/data
     volumes:
       - /opt/stacks/matrix-messaging-mcp/data:/app/data
@@ -191,7 +185,7 @@ services:
       - "homepage.href=http://192.168.50.90:3100"
       - "homepage.description=Universal Matrix messaging MCP with Letta and OpenCode integration"
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "node dist/index.js"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3100/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
