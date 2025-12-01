@@ -1,4 +1,35 @@
 services:
+  tuwunel:
+    image: ghcr.io/oculairmedia/tuwunel-docker2010:latest
+    restart: unless-stopped
+    command: ["-c", "/var/lib/tuwunel/tuwunel.toml", "-O", "address=\"0.0.0.0\"", "-O", "port=6167"]
+    environment:
+      - TUWUNEL_SERVER_NAME=${MATRIX_SERVER_NAME:-matrix.oculair.ca}
+      - TUWUNEL_DATABASE_PATH=/var/lib/tuwunel
+      - TUWUNEL_ALLOW_REGISTRATION=true
+      - TUWUNEL_REGISTRATION_TOKEN=${MATRIX_REGISTRATION_TOKEN}
+      - TUWUNEL_MAX_REQUEST_SIZE=20000000
+      - TUWUNEL_ALLOW_FEDERATION=true
+      - TUWUNEL_ALLOW_CHECK_FOR_UPDATES=true
+      - TUWUNEL_TRUSTED_SERVERS=["matrix.org"]
+      - TUWUNEL_LOG=info
+    volumes:
+      - ${TUWUNEL_DATA_PATH:-./tuwunel-data}:/var/lib/tuwunel
+    networks:
+      - matrix-internal
+    ports:
+      - "6167:6167"
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --spider
+        - -q
+        - http://localhost:6167/_matrix/client/versions
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
   element:
     image: vectorim/element-web:latest
     restart: unless-stopped
@@ -6,6 +37,9 @@ services:
       - ${ELEMENT_CONFIG_PATH}:/app/config.json:ro
     networks:
       - matrix-internal
+    depends_on:
+      tuwunel:
+        condition: service_healthy
   nginx:
     image: nginx:alpine
     restart: unless-stopped
@@ -16,13 +50,16 @@ services:
     networks:
       - matrix-internal
     depends_on:
-      - element
+      tuwunel:
+        condition: service_healthy
+      element:
+        condition: service_started
     labels:
-      - "homepage.group=Communication"
-      - "homepage.name=Matrix Homeserver (Tuwunel)"
-      - "homepage.icon=si-matrix"
-      - "homepage.href=http://matrix.oculair.ca"
-      - "homepage.description=Tuwunel Matrix homeserver with Element web client"
+      - homepage.group=Communication
+      - homepage.name=Matrix Homeserver (Tuwunel)
+      - homepage.icon=si-matrix
+      - homepage.href=http://matrix.oculair.ca
+      - homepage.description=Tuwunel Matrix homeserver with Element web client
   matrix-client:
     image: ghcr.io/oculairmedia/letta-matrix-client:latest
     restart: unless-stopped
@@ -34,7 +71,7 @@ services:
     volumes:
       - ./matrix_store:/app/matrix_store
       - ./matrix_client_data:/app/data
-      - ./src:/app/src:ro  # Mount source code for development
+      - ./src:/app/src:ro # Mount source code for development
       - ./custom_matrix_client.py:/app/custom_matrix_client.py:ro
       - ./agent_user_manager.py:/app/agent_user_manager.py:ro
       - ./matrix_auth.py:/app/matrix_auth.py:ro
@@ -42,9 +79,9 @@ services:
     networks:
       - matrix-internal
     depends_on:
+      tuwunel:
+        condition: service_healthy
       matrix-api:
-        condition: service_started
-      mcp-server:
         condition: service_started
     healthcheck:
       test:
@@ -69,40 +106,16 @@ services:
       - 8004:8000
     networks:
       - matrix-internal
-    labels:
-      - "homepage.group=Communication"
-      - "homepage.name=Matrix API"
-      - "homepage.icon=si-api"
-      - "homepage.href=http://192.168.50.90:8004"
-      - "homepage.description=Matrix API server for automation"
-  mcp-server:
-    image: ghcr.io/oculairmedia/letta-matrix-mcp:latest
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - MATRIX_API_URL=http://matrix-api:8000
-      - MATRIX_HOMESERVER_URL=http://tuwunel:6167
-      - MCP_HOST=0.0.0.0
-      - MCP_PORT=8005
-      - MCP_HTTP_HOST=0.0.0.0
-      - MCP_HTTP_PORT=8006
-    ports:
-      - 8015:8005 # WebSocket port (host:container)
-      - 8016:8006 # HTTP streaming port (host:container)
-    networks:
-      - matrix-internal
     depends_on:
-      - matrix-api
-    volumes:
-      - ./mcp_data:/app/data
-      - ./src/mcp/http_server.py:/app/src/mcp/http_server.py:ro
+      tuwunel:
+        condition: service_healthy
     labels:
-      - "homepage.group=Communication"
-      - "homepage.name=Matrix MCP Server"
-      - "homepage.icon=si-websocket"
-      - "homepage.href=http://192.168.50.90:8016"
-      - "homepage.description=Matrix MCP server for Claude integration"
+      - homepage.group=Communication
+      - homepage.name=Matrix API
+      - homepage.icon=si-api
+      - homepage.href=http://192.168.50.90:8004
+      - homepage.description=Matrix API server for automation
+
   letta-agent-mcp:
     build:
       context: .
@@ -122,18 +135,29 @@ services:
     networks:
       - matrix-internal
     depends_on:
-      - matrix-api
-      - matrix-client
+      tuwunel:
+        condition: service_healthy
+      matrix-api:
+        condition: service_started
+      matrix-client:
+        condition: service_started
+      opencode-bridge:
+        condition: service_healthy
     volumes:
       - ./matrix_client_data:/app/data
     labels:
-      - "homepage.group=Communication"
-      - "homepage.name=Letta Agent MCP"
-      - "homepage.icon=si-chat"
-      - "homepage.href=http://192.168.50.90:8017"
-      - "homepage.description=Inter-agent communication MCP server"
+      - homepage.group=Communication
+      - homepage.name=Letta Agent MCP
+      - homepage.icon=si-chat
+      - homepage.href=http://192.168.50.90:8017
+      - homepage.description=Inter-agent communication MCP server
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8017/health')"]
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;
+          urllib.request.urlopen('http://localhost:8017/health')
       interval: 30s
       timeout: 10s
       retries: 3
@@ -141,6 +165,8 @@ services:
   opencode-bridge:
     image: ghcr.io/oculairmedia/letta-matrix-opencode-bridge:latest
     restart: unless-stopped
+    ports:
+      - 3201:3201
     network_mode: host
     environment:
       - MATRIX_HOMESERVER_URL=http://127.0.0.1:6167
@@ -149,22 +175,36 @@ services:
       - AGENT_MAPPINGS_PATH=/app/data/agent_user_mappings.json
     volumes:
       - ./matrix_client_data:/app/data
+    depends_on:
+      tuwunel:
+        condition: service_healthy
     labels:
-      - "homepage.group=Communication"
-      - "homepage.name=OpenCode Matrix Bridge"
-      - "homepage.icon=si-matrix"
-      - "homepage.href=http://192.168.50.90:3201"
-      - "homepage.description=Forwards Matrix messages to OpenCode instances"
+      - homepage.group=Communication
+      - homepage.name=OpenCode Matrix Bridge
+      - homepage.icon=si-matrix
+      - homepage.href=http://192.168.50.90:3201
+      - homepage.description=Forwards Matrix messages to OpenCode instances
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3201/health"]
+      test:
+        - CMD
+        - wget
+        - --no-verbose
+        - --tries=1
+        - --spider
+        - http://127.0.0.1:3201/health
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
   matrix-messaging-mcp:
-    image: ghcr.io/oculairmedia/letta-matrix-matrix-mcp:latest
+    build:
+      context: /opt/stacks/matrix-messaging-mcp
+      dockerfile: Dockerfile
+    image: matrix-messaging-mcp:local
     restart: unless-stopped
     network_mode: host
+    ports:
+      - 8100:8100
     environment:
       - MATRIX_API_URL=http://127.0.0.1:8004
       - MATRIX_HOMESERVER_URL=http://127.0.0.1:6167
@@ -182,14 +222,23 @@ services:
     volumes:
       - /opt/stacks/matrix-messaging-mcp/data:/app/data
       - ./matrix_client_data:/app/matrix_data:ro
+    depends_on:
+      tuwunel:
+        condition: service_healthy
     labels:
-      - "homepage.group=Communication"
-      - "homepage.name=Matrix Messaging MCP"
-      - "homepage.icon=si-matrix"
-      - "homepage.href=http://192.168.50.90:3100"
-      - "homepage.description=Universal Matrix messaging MCP with Letta and OpenCode integration"
+      - homepage.group=Communication
+      - homepage.name=Matrix Messaging MCP
+      - homepage.icon=si-matrix
+      - homepage.href=http://192.168.50.90:3100
+      - homepage.description=Universal Matrix messaging MCP with Letta and
+        OpenCode integration
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3100/health')"]
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://localhost:3100/health', (r) =>
+          process.exit(r.statusCode === 200 ? 0 : 1))"
       interval: 30s
       timeout: 10s
       retries: 3

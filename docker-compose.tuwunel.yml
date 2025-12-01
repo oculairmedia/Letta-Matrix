@@ -8,7 +8,8 @@ services:
     environment:
       - TUWUNEL_SERVER_NAME=${MATRIX_SERVER_NAME:-matrix.oculair.ca}
       - TUWUNEL_DATABASE_PATH=/var/lib/tuwunel
-      - TUWUNEL_ALLOW_REGISTRATION=false
+      - TUWUNEL_ALLOW_REGISTRATION=true
+      - TUWUNEL_REGISTRATION_TOKEN=matrix_mcp_secret_token_2024
       - TUWUNEL_MAX_REQUEST_SIZE=20000000
       - TUWUNEL_ALLOW_FEDERATION=true
       - TUWUNEL_ALLOW_CHECK_FOR_UPDATES=true

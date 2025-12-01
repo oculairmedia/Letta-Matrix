@@ -718,12 +718,40 @@ class MCPHTTPServer:
         letta_username = os.getenv("MATRIX_USERNAME", "@letta:matrix.oculair.ca")
         letta_password = os.getenv("MATRIX_PASSWORD", "letta")
         
+        # Load agent mappings for per-agent authentication
+        self.agent_mappings = self._load_agent_mappings()
+        
+        # Use agent-specific credentials if available, otherwise fallback to default
+        calling_user = self._get_calling_user()
+        if calling_user in self.agent_mappings:
+            self.username = self.agent_mappings[calling_user]["matrix_user_id"]
+            self.password = self.agent_mappings[calling_user]["matrix_password"]
+        else:
+            self.username = letta_username
+            self.password = letta_password
+        
         # Shared auth manager
-        self.auth = MatrixAuth(matrix_api_url, matrix_homeserver, letta_username, letta_password)
+        self.auth = MatrixAuth(matrix_api_url, matrix_homeserver, self.username, self.password)
         
         # Register consolidated tools
         self._register_tools()
         self._setup_routes()
+    
+    def _load_agent_mappings(self) -> Dict[str, Dict[str, str]]:
+        """Load agent-to-room mappings from JSON file"""
+        try:
+            mappings_file = "/app/data/agent_user_mappings.json"
+            if not os.path.exists(mappings_file):
+                logger.warning("Agent mappings file not found, using default credentials")
+                return {}
+            
+            with open(mappings_file, 'r') as f:
+                mappings = json.load(f)
+                logger.info(f"Loaded {len(mappings)} agent mappings from {mappings_file}")
+                return mappings
+        except Exception as e:
+            logger.error(f"Error loading agent mappings: {e}")
+            return {}
     
     def _register_tools(self) -> None:
         """Register the 3 consolidated MCP tools"""
