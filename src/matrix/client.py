@@ -37,6 +37,12 @@ class ConfigurationError(Exception):
     """Raised when configuration is invalid"""
     pass
 
+class LettaCodeApiError(Exception):
+    def __init__(self, status_code: int, message: str, details: Optional[Any] = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.details = details
+
 # Configuration dataclass
 @dataclass
 class Config:
@@ -48,6 +54,9 @@ class Config:
     letta_token: str
     letta_agent_id: str
     log_level: str = "INFO"
+    letta_code_api_url: str = os.getenv("LETTA_CODE_API_URL", "http://192.168.50.90:3099")
+    letta_code_enabled: bool = os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true"
+
     # Embedding configuration for Letta file uploads
     embedding_model: str = "letta/letta-free"
     embedding_endpoint: str = ""  # e.g., http://192.168.50.80:11434/v1 for Ollama
@@ -82,13 +91,88 @@ class Config:
                 embedding_chunk_size=int(os.getenv("LETTA_EMBEDDING_CHUNK_SIZE", "300")),
                 # Streaming configuration
                 letta_streaming_enabled=os.getenv("LETTA_STREAMING_ENABLED", "false").lower() == "true",
-                letta_streaming_timeout=float(os.getenv("LETTA_STREAMING_TIMEOUT", "120.0"))
+                letta_streaming_timeout=float(os.getenv("LETTA_STREAMING_TIMEOUT", "120.0")),
+                letta_code_api_url=os.getenv("LETTA_CODE_API_URL", "http://192.168.50.90:3099"),
+                letta_code_enabled=os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true"
             )
         except Exception as e:
             raise ConfigurationError(f"Failed to load configuration: {e}")
 
+LETTACODE_STATE_PATH = os.getenv("LETTA_CODE_STATE_PATH", "/app/data/letta_code_state.json")
+_letta_code_state: Dict[str, Dict[str, Any]] = {}
+
+
+def _load_letta_code_state() -> None:
+    global _letta_code_state
+    if _letta_code_state:
+        return
+    try:
+        if os.path.exists(LETTACODE_STATE_PATH):
+            with open(LETTACODE_STATE_PATH, "r") as fh:
+                data = json.load(fh)
+                if isinstance(data, dict):
+                    _letta_code_state = data
+    except Exception:
+        _letta_code_state = {}
+
+
+def _save_letta_code_state() -> None:
+    dir_path = os.path.dirname(LETTACODE_STATE_PATH)
+    if dir_path and not os.path.exists(dir_path):
+        os.makedirs(dir_path, exist_ok=True)
+    with open(LETTACODE_STATE_PATH, "w") as fh:
+        json.dump(_letta_code_state, fh)
+
+
+def get_letta_code_room_state(room_id: str) -> Dict[str, Any]:
+    _load_letta_code_state()
+    room_state = _letta_code_state.get(room_id, {})
+    return dict(room_state)
+
+
+def update_letta_code_room_state(room_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    _load_letta_code_state()
+    room_state = _letta_code_state.get(room_id, {})
+    room_state.update(updates)
+    _letta_code_state[room_id] = room_state
+    _save_letta_code_state()
+    return dict(room_state)
+
+async def resolve_letta_project_dir(
+    room_id: str,
+    agent_id: str,
+    config: Config,
+    logger: logging.Logger,
+    override_path: Optional[str] = None,
+) -> Optional[str]:
+    if override_path:
+        update_letta_code_room_state(room_id, {"projectDir": override_path})
+        return override_path
+    state = get_letta_code_room_state(room_id)
+    project_dir = state.get("projectDir")
+    if project_dir:
+        return project_dir
+    try:
+        session_info = await call_letta_code_api(config, 'GET', f"/api/letta-code/sessions/{agent_id}")
+        if session_info:
+            project_dir = session_info.get('projectDir')
+            if project_dir:
+                update_letta_code_room_state(room_id, {"projectDir": project_dir})
+                return project_dir
+    except LettaCodeApiError as exc:
+        if exc.status_code != 404:
+            logger.warning("Failed to resolve Letta Code session", extra={
+                "room_id": room_id,
+                "agent_id": agent_id,
+                "status_code": exc.status_code,
+                "error": str(exc),
+            })
+    return None
+
 # Setup structured logging
+ 
 def setup_logging(config: Config) -> logging.Logger:
+
     """Setup structured JSON logging"""
     logger = logging.getLogger("matrix_client")
     logger.setLevel(getattr(logging, config.log_level.upper()))
@@ -118,19 +202,255 @@ def setup_logging(config: Config) -> logging.Logger:
                 log_entry["exception"] = self.formatException(record.exc_info)
             
             # Add extra fields
-            for key, value in record.__dict__.items():
-                if key not in ["name", "msg", "args", "levelname", "levelno", "pathname", "filename", 
-                              "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName", 
-                              "created", "msecs", "relativeCreated", "thread", "threadName", 
-                              "processName", "process", "getMessage"]:
-                    log_entry[key] = value
-            
+            extra_fields = getattr(record, 'extra', None)
+            if isinstance(extra_fields, dict):
+                log_entry.update(extra_fields)
             return json.dumps(log_entry)
     
     handler.setFormatter(JSONFormatter())
     logger.addHandler(handler)
-    
+    logger.propagate = False
     return logger
+
+async def call_letta_code_api(config: Config, method: str, path: str, payload: Optional[Dict[str, Any]] = None, timeout: float = 600.0) -> Dict[str, Any]:
+    base = (config.letta_code_api_url or "").rstrip('/')
+    if not base:
+        raise LettaCodeApiError(503, "Letta Code API URL not configured")
+    url = f"{base}{path}"
+    client_timeout = aiohttp.ClientTimeout(total=timeout)
+    async with aiohttp.ClientSession(timeout=client_timeout) as session:
+        async with session.request(method, url, json=payload) as response:
+            text = await response.text()
+            data: Optional[Any] = None
+            if text:
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError:
+                    data = {"raw": text}
+            if response.status >= 400:
+                message = ""
+                if isinstance(data, dict):
+                    message = data.get("error") or data.get("message") or ""
+                raise LettaCodeApiError(response.status, message or text or "Request failed", data)
+            if data is None:
+                return {}
+            return data
+
+async def run_letta_code_task(
+    *,
+    room_id: str,
+    agent_id: str,
+    agent_name: str,
+    project_dir: Optional[str],
+    prompt: str,
+    config: Config,
+    logger: logging.Logger,
+    wrap_response: bool = True,
+) -> bool:
+    if not project_dir:
+        await send_as_agent(room_id, "No filesystem session found. Run /fs-link first.", config, logger)
+        return False
+    payload = {
+        "agentId": agent_id,
+        "prompt": prompt,
+        "projectDir": project_dir,
+    }
+    try:
+        result = await call_letta_code_api(config, 'POST', '/api/letta-code/task', payload, timeout=900.0)
+        output = result.get('result') or result.get('message') or ''
+        if not output:
+            output = 'Task completed with no output.'
+        if len(output) > 4000:
+            output = output[:4000] + '…'
+        success = result.get('success', False)
+        if wrap_response:
+            status_line = "Task succeeded" if success else "Task failed"
+            response_text = f"[Filesystem Task]\n{status_line}\nAgent: {agent_name}\nPath: {project_dir}\n\n{output}"
+            if not success:
+                error_text = result.get('error') or ''
+                if error_text:
+                    response_text += f"\nError: {error_text}"
+        else:
+            if success:
+                response_text = output
+            else:
+                error_text = result.get('error') or ''
+                response_text = f"[Filesystem Error]\n{error_text or output}"
+        await send_as_agent(room_id, response_text, config, logger)
+        return success
+    except LettaCodeApiError as exc:
+        detail = ""
+        if isinstance(exc.details, dict):
+            detail = exc.details.get('error') or exc.details.get('message') or ""
+        message = f"Filesystem task failed ({exc.status_code}): {detail or str(exc)}"
+        await send_as_agent(room_id, message, config, logger)
+        return False
+
+async def handle_letta_code_command(
+    room,
+    event,
+    config: Config,
+    logger: logging.Logger,
+    agent_mapping: Optional[Dict[str, Any]] = None,
+    agent_id_hint: Optional[str] = None,
+    agent_name_hint: Optional[str] = None,
+) -> bool:
+    if not config.letta_code_enabled:
+        return False
+    body = getattr(event, 'body', None)
+    if not body:
+        return False
+    trimmed = body.strip()
+    lowered = trimmed.lower()
+    if not lowered.startswith('/fs-'):
+        return False
+    from src.models.agent_mapping import AgentMappingDB
+    agent_id = agent_id_hint
+    agent_name = agent_name_hint
+    if agent_mapping and not agent_name:
+        agent_name = agent_mapping.get("agent_name") or agent_mapping.get("agentName")
+    mapping_obj = agent_mapping
+    if not agent_id or not agent_name:
+        db = AgentMappingDB()
+        mapping = db.get_by_room_id(room.room_id)
+        if not mapping:
+            await send_as_agent(room.room_id, "No agent mapping for this room.", config, logger)
+            return True
+        agent_id = str(mapping.agent_id)
+        agent_name = str(mapping.agent_name)
+        mapping_obj = {
+            "matrix_user_id": mapping.matrix_user_id,
+            "room_id": mapping.room_id,
+        }
+    state = get_letta_code_room_state(room.room_id)
+    parts = trimmed.split(' ', 1)
+    command = parts[0].lower()
+    args = parts[1].strip() if len(parts) > 1 else ""
+    if command == '/fs-link':
+        project_dir = args if args else None
+        
+        # Auto-detect path from VibSync if no path provided
+        if not project_dir and agent_name:
+            try:
+                # Fetch all projects from VibSync and match by name
+                projects_response = await call_letta_code_api(config, 'GET', '/api/projects')
+                projects = projects_response.get('projects', [])
+                
+                # Extract project name from agent name (e.g., "Huly - Personal Site" -> "Personal Site")
+                search_name = agent_name
+                if search_name.startswith("Huly - "):
+                    search_name = search_name[7:]  # Remove "Huly - " prefix
+                
+                # Find matching project by name (case-insensitive)
+                for proj in projects:
+                    if proj.get('name', '').lower() == search_name.lower():
+                        project_dir = proj.get('filesystem_path')
+                        if project_dir:
+                            logger.info(f"Auto-detected filesystem path for {agent_name}: {project_dir}")
+                        break
+            except Exception as e:
+                logger.warning(f"Failed to auto-detect filesystem path: {e}")
+        
+        if not project_dir:
+            await send_as_agent(room.room_id, "Usage: /fs-link /path/to/project\n(Could not auto-detect path for this agent)", config, logger)
+            return True
+            
+        payload = {
+            "agentId": agent_id,
+            "projectDir": project_dir,
+            "agentName": agent_name,
+        }
+        try:
+            response = await call_letta_code_api(config, 'POST', '/api/letta-code/link', payload)
+            message = response.get('message') or f"Agent {agent_id} linked to {project_dir}"
+            update_letta_code_room_state(room.room_id, {"projectDir": project_dir})
+            await send_as_agent(room.room_id, message, config, logger)
+        except LettaCodeApiError as exc:
+            detail = ""
+            if isinstance(exc.details, dict):
+                detail = exc.details.get('error') or exc.details.get('message') or ""
+            await send_as_agent(room.room_id, f"Link failed ({exc.status_code}): {detail or str(exc)}", config, logger)
+        return True
+    if command == '/fs-run':
+        if not args:
+            await send_as_agent(room.room_id, "Usage: /fs-run [--path=/opt/project] prompt", config, logger)
+            return True
+        prompt_text = args
+        path_override = None
+        if prompt_text.startswith('--path='):
+            first_space = prompt_text.find(' ')
+            if first_space == -1:
+                path_override = prompt_text[len('--path='):].strip()
+                prompt_text = ''
+            else:
+                path_override = prompt_text[len('--path='):first_space].strip()
+                prompt_text = prompt_text[first_space + 1:].strip()
+        if not prompt_text:
+            await send_as_agent(room.room_id, "Provide a prompt after the path option.", config, logger)
+            return True
+        project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger, override_path=path_override)
+        if not project_dir:
+            await send_as_agent(room.room_id, "No filesystem session found. Run /fs-link first.", config, logger)
+            return True
+        await run_letta_code_task(
+            room_id=room.room_id,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            project_dir=project_dir,
+            prompt=prompt_text,
+            config=config,
+            logger=logger,
+            wrap_response=True,
+        )
+        return True
+    if command == '/fs-task':
+        normalized = args.lower()
+        state_enabled = bool(state.get("enabled"))
+        if not args:
+            desired = not state_enabled
+        elif normalized in ('on', 'enable', 'start'):
+            desired = True
+        elif normalized in ('off', 'disable', 'stop'):
+            desired = False
+        elif normalized in ('status', 'state'):
+            status = "ENABLED" if state_enabled else "DISABLED"
+            info = state.get("projectDir") or "not set"
+            environment = "Letta Code" if state_enabled else "Cloud-only"
+            await send_as_agent(
+                room.room_id,
+                f"Filesystem mode is {status}\nEnvironment: {environment}\nProject path: {info}",
+                config,
+                logger,
+            )
+            return True
+        else:
+            await send_as_agent(room.room_id, "Usage: /fs-task [on|off|status]", config, logger)
+            return True
+        if desired:
+            project_dir = state.get("projectDir")
+            if not project_dir:
+                project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger)
+            if not project_dir:
+                await send_as_agent(room.room_id, "Link a project with /fs-link before enabling filesystem mode.", config, logger)
+                return True
+            update_letta_code_room_state(room.room_id, {"enabled": True, "projectDir": project_dir})
+            await send_as_agent(
+                room.room_id,
+                f"Filesystem mode ENABLED\nEnvironment: Letta Code (path: {project_dir})\nAll new prompts will run inside the project workspace.",
+                config,
+                logger,
+            )
+        else:
+            update_letta_code_room_state(room.room_id, {"enabled": False})
+            await send_as_agent(
+                room.room_id,
+                "Filesystem mode DISABLED\nEnvironment: Cloud-only (standard Letta API).",
+                config,
+                logger,
+            )
+        return True
+    return False
+
 
 # Global variables for backwards compatibility
 client = None
@@ -892,6 +1212,9 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
         mappings_file = "/app/data/agent_user_mappings.json"
         room_agent_user_id = None
         room_has_agent = False
+        room_agent_id = None
+        room_agent_name = None
+        room_agent_mapping = None
         
         if os.path.exists(mappings_file):
             with open(mappings_file, 'r') as f:
@@ -901,6 +1224,9 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                     if mapping.get("room_id") == room.room_id:
                         room_agent_user_id = mapping.get("matrix_user_id")
                         room_has_agent = True
+                        room_agent_id = agent_id
+                        room_agent_name = mapping.get("agent_name", "Unknown")
+                        room_agent_mapping = mapping
                         break
 
                 # Only ignore messages from THIS room's own agent (prevent self-loops)
@@ -920,7 +1246,43 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             logger.debug(f"No agent mapping for room {room.room_id}, skipping message processing (relay room)")
             return
 
+        if await handle_letta_code_command(room, event, config, logger, room_agent_mapping, room_agent_id, room_agent_name):
+            return
+
+        fs_state = get_letta_code_room_state(room.room_id)
+        if fs_state.get("enabled"):
+            agent_id = room_agent_id
+            agent_name = room_agent_name or "Filesystem Agent"
+            if not agent_id or not agent_name:
+                from src.models.agent_mapping import AgentMappingDB
+                db = AgentMappingDB()
+                mapping = db.get_by_room_id(room.room_id)
+                if mapping:
+                    agent_id = str(mapping.agent_id)
+                    agent_name = str(mapping.agent_name)
+            if not agent_id:
+                await send_as_agent(room.room_id, "No agent configured for filesystem mode.", config, logger)
+                return
+            project_dir = fs_state.get("projectDir")
+            if not project_dir:
+                project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger)
+                if not project_dir:
+                    await send_as_agent(room.room_id, "Filesystem mode enabled but no project linked. Run /fs-link.", config, logger)
+                    return
+            await run_letta_code_task(
+                room_id=room.room_id,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                project_dir=project_dir,
+                prompt=event.body,
+                config=config,
+                logger=logger,
+                wrap_response=False,
+            )
+            return
+ 
         logger.info("Received message from user", extra={
+
             "sender": event.sender,
             "room_name": room.display_name,
             "room_id": room.room_id,

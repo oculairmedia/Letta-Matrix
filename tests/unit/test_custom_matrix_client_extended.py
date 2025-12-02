@@ -25,9 +25,11 @@ from src.matrix.client import (
     send_to_letta_api,
     send_as_agent,
     message_callback,
+    handle_letta_code_command,
     Config,
     LettaApiError
 )
+
 
 
 # ============================================================================
@@ -683,3 +685,43 @@ class TestMessageCallback:
         info_calls = [str(call) for call in mock_logger.info.call_args_list]
         inter_agent_calls = [call for call in info_calls if "inter-agent" in call.lower()]
         assert len(inter_agent_calls) > 0
+
+
+@pytest.mark.unit
+class TestFilesystemCommands:
+    @pytest.mark.asyncio
+    async def test_fs_link_uses_project_path_payload(self, mock_config, mock_logger):
+        room = MagicMock()
+        room.room_id = "!room:matrix"
+        event = MagicMock()
+        event.body = "/fs-link /opt/stacks/huly-personal-site"
+
+        agent_id = "agent-abc-123"
+        agent_name = "Huly - Personal Site"
+
+        with patch("src.matrix.client.get_letta_code_room_state", return_value={}) as mock_get_state, \
+             patch("src.matrix.client.update_letta_code_room_state") as mock_update_state, \
+             patch("src.matrix.client.call_letta_code_api", new_callable=AsyncMock) as mock_api, \
+             patch("src.matrix.client.send_as_agent", new_callable=AsyncMock) as mock_send:
+            mock_api.return_value = {"message": "Linked"}
+
+            handled = await handle_letta_code_command(
+                room,
+                event,
+                mock_config,
+                mock_logger,
+                agent_mapping={"matrix_user_id": "@agent_abc:matrix"},
+                agent_id_hint=agent_id,
+                agent_name_hint=agent_name,
+            )
+
+        assert handled is True
+        mock_get_state.assert_called_once_with(room.room_id)
+        mock_api.assert_awaited_once()
+        awaited_call = mock_api.await_args
+        assert awaited_call is not None
+        payload = awaited_call.args[3]
+        assert payload["projectDir"] == "/opt/stacks/huly-personal-site"
+        mock_update_state.assert_called_with(room.room_id, {"projectDir": "/opt/stacks/huly-personal-site"})
+        mock_send.assert_awaited()
+
