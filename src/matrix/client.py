@@ -525,11 +525,22 @@ async def send_to_letta_api_streaming(
     sender_id: str, 
     config: Config, 
     logger: logging.Logger, 
-    room_id: str
+    room_id: str,
+    reply_to_event_id: Optional[str] = None,
+    reply_to_sender: Optional[str] = None
 ) -> str:
     """
     Sends a message to the Letta API using step streaming with progress display.
     Shows tool calls as progress messages that get deleted when replaced.
+    
+    Args:
+        message_body: The message to send to the agent
+        sender_id: Matrix sender ID
+        config: Application configuration
+        logger: Logger instance
+        room_id: Matrix room ID
+        reply_to_event_id: Optional event ID to reply to for the final response
+        reply_to_sender: Optional sender to mention in the reply
     """
     from src.matrix.streaming import StepStreamReader, StreamingMessageHandler, StreamEventType
     from src.letta.client import get_letta_client, LettaConfig
@@ -575,8 +586,17 @@ async def send_to_letta_api_streaming(
     
     # Create message handlers for Matrix
     async def send_message(rid: str, content: str) -> str:
-        """Send a message and return event_id"""
+        """Send a progress message and return event_id (no reply context)"""
         event_id = await send_as_agent_with_event_id(rid, content, config, logger)
+        return event_id or ""
+    
+    async def send_final_message(rid: str, content: str) -> str:
+        """Send a final response message with rich reply context"""
+        event_id = await send_as_agent_with_event_id(
+            rid, content, config, logger,
+            reply_to_event_id=reply_to_event_id,
+            reply_to_sender=reply_to_sender
+        )
         return event_id or ""
     
     async def delete_message(rid: str, event_id: str) -> None:
@@ -587,7 +607,8 @@ async def send_to_letta_api_streaming(
         send_message=send_message,
         delete_message=delete_message,
         room_id=room_id,
-        delete_progress=False  # Keep progress messages visible
+        delete_progress=False,  # Keep progress messages visible
+        send_final_message=send_final_message  # Use separate handler for final with reply
     )
     
     # Track the final response
@@ -1051,9 +1072,25 @@ class TypingIndicatorManager:
         return False
 
 
-async def send_as_agent_with_event_id(room_id: str, message: str, config: Config, logger: logging.Logger) -> Optional[str]:
+async def send_as_agent_with_event_id(
+    room_id: str, 
+    message: str, 
+    config: Config, 
+    logger: logging.Logger,
+    reply_to_event_id: Optional[str] = None,
+    reply_to_sender: Optional[str] = None
+) -> Optional[str]:
     """
     Send a message as the agent user for this room and return the event ID.
+    
+    Args:
+        room_id: The Matrix room ID to send the message to
+        message: The message text to send
+        config: Application configuration
+        logger: Logger instance
+        reply_to_event_id: Optional event ID to reply to (creates a rich reply thread)
+        reply_to_sender: Optional sender of the original message (for m.mentions)
+    
     Returns the event_id on success, None on failure.
     """
     try:
@@ -1114,16 +1151,31 @@ async def send_as_agent_with_event_id(room_id: str, message: str, config: Config
                 "Content-Type": "application/json"
             }
             
-            message_data = {
+            message_data: Dict[str, Any] = {
                 "msgtype": "m.text",
                 "body": message
             }
+            
+            # Add rich reply relationship if replying to a specific message
+            if reply_to_event_id:
+                message_data["m.relates_to"] = {
+                    "m.in_reply_to": {
+                        "event_id": reply_to_event_id
+                    }
+                }
+                # Optionally mention the original sender
+                if reply_to_sender:
+                    message_data["m.mentions"] = {
+                        "user_ids": [reply_to_sender]
+                    }
+                logger.debug(f"[SEND_AS_AGENT] Creating rich reply to event {reply_to_event_id}")
             
             async with session.put(message_url, headers=headers, json=message_data) as response:
                 if response.status == 200:
                     result = await response.json()
                     event_id = result.get("event_id")
-                    logger.debug(f"[SEND_AS_AGENT] Sent message, event_id: {event_id}")
+                    logger.debug(f"[SEND_AS_AGENT] Sent message, event_id: {event_id}" + 
+                                (f" (reply to {reply_to_event_id})" if reply_to_event_id else ""))
                     return event_id
                 else:
                     response_text = await response.text()
@@ -1135,10 +1187,33 @@ async def send_as_agent_with_event_id(room_id: str, message: str, config: Config
         return None
 
 
-async def send_as_agent(room_id: str, message: str, config: Config, logger: logging.Logger) -> bool:
-    """Send a message as the agent user for this room"""
+async def send_as_agent(
+    room_id: str, 
+    message: str, 
+    config: Config, 
+    logger: logging.Logger,
+    reply_to_event_id: Optional[str] = None,
+    reply_to_sender: Optional[str] = None
+) -> bool:
+    """
+    Send a message as the agent user for this room.
+    
+    Args:
+        room_id: The Matrix room ID to send the message to
+        message: The message text to send
+        config: Application configuration
+        logger: Logger instance
+        reply_to_event_id: Optional event ID to reply to (creates a rich reply thread)
+        reply_to_sender: Optional sender of the original message (for m.mentions)
+    
+    Returns True on success, False on failure.
+    """
     # Use the event_id version and convert to bool
-    event_id = await send_as_agent_with_event_id(room_id, message, config, logger)
+    event_id = await send_as_agent_with_event_id(
+        room_id, message, config, logger, 
+        reply_to_event_id=reply_to_event_id,
+        reply_to_sender=reply_to_sender
+    )
     return event_id is not None
 
 async def file_callback(room, event, config: Config, logger: logging.Logger, file_handler: Optional[LettaFileHandler] = None):
@@ -1381,32 +1456,52 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
             # Use streaming mode if enabled (shows progress messages for tool calls)
             if config.letta_streaming_enabled:
                 logger.info("[STREAMING] Using streaming mode for Letta API call")
+                # Get the original event ID for rich reply support
+                original_event_id = getattr(event, 'event_id', None)
                 # Streaming mode handles sending messages directly (with progress updates)
                 letta_response = await send_to_letta_api_streaming(
-                    message_to_send, event.sender, config, logger, room.room_id
+                    message_to_send, event.sender, config, logger, room.room_id,
+                    reply_to_event_id=original_event_id,
+                    reply_to_sender=event.sender
                 )
                 # In streaming mode, the final message is already sent by the handler
                 # We don't need to send it again, just log the result
                 logger.info("Successfully processed streaming response", extra={
                     "response_length": len(letta_response),
                     "room_id": room.room_id,
-                    "streaming": True
+                    "streaming": True,
+                    "reply_to": original_event_id
                 })
             else:
                 # Non-streaming mode (original behavior)
                 letta_response = await send_to_letta_api(message_to_send, event.sender, config, logger, room.room_id)
                 
-                # Try to send as the agent user first
-                sent_as_agent = await send_as_agent(room.room_id, letta_response, config, logger)
+                # Try to send as the agent user first - use rich reply to the original message
+                original_event_id = getattr(event, 'event_id', None)
+                sent_as_agent = await send_as_agent(
+                    room.room_id, 
+                    letta_response, 
+                    config, 
+                    logger,
+                    reply_to_event_id=original_event_id,
+                    reply_to_sender=event.sender
+                )
                 
                 if not sent_as_agent:
                     # Fallback to sending as the main letta client if agent send fails
+                    # Include rich reply in fallback too
                     if client:
                         logger.warning("Failed to send as agent, falling back to main client")
+                        message_content: Dict[str, Any] = {"msgtype": "m.text", "body": letta_response}
+                        if original_event_id:
+                            message_content["m.relates_to"] = {
+                                "m.in_reply_to": {"event_id": original_event_id}
+                            }
+                            message_content["m.mentions"] = {"user_ids": [event.sender]}
                         await client.room_send(
                             room.room_id,
                             "m.room.message",
-                            {"msgtype": "m.text", "body": letta_response}
+                            message_content
                         )
                     else:
                         logger.error("No client available and agent send failed")
@@ -1414,7 +1509,8 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
                 logger.info("Successfully sent response to Matrix", extra={
                     "response_length": len(letta_response),
                     "room_id": room.room_id,
-                    "sent_as_agent": sent_as_agent
+                    "sent_as_agent": sent_as_agent,
+                    "reply_to": original_event_id
                 })
             
         except LettaApiError as e:
@@ -1424,14 +1520,22 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
                 "sender": event.sender
             })
             error_message = f"Sorry, I encountered an error while processing your message: {str(e)[:100]}"
+            original_event_id = getattr(event, 'event_id', None)
             try:
-                # Try to send error as agent first
-                sent_as_agent = await send_as_agent(room.room_id, error_message, config, logger)
+                # Try to send error as agent first - use rich reply
+                sent_as_agent = await send_as_agent(
+                    room.room_id, error_message, config, logger,
+                    reply_to_event_id=original_event_id,
+                    reply_to_sender=event.sender
+                )
                 if not sent_as_agent and client:
+                    error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_message}
+                    if original_event_id:
+                        error_content["m.relates_to"] = {"m.in_reply_to": {"event_id": original_event_id}}
                     await client.room_send(
                         room.room_id,
                         "m.room.message",
-                        {"msgtype": "m.text", "body": error_message}
+                        error_content
                     )
             except Exception as send_error:
                 logger.error("Failed to send error message", extra={"error": str(send_error)})
@@ -1443,14 +1547,22 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
             }, exc_info=True)
             
             # Try to send an error message if possible
+            original_event_id = getattr(event, 'event_id', None)
             try:
                 error_msg = f"Sorry, I encountered an unexpected error: {str(e)[:100]}"
-                sent_as_agent = await send_as_agent(room.room_id, error_msg, config, logger)
+                sent_as_agent = await send_as_agent(
+                    room.room_id, error_msg, config, logger,
+                    reply_to_event_id=original_event_id,
+                    reply_to_sender=event.sender
+                )
                 if not sent_as_agent and client:
+                    error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_msg}
+                    if original_event_id:
+                        error_content["m.relates_to"] = {"m.in_reply_to": {"event_id": original_event_id}}
                     await client.room_send(
                         room.room_id,
                         "m.room.message",
-                        {"msgtype": "m.text", "body": error_msg}
+                        error_content
                     )
             except Exception as send_error:
                 logger.error("Failed to send error message", extra={"error": str(send_error)})

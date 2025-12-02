@@ -316,20 +316,25 @@ class StreamingMessageHandler:
         delete_message: Callable[[str, str], Any],
         room_id: str,
         delete_progress: bool = False,
+        send_final_message: Optional[Callable[[str, str], Any]] = None,
     ):
         """
         Initialize the handler.
         
         Args:
-            send_message: Async function(room_id, content) -> event_id
+            send_message: Async function(room_id, content) -> event_id (for progress messages)
             delete_message: Async function(room_id, event_id) -> None
             room_id: Matrix room ID
             delete_progress: If True, delete progress messages when next event arrives
+            send_final_message: Optional separate async function for final responses 
+                               (e.g., to include rich reply context). If not provided,
+                               uses send_message for final messages too.
         """
         self.send_message = send_message
         self.delete_message = delete_message
         self.room_id = room_id
         self.delete_progress = delete_progress
+        self.send_final_message = send_final_message or send_message
         self._progress_event_id: Optional[str] = None
     
     async def handle_event(self, event: StreamEvent) -> Optional[str]:
@@ -365,8 +370,9 @@ class StreamingMessageHandler:
             return event_id
         
         elif event.is_final:
-            # Send final assistant response (not deleted)
-            return await self.send_message(self.room_id, event.content or "")
+            # Send final assistant response (not deleted) - use send_final_message
+            # which may include rich reply context
+            return await self.send_final_message(self.room_id, event.content or "")
         
         elif event.is_error:
             # Send error message

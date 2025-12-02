@@ -725,3 +725,153 @@ class TestFilesystemCommands:
         mock_update_state.assert_called_with(room.room_id, {"projectDir": "/opt/stacks/huly-personal-site"})
         mock_send.assert_awaited()
 
+
+@pytest.mark.unit
+class TestRichReplies:
+    """Tests for Matrix rich reply functionality"""
+    
+    @pytest.mark.asyncio
+    async def test_send_as_agent_includes_rich_reply(self, mock_config, mock_logger):
+        """Test that send_as_agent can include m.in_reply_to for rich replies"""
+        from src.matrix.client import send_as_agent_with_event_id
+        
+        room_id = "!testroom:matrix"
+        message = "This is my reply"
+        reply_to_event_id = "$original_event_abc123"
+        reply_to_sender = "@user:matrix"
+        
+        # Mock the file read and aiohttp session
+        mock_mappings = {
+            "agent-123": {
+                "room_id": room_id,
+                "agent_name": "Test Agent",
+                "matrix_user_id": "@test_agent:matrix",
+                "matrix_password": "secret123"
+            }
+        }
+        
+        with patch("os.path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data=json.dumps(mock_mappings))), \
+             patch("aiohttp.ClientSession") as mock_session_class:
+            
+            # Setup mock session responses
+            mock_session = MagicMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock()
+            mock_session_class.return_value = mock_session
+            
+            # Mock login response
+            mock_login_response = MagicMock()
+            mock_login_response.status = 200
+            mock_login_response.json = AsyncMock(return_value={"access_token": "token123"})
+            mock_login_ctx = MagicMock()
+            mock_login_ctx.__aenter__ = AsyncMock(return_value=mock_login_response)
+            mock_login_ctx.__aexit__ = AsyncMock()
+            
+            # Mock send message response
+            mock_send_response = MagicMock()
+            mock_send_response.status = 200
+            mock_send_response.json = AsyncMock(return_value={"event_id": "$new_event_xyz"})
+            mock_send_ctx = MagicMock()
+            mock_send_ctx.__aenter__ = AsyncMock(return_value=mock_send_response)
+            mock_send_ctx.__aexit__ = AsyncMock()
+            
+            # Track what was sent
+            sent_data = {}
+            
+            def capture_put(*args, **kwargs):
+                sent_data['json'] = kwargs.get('json', {})
+                return mock_send_ctx
+            
+            mock_session.post.return_value = mock_login_ctx
+            mock_session.put.side_effect = capture_put
+            
+            # Call the function with reply parameters
+            result = await send_as_agent_with_event_id(
+                room_id, message, mock_config, mock_logger,
+                reply_to_event_id=reply_to_event_id,
+                reply_to_sender=reply_to_sender
+            )
+            
+            # Verify the response
+            assert result == "$new_event_xyz"
+            
+            # Verify the message data includes rich reply structure
+            assert "m.relates_to" in sent_data['json']
+            assert "m.in_reply_to" in sent_data['json']['m.relates_to']
+            assert sent_data['json']['m.relates_to']['m.in_reply_to']['event_id'] == reply_to_event_id
+            
+            # Verify mentions are included
+            assert "m.mentions" in sent_data['json']
+            assert reply_to_sender in sent_data['json']['m.mentions']['user_ids']
+    
+    @pytest.mark.asyncio
+    async def test_send_as_agent_without_reply(self, mock_config, mock_logger):
+        """Test that send_as_agent works without reply parameters (original behavior)"""
+        from src.matrix.client import send_as_agent_with_event_id
+        
+        room_id = "!testroom:matrix"
+        message = "Just a regular message"
+        
+        # Mock the file read and aiohttp session
+        mock_mappings = {
+            "agent-123": {
+                "room_id": room_id,
+                "agent_name": "Test Agent",
+                "matrix_user_id": "@test_agent:matrix",
+                "matrix_password": "secret123"
+            }
+        }
+        
+        with patch("os.path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data=json.dumps(mock_mappings))), \
+             patch("aiohttp.ClientSession") as mock_session_class:
+            
+            # Setup mock session responses
+            mock_session = MagicMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock()
+            mock_session_class.return_value = mock_session
+            
+            # Mock login response
+            mock_login_response = MagicMock()
+            mock_login_response.status = 200
+            mock_login_response.json = AsyncMock(return_value={"access_token": "token123"})
+            mock_login_ctx = MagicMock()
+            mock_login_ctx.__aenter__ = AsyncMock(return_value=mock_login_response)
+            mock_login_ctx.__aexit__ = AsyncMock()
+            
+            # Mock send message response
+            mock_send_response = MagicMock()
+            mock_send_response.status = 200
+            mock_send_response.json = AsyncMock(return_value={"event_id": "$new_event_xyz"})
+            mock_send_ctx = MagicMock()
+            mock_send_ctx.__aenter__ = AsyncMock(return_value=mock_send_response)
+            mock_send_ctx.__aexit__ = AsyncMock()
+            
+            # Track what was sent
+            sent_data = {}
+            
+            def capture_put(*args, **kwargs):
+                sent_data['json'] = kwargs.get('json', {})
+                return mock_send_ctx
+            
+            mock_session.post.return_value = mock_login_ctx
+            mock_session.put.side_effect = capture_put
+            
+            # Call the function without reply parameters
+            result = await send_as_agent_with_event_id(
+                room_id, message, mock_config, mock_logger
+            )
+            
+            # Verify the response
+            assert result == "$new_event_xyz"
+            
+            # Verify no rich reply structure is included
+            assert "m.relates_to" not in sent_data['json']
+            assert "m.mentions" not in sent_data['json']
+            
+            # Verify basic message structure
+            assert sent_data['json']['msgtype'] == "m.text"
+            assert sent_data['json']['body'] == message
+

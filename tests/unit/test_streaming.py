@@ -588,3 +588,50 @@ class TestIntegration:
         
         # Verify: No messages deleted (delete_progress=False)
         assert len(deleted_messages) == 0
+    
+    @pytest.mark.asyncio
+    async def test_separate_final_message_handler(self):
+        """Test that send_final_message is used for final responses (e.g., for rich replies)"""
+        regular_messages = []
+        final_messages = []
+        event_counter = [0]
+        
+        async def mock_send(room_id, content):
+            event_counter[0] += 1
+            event_id = f"$event_{event_counter[0]}"
+            regular_messages.append({"room_id": room_id, "content": content, "event_id": event_id})
+            return event_id
+        
+        async def mock_send_final(room_id, content):
+            event_counter[0] += 1
+            event_id = f"$final_{event_counter[0]}"
+            final_messages.append({"room_id": room_id, "content": content, "event_id": event_id})
+            return event_id
+        
+        async def mock_delete(room_id, event_id):
+            pass
+        
+        handler = StreamingMessageHandler(
+            send_message=mock_send,
+            delete_message=mock_delete,
+            room_id="!test:matrix.example.com",
+            delete_progress=False,
+            send_final_message=mock_send_final  # Separate handler for final messages
+        )
+        
+        # Simulate streaming flow: progress then final
+        events = [
+            StreamEvent(type=StreamEventType.TOOL_CALL, metadata={"tool_name": "search"}),
+            StreamEvent(type=StreamEventType.ASSISTANT, content="Here is your answer."),
+        ]
+        
+        for event in events:
+            await handler.handle_event(event)
+        
+        # Verify: Progress went through regular send_message
+        assert len(regular_messages) == 1
+        assert "🔧 search..." in regular_messages[0]["content"]
+        
+        # Verify: Final message went through send_final_message (for rich reply support)
+        assert len(final_messages) == 1
+        assert "Here is your answer." in final_messages[0]["content"]
