@@ -19,63 +19,103 @@ const operations = [
 ] as const;
 
 const schema = z.object({
-  operation: z.enum(operations).describe('The operation to perform'),
+  operation: z.enum(operations).describe(
+    'The operation to perform. Common operations: ' +
+    'send (send message to user/room), ' +
+    'letta_chat (chat with Letta agent), ' +
+    'read (read room messages), ' +
+    'room_list (list joined rooms)'
+  ),
   
-  // Caller context - OpenCode should pass this automatically
-  caller_directory: z.string().optional().describe('Working directory of the calling agent (e.g. /opt/stacks/my-project). OpenCode passes this automatically.'),
-  caller_name: z.string().optional().describe('Display name override for the caller (e.g. "OpenCode - My Project")'),
+  // === CALLER CONTEXT (auto-populated by OpenCode) ===
+  caller_directory: z.string().optional().describe(
+    'Your working directory path. OpenCode auto-populates this. Example: /opt/stacks/my-project'
+  ),
+  caller_name: z.string().optional().describe(
+    'Display name override. Example: "OpenCode - MyProject"'
+  ),
   
-  // Identity parameters
-  identity_id: z.string().optional().describe('Identity ID for the operation'),
-  id: z.string().optional().describe('Unique ID (for identity_create)'),
-  localpart: z.string().optional().describe('Matrix username without @domain'),
-  display_name: z.string().optional().describe('Display name'),
-  avatar_url: z.string().optional().describe('Avatar URL (mxc://)'),
-  type: z.enum(['custom', 'letta', 'opencode']).optional().describe('Identity type'),
+  // === IDENTITY PARAMETERS ===
+  identity_id: z.string().optional().describe(
+    'Identity ID for operations requiring an identity. Use identity_list to find available IDs.'
+  ),
+  id: z.string().optional().describe('Unique ID when creating a new identity'),
+  localpart: z.string().optional().describe(
+    'Matrix username (without @domain). Example: "mybot" becomes @mybot:matrix.example.com'
+  ),
+  display_name: z.string().optional().describe('Human-readable display name. Example: "My Assistant Bot"'),
+  avatar_url: z.string().optional().describe('Avatar image URL in mxc:// format'),
+  type: z.enum(['custom', 'letta', 'opencode']).optional().describe('Identity type: custom, letta, or opencode'),
   
-  // Message parameters
-  message: z.string().optional().describe('Message text'),
-  to_mxid: z.string().optional().describe('Target user MXID (@user:domain)'),
-  msgtype: z.string().optional().describe('Message type (default: m.text)'),
-  event_id: z.string().optional().describe('Event ID for reactions/edits'),
-  reply_to_event_id: z.string().optional().describe('Event ID to reply to (creates threaded reply)'),
-  emoji: z.string().optional().describe('Reaction emoji'),
-  new_content: z.string().optional().describe('New content for edits'),
+  // === MESSAGE PARAMETERS ===
+  message: z.string().optional().describe('The message text to send'),
+  to_mxid: z.string().optional().describe(
+    'Target user Matrix ID. Format: @username:domain. Example: @meridian:matrix.oculair.ca'
+  ),
+  msgtype: z.string().optional().describe('Message type: m.text (default), m.notice, m.emote'),
+  event_id: z.string().optional().describe(
+    'Event ID for reactions/edits. Format: $eventId. Get from message read results.'
+  ),
+  reply_to_event_id: z.string().optional().describe(
+    'Event ID to reply to (creates threaded reply). Format: $eventId'
+  ),
+  emoji: z.string().optional().describe('Reaction emoji. Example: "👍" or "✅"'),
+  new_content: z.string().optional().describe('New message content when editing'),
   
-  // Room parameters
-  room_id: z.string().optional().describe('Room ID'),
-  room_id_or_alias: z.string().optional().describe('Room ID or alias'),
-  name: z.string().optional().describe('Room name'),
-  topic: z.string().optional().describe('Room topic'),
-  is_public: z.boolean().optional().describe('Whether room is public'),
-  invite: z.array(z.string()).optional().describe('MXIDs to invite'),
-  user_mxid: z.string().optional().describe('User MXID for invites'),
-  query: z.string().optional().describe('Search query'),
-  limit: z.number().optional().describe('Result limit'),
+  // === ROOM PARAMETERS ===
+  room_id: z.string().optional().describe(
+    'Room ID. Format: !roomId:domain. Example: !abc123:matrix.oculair.ca'
+  ),
+  room_id_or_alias: z.string().optional().describe(
+    'Room ID or alias. Alias format: #roomname:domain'
+  ),
+  name: z.string().optional().describe('Room name when creating a room'),
+  topic: z.string().optional().describe('Room topic/description'),
+  is_public: z.boolean().optional().describe('true for public room, false for private (default)'),
+  invite: z.array(z.string()).optional().describe('List of user MXIDs to invite when creating room'),
+  user_mxid: z.string().optional().describe('User MXID to invite. Format: @user:domain'),
+  query: z.string().optional().describe('Search query text for room_search'),
+  limit: z.number().optional().describe('Max results to return (default: 50 for read, 10 for search)'),
   
-  // Typing parameters
-  typing: z.boolean().optional().describe('Typing indicator state'),
-  timeout: z.number().optional().describe('Typing timeout in ms'),
+  // === TYPING INDICATOR ===
+  typing: z.boolean().optional().describe('true to show typing, false to stop'),
+  timeout: z.number().optional().describe('Typing indicator timeout in milliseconds (default: 30000)'),
   
-  // Subscription parameters
-  rooms: z.array(z.string()).optional().describe('Room IDs for subscription'),
-  event_types: z.array(z.string()).optional().describe('Event types to filter'),
-  subscription_id: z.string().optional().describe('Subscription ID'),
+  // === SUBSCRIPTION PARAMETERS ===
+  rooms: z.array(z.string()).optional().describe('List of room IDs to subscribe to'),
+  event_types: z.array(z.string()).optional().describe('Event types to filter. Example: ["m.room.message"]'),
+  subscription_id: z.string().optional().describe('Subscription ID for unsubscribe'),
   
-  // Identity derivation
-  directory: z.string().optional().describe('Directory path'),
-  session_id: z.string().optional().describe('Session ID'),
-  explicit: z.string().optional().describe('Explicit identity ID'),
+  // === OPENCODE/DIRECTORY PARAMETERS ===
+  directory: z.string().optional().describe(
+    'Working directory path for OpenCode operations. Example: /opt/stacks/my-project'
+  ),
+  session_id: z.string().optional().describe('Session ID for identity derivation'),
+  explicit: z.string().optional().describe('Explicit identity ID to use'),
   
-  // Letta parameters
-  agent_id: z.string().optional().describe('Letta agent ID')
+  // === LETTA AGENT PARAMETERS ===
+  agent_id: z.string().optional().describe(
+    'Letta agent ID (UUID). Use letta_list to find available agents.'
+  )
 });
 
 type Input = z.infer<typeof schema>;
 
 class MatrixMessaging extends MCPTool<typeof schema> {
   name = 'matrix_messaging';
-  description = 'Matrix messaging with 27 operations. Use operation param: send, read, react, edit, typing, subscribe, unsubscribe, room_join, room_leave, room_info, room_list, room_create, room_invite, room_search, identity_create, identity_get, identity_list, identity_derive, letta_send, letta_chat, letta_lookup, letta_list, letta_identity, opencode_connect, opencode_send, opencode_notify, opencode_status';
+  description = `Matrix messaging with 27 operations. Use operation param:
+
+MESSAGING: send (to user or room), read, react, edit, typing
+ROOMS: room_join, room_leave, room_info, room_list, room_create, room_invite, room_search
+IDENTITY: identity_create, identity_get, identity_list, identity_derive
+LETTA AGENTS: letta_chat (talk to agent), letta_send, letta_lookup, letta_list, letta_identity
+OPENCODE: opencode_connect, opencode_send, opencode_notify, opencode_status
+SUBSCRIPTIONS: subscribe, unsubscribe
+
+Quick examples:
+• Send message: {operation: "send", message: "Hello!", to_mxid: "@user:domain"}
+• Chat with Letta: {operation: "letta_chat", agent_id: "uuid", message: "Hi"}
+• List rooms: {operation: "room_list", identity_id: "my-id"}`;
   schema = schema;
 
   async execute(input: Input): Promise<string> {
