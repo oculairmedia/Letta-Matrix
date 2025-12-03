@@ -40,6 +40,13 @@ tuwunel-data/CURRENT
 tuwunel-data/LOCK
 tuwunel-data/IDENTITY
 tuwunel-data/archive/
+tuwunel-data/media/
+
+# OpenCode state
+.opencode/
+
+# npm install artifact
+=*
 
 # Matrix client data backups
 matrix_client_data/*.backup*
