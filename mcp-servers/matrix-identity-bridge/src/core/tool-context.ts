@@ -46,22 +46,24 @@ export function result(data: Record<string, unknown>): string {
 export function requireParam<T>(value: T | undefined, name: string, hint?: string): T {
   if (value === undefined || value === null) {
     const hints: Record<string, string> = {
-      'message': 'Provide the message text to send',
-      'to_mxid': 'Provide target user ID, e.g., "@username:matrix.oculair.ca"',
-      'room_id': 'Provide room ID, e.g., "!roomId:matrix.oculair.ca". Use room_list to find rooms.',
-      'identity_id': 'Provide identity ID. Use identity_list to see available identities.',
-      'agent_id': 'Provide Letta agent UUID. Use letta_list to see available agents.',
-      'event_id': 'Provide event ID (starts with $). Get from read operation results.',
-      'emoji': 'Provide reaction emoji, e.g., "👍" or "✅"',
-      'query': 'Provide search query text',
-      'name': 'Provide a name for the room',
-      'localpart': 'Provide Matrix username (without @domain), e.g., "mybot"',
-      'display_name': 'Provide human-readable display name',
-      'directory': 'Provide working directory path, e.g., "/opt/stacks/my-project"',
-      'subscription_id': 'Provide subscription ID from subscribe operation result',
-      'new_content': 'Provide the new message content for the edit',
-      'typing': 'Provide true to show typing indicator, false to stop',
-      'type': 'Provide identity type: "custom", "letta", or "opencode"'
+      'message': 'Provide the message text to send.',
+      'to_mxid': 'Provide target user Matrix ID. Format: @username:domain (e.g., "@meridian:matrix.oculair.ca"). This will auto-create a DM room if needed.',
+      'room_id': 'Provide room ID. Format: !roomId:domain (e.g., "!abc123:matrix.oculair.ca"). TIP: Use {operation: "room_list", identity_id: "your-id"} to find your rooms.',
+      'identity_id': 'Provide your identity ID. TIP: Use {operation: "identity_list"} first to see available identities and find your identity_id.',
+      'agent_id': 'Provide Letta agent UUID. TIP: Use {operation: "letta_list"} first to see all agents and their agent_id values.',
+      'event_id': 'Provide event ID (starts with $). TIP: Get event_id from the results of {operation: "read", identity_id: "...", room_id: "..."}.',
+      'emoji': 'Provide reaction emoji (e.g., "👍", "✅", "❤️").',
+      'query': 'Provide search query text.',
+      'name': 'Provide a name for the room.',
+      'localpart': 'Provide Matrix username (without @domain). Example: "mybot" becomes @mybot:matrix.oculair.ca',
+      'display_name': 'Provide human-readable display name (e.g., "My Assistant Bot").',
+      'directory': 'Provide working directory path (e.g., "/opt/stacks/my-project").',
+      'subscription_id': 'Provide subscription ID. You get this from the result of a previous {operation: "subscribe"} call.',
+      'new_content': 'Provide the new message content for the edit.',
+      'typing': 'Provide true to show typing indicator, false to stop.',
+      'type': 'Provide identity type: "custom", "letta", or "opencode".',
+      'room_id_or_alias': 'Provide room ID (!roomId:domain) or room alias (#roomname:domain).',
+      'user_mxid': 'Provide user Matrix ID to invite. Format: @username:domain'
     };
     const hintText = hint || hints[name] || '';
     throw new Error(`Missing required parameter: ${name}${hintText ? `. ${hintText}` : ''}`);
