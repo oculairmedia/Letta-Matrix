@@ -575,6 +575,13 @@ TIPS
         if (resolved.match_type !== 'exact_id') {
           console.log(`[MatrixMessaging] Resolved "${agentInput}" -> ${agent_name} (${agent_id}) via ${resolved.match_type} match (${Math.round(resolved.confidence * 100)}% confidence)`);
         }
+
+        // Auto-attach matrix_messaging tool to the receiving agent
+        // This ensures the agent can respond via Matrix
+        const toolAttachResult = await letta.ensureMatrixToolAttached(agent_id);
+        if (toolAttachResult.attached && !toolAttachResult.alreadyHad) {
+          console.log(`[MatrixMessaging] Auto-attached matrix_messaging tool to ${agent_name}`);
+        }
         
         // Get OpenCode identity for the caller
         const effectiveDir = callerDirectory;
@@ -641,6 +648,7 @@ TIPS
           sender: callerIdentity.mxid,
           message,
           resolved_via: resolved.match_type !== 'exact_id' ? resolved.match_type : undefined,
+          tool_attached: toolAttachResult.attached && !toolAttachResult.alreadyHad ? 'matrix_messaging' : undefined,
           note: `Message sent to ${agent_name}'s room. Agent will respond in Matrix.`
         });
       }

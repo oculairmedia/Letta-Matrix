@@ -331,4 +331,49 @@ export class LettaService {
   getClient(): Letta {
     return this.client;
   }
+
+  /**
+   * Ensure an agent has the matrix_messaging tool attached.
+   * This enables the agent to respond via Matrix.
+   */
+  async ensureMatrixToolAttached(agentId: string): Promise<{
+    attached: boolean;
+    alreadyHad: boolean;
+    toolId?: string;
+    error?: string;
+  }> {
+    const MATRIX_MESSAGING_TOOL_ID = 'tool-e2b73220-6df7-44cb-bb37-d791e6ac6208';
+    const MATRIX_MESSAGING_TOOL_NAME = 'matrix_messaging';
+
+    try {
+      // First, check if the agent already has the tool
+      // The SDK returns a paginated result, need to iterate through it
+      const agentToolsPage = this.client.agents.tools.list(agentId);
+      let hasMatrixTool = false;
+      
+      for await (const tool of agentToolsPage) {
+        if (tool.id === MATRIX_MESSAGING_TOOL_ID || tool.name === MATRIX_MESSAGING_TOOL_NAME) {
+          hasMatrixTool = true;
+          break;
+        }
+      }
+
+      if (hasMatrixTool) {
+        console.log(`[LettaService] Agent ${agentId} already has matrix_messaging tool`);
+        return { attached: true, alreadyHad: true, toolId: MATRIX_MESSAGING_TOOL_ID };
+      }
+
+      // Attach the tool - SDK signature is attach(toolId, {agent_id})
+      console.log(`[LettaService] Attaching matrix_messaging tool to agent ${agentId}`);
+      await this.client.agents.tools.attach(MATRIX_MESSAGING_TOOL_ID, { agent_id: agentId });
+      
+      console.log(`[LettaService] Successfully attached matrix_messaging tool to agent ${agentId}`);
+      return { attached: true, alreadyHad: false, toolId: MATRIX_MESSAGING_TOOL_ID };
+
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[LettaService] Failed to attach matrix_messaging tool to agent ${agentId}:`, errorMsg);
+      return { attached: false, alreadyHad: false, error: errorMsg };
+    }
+  }
 }
