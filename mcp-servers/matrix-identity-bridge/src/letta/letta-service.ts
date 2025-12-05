@@ -26,6 +26,9 @@ export class LettaService {
   private storage: Storage;
   private identityManager: IdentityManager;
   private agentCache: Map<string, LettaAgentInfo> = new Map();
+  private agentNameIndex: Map<string, string> = new Map(); // lowercase name -> agent_id
+  private lastIndexRefresh: number = 0;
+  private readonly INDEX_TTL = 60000; // Refresh name index every 60 seconds
 
   constructor(
     config: LettaConfig,
@@ -34,7 +37,8 @@ export class LettaService {
   ) {
     this.client = new Letta({
       baseURL: config.baseUrl,
-      apiKey: config.apiKey || null
+      apiKey: config.apiKey || null,
+      timeout: 3600000 // 1 hour timeout for long-running agent requests
     });
     this.storage = storage;
     this.identityManager = identityManager;
@@ -84,13 +88,146 @@ export class LettaService {
         };
         agents.push(info);
         this.agentCache.set(agent.id, info);
+        // Update name index
+        this.agentNameIndex.set(agent.name.toLowerCase(), agent.id);
       }
       
+      this.lastIndexRefresh = Date.now();
       return agents;
     } catch (error) {
       console.error('[LettaService] Failed to list agents:', error);
       return [];
     }
+  }
+
+  /**
+   * Resolve agent name to agent_id with fuzzy matching
+   * Supports exact match, case-insensitive match, and partial match
+   */
+  async resolveAgentName(nameOrId: string): Promise<{
+    agent_id: string;
+    agent_name: string;
+    match_type: 'exact_id' | 'exact_name' | 'case_insensitive' | 'partial' | 'fuzzy';
+    confidence: number;
+  } | null> {
+    // First check if it's already a valid UUID (agent_id)
+    const uuidRegex = /^agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(nameOrId)) {
+      const agent = await this.getAgent(nameOrId);
+      if (agent) {
+        return { agent_id: agent.id, agent_name: agent.name, match_type: 'exact_id', confidence: 1.0 };
+      }
+    }
+
+    // Refresh name index if stale
+    if (Date.now() - this.lastIndexRefresh > this.INDEX_TTL) {
+      await this.listAgents();
+    }
+
+    const searchLower = nameOrId.toLowerCase().trim();
+    const agents = Array.from(this.agentCache.values());
+
+    // 1. Exact name match (case-sensitive)
+    for (const agent of agents) {
+      if (agent.name === nameOrId) {
+        return { agent_id: agent.id, agent_name: agent.name, match_type: 'exact_name', confidence: 1.0 };
+      }
+    }
+
+    // 2. Case-insensitive exact match
+    for (const agent of agents) {
+      if (agent.name.toLowerCase() === searchLower) {
+        return { agent_id: agent.id, agent_name: agent.name, match_type: 'case_insensitive', confidence: 0.95 };
+      }
+    }
+
+    // 3. Partial match (name contains search or search contains name)
+    const partialMatches: Array<{ agent: LettaAgentInfo; score: number }> = [];
+    for (const agent of agents) {
+      const nameLower = agent.name.toLowerCase();
+      if (nameLower.includes(searchLower) || searchLower.includes(nameLower)) {
+        // Score based on how much of the name matches
+        const score = Math.min(searchLower.length, nameLower.length) / Math.max(searchLower.length, nameLower.length);
+        partialMatches.push({ agent, score });
+      }
+    }
+    if (partialMatches.length > 0) {
+      partialMatches.sort((a, b) => b.score - a.score);
+      const best = partialMatches[0];
+      if (best.score > 0.5) {
+        return { agent_id: best.agent.id, agent_name: best.agent.name, match_type: 'partial', confidence: best.score * 0.9 };
+      }
+    }
+
+    // 4. Fuzzy match using Levenshtein distance
+    const fuzzyMatches: Array<{ agent: LettaAgentInfo; distance: number }> = [];
+    for (const agent of agents) {
+      const distance = this.levenshteinDistance(searchLower, agent.name.toLowerCase());
+      const maxLen = Math.max(searchLower.length, agent.name.length);
+      const similarity = 1 - (distance / maxLen);
+      if (similarity > 0.6) { // At least 60% similar
+        fuzzyMatches.push({ agent, distance });
+      }
+    }
+    if (fuzzyMatches.length > 0) {
+      fuzzyMatches.sort((a, b) => a.distance - b.distance);
+      const best = fuzzyMatches[0];
+      const maxLen = Math.max(searchLower.length, best.agent.name.length);
+      const confidence = (1 - (best.distance / maxLen)) * 0.8;
+      return { agent_id: best.agent.id, agent_name: best.agent.name, match_type: 'fuzzy', confidence };
+    }
+
+    return null;
+  }
+
+  /**
+   * Get suggestions for similar agent names (for error messages)
+   */
+  async getSuggestions(searchTerm: string, maxSuggestions: number = 3): Promise<string[]> {
+    // Refresh name index if stale
+    if (Date.now() - this.lastIndexRefresh > this.INDEX_TTL) {
+      await this.listAgents();
+    }
+
+    const searchLower = searchTerm.toLowerCase();
+    const agents = Array.from(this.agentCache.values());
+    
+    const scored = agents.map(agent => {
+      const nameLower = agent.name.toLowerCase();
+      const distance = this.levenshteinDistance(searchLower, nameLower);
+      const maxLen = Math.max(searchLower.length, nameLower.length);
+      return { name: agent.name, id: agent.id, similarity: 1 - (distance / maxLen) };
+    });
+
+    scored.sort((a, b) => b.similarity - a.similarity);
+    return scored.slice(0, maxSuggestions).map(s => `${s.name} (${s.id})`);
+  }
+
+  /**
+   * Levenshtein distance for fuzzy matching
+   */
+  private levenshteinDistance(a: string, b: string): number {
+    const matrix: number[][] = [];
+    for (let i = 0; i <= b.length; i++) {
+      matrix[i] = [i];
+    }
+    for (let j = 0; j <= a.length; j++) {
+      matrix[0][j] = j;
+    }
+    for (let i = 1; i <= b.length; i++) {
+      for (let j = 1; j <= a.length; j++) {
+        if (b.charAt(i - 1) === a.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1,
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1
+          );
+        }
+      }
+    }
+    return matrix[b.length][a.length];
   }
 
   /**

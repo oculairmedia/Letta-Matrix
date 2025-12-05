@@ -15,6 +15,7 @@ const operations = [
   'room_join', 'room_leave', 'room_info', 'room_list', 'room_create', 'room_invite', 'room_search',
   'identity_create', 'identity_get', 'identity_list', 'identity_derive',
   'letta_send', 'letta_chat', 'letta_lookup', 'letta_list', 'letta_identity',
+  'talk_to_agent', // NEW: Simplified agent chat with name resolution
   'opencode_connect', 'opencode_send', 'opencode_notify', 'opencode_status'
 ] as const;
 
@@ -96,6 +97,12 @@ const schema = z.object({
   // === LETTA AGENT PARAMETERS ===
   agent_id: z.string().optional().describe(
     'Letta agent ID (UUID). Use letta_list to find available agents.'
+  ),
+  agent_name: z.string().optional().describe(
+    'Agent name (e.g., "Meridian", "BMO"). Supports fuzzy matching - will find closest match.'
+  ),
+  agent: z.string().optional().describe(
+    'Agent name OR ID - the simplest way to specify an agent. Examples: "Meridian", "BMO", or a full UUID.'
   )
 });
 
@@ -103,76 +110,74 @@ type Input = z.infer<typeof schema>;
 
 class MatrixMessaging extends MCPTool<typeof schema> {
   name = 'matrix_messaging';
-  description = `Matrix messaging tool with 27 operations organized by category.
+  description = `Matrix messaging tool - talk to AI agents and send messages.
 
 ═══════════════════════════════════════════════════════════════════════════════
-QUICK START - Most Common Operations
+★ EASIEST WAY TO TALK TO AN AGENT ★
 ═══════════════════════════════════════════════════════════════════════════════
 
-▶ CHAT WITH LETTA AGENT (most common):
+▶ USE talk_to_agent (RECOMMENDED - supports names!):
+  {operation: "talk_to_agent", agent: "Meridian", message: "Hello!"}
+  {operation: "talk_to_agent", agent: "BMO", message: "What's up?"}
+  
+  • Just use the agent's NAME - no need to look up UUIDs!
+  • Supports fuzzy matching: "meridian", "MERIDIAN", "Merid" all work
+  • Also accepts agent_id if you have it
+
+▶ COMMON AGENTS:
+  • Meridian - Companion agent (opus-4-5)
+  • BMO - Personal assistant (claude-sonnet-4)
+  • GraphitiExplorer - Knowledge graph agent
+
+═══════════════════════════════════════════════════════════════════════════════
+ALTERNATIVE METHODS
+═══════════════════════════════════════════════════════════════════════════════
+
+▶ letta_chat (if you have the agent_id):
   {operation: "letta_chat", agent_id: "agent-uuid", message: "Hello!"}
-  • Each agent has a dedicated room - this sends to that room
-  • Don't know the agent_id? Use letta_list first to find it
+  {operation: "letta_chat", agent_name: "Meridian", message: "Hello!"} ← also works!
 
-▶ LIST ALL AGENTS:
+▶ letta_list (to see all agents):
   {operation: "letta_list"}
-  • Returns all agents with their agent_id, name, and room info
-  • Use the agent_id from results in letta_chat
+  Returns all agents with their agent_id, name, and room info
 
-▶ SEND TO SPECIFIC ROOM (if you know the room_id):
+▶ send (to a specific room):
   {operation: "send", room_id: "!roomId:matrix.oculair.ca", message: "Hello!"}
 
 ═══════════════════════════════════════════════════════════════════════════════
-ALL OPERATIONS BY CATEGORY
+ALL OPERATIONS
 ═══════════════════════════════════════════════════════════════════════════════
 
-LETTA AGENTS (talk to AI agents) - PRIMARY:
-  • letta_chat     - Send message to agent's room. Just needs agent_id + message
-  • letta_list     - List all agents with their agent_id. Use this to find agents!
-  • letta_lookup   - Get detailed info about a specific agent
-  • letta_send     - Send DM as the agent (agent speaks to a user)
-  • letta_identity - Get/create Matrix identity for an agent
+LETTA AGENTS (PRIMARY):
+  • talk_to_agent ★ - Easiest! Just needs agent name + message
+  • letta_chat     - Send to agent's room (accepts agent_id OR agent_name)
+  • letta_list     - List all agents with their rooms
+  • letta_lookup   - Get agent details
 
-MESSAGING:
-  • send     - Send to a room_id, or to_mxid (creates DM room - rarely needed)
-  • read     - Read messages from room. Requires identity_id + room_id
-  • react    - Add emoji reaction. Requires identity_id + room_id + event_id + emoji
-  • edit     - Edit message. Requires identity_id + room_id + event_id + new_content
-  • typing   - Show typing indicator. Requires identity_id + room_id + typing (true/false)
-
-ROOMS:
-  • room_list   - List rooms you've joined. Requires identity_id
-  • room_info   - Get room details. Requires identity_id + room_id
-  • room_join   - Join a room. Requires identity_id + room_id_or_alias
-  • room_leave  - Leave a room. Requires identity_id + room_id
-  • room_create - Create new room. Requires identity_id + name
-  • room_invite - Invite user to room. Requires identity_id + room_id + user_mxid
-  • room_search - Search messages in room. Requires identity_id + room_id + query
-
-IDENTITY (who you are on Matrix):
-  • identity_list   - List all identities
-  • identity_get    - Get identity details. Requires identity_id
-  • identity_create - Create new identity. Requires id + localpart + display_name + type
-  • identity_derive - Derive identity_id from directory/agent_id/session_id
-
-OPENCODE (for OpenCode instances):
-  • opencode_connect - Register OpenCode session. Requires directory
-  • opencode_send    - Send message as OpenCode. Requires directory + to_mxid + message
-  • opencode_notify  - Notify OpenCode instance. Requires directory + message
-  • opencode_status  - Get OpenCode connection status
-
-SUBSCRIPTIONS:
-  • subscribe   - Subscribe to room events. Requires identity_id
-  • unsubscribe - Cancel subscription. Requires subscription_id
+OTHER OPERATIONS:
+  • Messaging: send, read, react, edit, typing
+  • Rooms: room_list, room_info, room_join, room_leave, room_create, room_invite
+  • Identity: identity_list, identity_get, identity_create
+  • OpenCode: opencode_connect, opencode_send, opencode_notify, opencode_status
 
 ═══════════════════════════════════════════════════════════════════════════════
-PARAMETER GUIDE
+HOW IT WORKS
 ═══════════════════════════════════════════════════════════════════════════════
 
-• agent_id: Letta agent UUID → use letta_list to find it (most important!)
-• room_id: Room ID → !abc123xyz:matrix.oculair.ca  
-• message: The text to send
-• event_id: Message ID → starts with $, get from read results`;
+Messages go to the AGENT'S ROOM (not DMs):
+  1. You send: {operation: "talk_to_agent", agent: "Meridian", message: "Hi"}
+  2. Message appears in Meridian's Matrix room
+  3. Matrix bridge forwards to Letta
+  4. Agent responds in the same room
+  5. Response visible in Matrix clients (Element, etc.)
+
+═══════════════════════════════════════════════════════════════════════════════
+TIPS
+═══════════════════════════════════════════════════════════════════════════════
+
+• Use agent NAMES: "Meridian" not "agent-597b5756-..."
+• Fuzzy matching: "meridian", "MERIDIAN", "Merid" all work
+• Responses are async - agent replies appear in Matrix`;
   schema = schema;
 
   /**
@@ -216,19 +221,24 @@ PARAMETER GUIDE
           if (input.caller_name && identity.displayName !== input.caller_name) {
             // TODO: Could update display name here if needed
           }
+        } else if (input.agent_id && ctx.lettaService) {
+          // Auto-derive identity from agent_id (like letta_send does)
+          const identityId = await ctx.lettaService.getOrCreateAgentIdentity(input.agent_id);
+          identity = ctx.storage.getIdentity(identityId);
+          if (!identity) {
+            throw new Error(`Failed to get identity for agent: ${input.agent_id}`);
+          }
+          console.log(`[MatrixMessaging] send: Auto-derived identity ${identityId} from agent_id ${input.agent_id}`);
         } else if (input.identity_id) {
           identity = requireIdentity(input.identity_id);
         } else {
           // No identity available - provide helpful error
-          // Note: If OPENCODE_PROJECT_DIR is set in opencode.json, callerDirectory would be set above
           throw new Error(
-            `No identity available. This usually means OPENCODE_PROJECT_DIR is not set.\n\n` +
-            `FOR OPENCODE USERS:\n` +
-            `  Add to your opencode.json MCP config:\n` +
-            `  "environment": { "OPENCODE_PROJECT_DIR": "/your/project/path" }\n\n` +
-            `OR provide identity explicitly:\n` +
-            `  {operation: "send", identity_id: "your-id", message: "Hi", to_mxid: "@user:domain"}\n\n` +
-            `TIP: Use {operation: "identity_list"} to see available identities.`
+            `No identity available for send operation.\n\n` +
+            `OPTIONS:\n` +
+            `• Use agent_id: {operation: "send", agent_id: "agent-uuid", room_id: "!room:domain", message: "Hi"}\n` +
+            `• Use identity_id: {operation: "send", identity_id: "your-id", room_id: "!room:domain", message: "Hi"}\n\n` +
+            `TIP: Use {operation: "letta_list"} to find agent IDs, or {operation: "identity_list"} for identities.`
           );
         }
         
@@ -520,27 +530,67 @@ PARAMETER GUIDE
         return result({ event_id: eventId, room_id: roomId, agent_id, identity_id: identityId, from: identity.mxid, to: to_mxid });
       }
 
+      case 'talk_to_agent':
       case 'letta_chat': {
-        // Simplified: Just send message to Matrix as OpenCode identity
-        // The existing Matrix bridge handles forwarding to Letta and responses
-        const agent_id = requireParam(input.agent_id, 'agent_id');
+        // Unified agent chat - supports agent name, agent_name, or agent_id
+        // Sends message to the agent's Matrix room
+        const letta = requireLetta();
         const message = requireParam(input.message, 'message');
         
-        // Get OpenCode identity for the caller (uses env var if not provided)
+        // Resolve agent - accept multiple input formats
+        const agentInput = input.agent || input.agent_name || input.agent_id;
+        if (!agentInput) {
+          // Get suggestions for helpful error
+          const suggestions = await letta.getSuggestions('', 5);
+          throw new Error(
+            `Missing agent - specify which agent to talk to.\n\n` +
+            `EASIEST WAY:\n` +
+            `  {operation: "talk_to_agent", agent: "Meridian", message: "Hello!"}\n\n` +
+            `AVAILABLE AGENTS:\n` +
+            suggestions.map(s => `  • ${s}`).join('\n') + '\n\n' +
+            `TIP: Use agent names like "Meridian" or "BMO" - no need for UUIDs!`
+          );
+        }
+
+        // Resolve agent name/id to actual agent_id
+        const resolved = await letta.resolveAgentName(agentInput);
+        if (!resolved) {
+          const suggestions = await letta.getSuggestions(agentInput, 3);
+          throw new Error(
+            `Agent not found: "${agentInput}"\n\n` +
+            (suggestions.length > 0 
+              ? `DID YOU MEAN:\n${suggestions.map(s => `  • ${s}`).join('\n')}\n\n`
+              : '') +
+            `TO SEE ALL AGENTS:\n` +
+            `  {operation: "letta_list"}\n\n` +
+            `EXAMPLE:\n` +
+            `  {operation: "talk_to_agent", agent: "Meridian", message: "Hello!"}`
+          );
+        }
+
+        const agent_id = resolved.agent_id;
+        const agent_name = resolved.agent_name;
+        
+        // Log resolution for debugging
+        if (resolved.match_type !== 'exact_id') {
+          console.log(`[MatrixMessaging] Resolved "${agentInput}" -> ${agent_name} (${agent_id}) via ${resolved.match_type} match (${Math.round(resolved.confidence * 100)}% confidence)`);
+        }
+        
+        // Get OpenCode identity for the caller
         const effectiveDir = callerDirectory;
         if (!effectiveDir) {
           throw new Error(
-            `No caller directory available for letta_chat.\n\n` +
+            `No caller directory available.\n\n` +
             `FOR OPENCODE USERS:\n` +
             `  Add to your opencode.json MCP config:\n` +
             `  "environment": { "OPENCODE_PROJECT_DIR": "/your/project/path" }\n\n` +
             `OR provide explicitly:\n` +
-            `  {operation: "letta_chat", agent_id: "${agent_id}", message: "Hi", caller_directory: "/your/project"}`
+            `  {operation: "talk_to_agent", agent: "${agent_name}", message: "Hi", caller_directory: "/your/project"}`
           );
         }
         const callerIdentity = await ctx.openCodeService.getOrCreateIdentity(effectiveDir);
         
-        // Look up the existing Letta agent chat room from agent_user_mappings.json
+        // Look up the agent's Matrix room from agent_user_mappings.json
         let roomId: string | null = null;
         try {
           const fs = await import('fs');
@@ -550,7 +600,7 @@ PARAMETER GUIDE
             const agentMapping = mappings[agent_id];
             if (agentMapping?.room_id) {
               roomId = agentMapping.room_id;
-              console.log(`[MatrixMessaging] letta_chat: Using agent room ${roomId} for ${agentMapping.agent_name || agent_id}`);
+              console.log(`[MatrixMessaging] Using room ${roomId} for ${agent_name}`);
             }
           }
         } catch (e) {
@@ -559,28 +609,24 @@ PARAMETER GUIDE
         
         if (!roomId) {
           throw new Error(
-            `No Matrix room found for agent ${agent_id}.\n\n` +
-            `This agent may not have a Matrix room configured yet.\n\n` +
-            `TO VERIFY THE AGENT EXISTS:\n` +
-            `  {operation: "letta_list"} - Lists all agents with their room info\n\n` +
-            `TO CREATE A ROOM FOR THIS AGENT:\n` +
-            `  {operation: "letta_identity", agent_id: "${agent_id}"} - Creates Matrix identity\n` +
-            `  Then the agent needs to be configured in agent_user_mappings.json\n\n` +
-            `ALTERNATIVE - Send DM to agent:\n` +
-            `  {operation: "letta_send", agent_id: "${agent_id}", to_mxid: "@your-user:domain", message: "Hi"}`
+            `No Matrix room configured for ${agent_name} (${agent_id}).\n\n` +
+            `The agent exists but doesn't have a room set up yet.\n\n` +
+            `TO CHECK AGENT STATUS:\n` +
+            `  {operation: "letta_lookup", agent: "${agent_name}"}\n\n` +
+            `This usually means the agent needs to be configured in agent_user_mappings.json.`
           );
         }
         
         const client = await ctx.clientPool.getClient(callerIdentity);
         
-        // Make sure caller has joined the room
+        // Join the room if not already joined
         try {
           await client.joinRoom(roomId);
         } catch (e) {
           // May already be joined, ignore
         }
         
-        // Send the message to Matrix - bridge will handle forwarding to Letta
+        // Send message to the agent's room
         const eventId = await client.sendMessage(roomId, {
           msgtype: 'm.text',
           body: message
@@ -588,33 +634,57 @@ PARAMETER GUIDE
         
         return result({ 
           success: true,
-          agent_id, 
+          agent: agent_name,
+          agent_id,
           room_id: roomId,
           event_id: eventId,
           sender: callerIdentity.mxid,
           message,
-          note: 'Message sent to Matrix. Agent will respond via Matrix bridge.'
+          resolved_via: resolved.match_type !== 'exact_id' ? resolved.match_type : undefined,
+          note: `Message sent to ${agent_name}'s room. Agent will respond in Matrix.`
         });
       }
 
       case 'letta_lookup': {
         const letta = requireLetta();
-        const agent_id = requireParam(input.agent_id, 'agent_id');
-        const agent = await letta.getAgent(agent_id);
-        if (!agent) {
+        
+        // Accept agent, agent_name, or agent_id
+        const agentInput = input.agent || input.agent_name || input.agent_id;
+        if (!agentInput) {
           throw new Error(
-            `Letta agent not found: ${agent_id}\n\n` +
-            `The agent_id might be incorrect or the agent was deleted.\n\n` +
-            `TO FIND VALID AGENT IDs:\n` +
-            `  {operation: "letta_list"} - Lists all available agents with their IDs`
+            `Missing agent - specify which agent to look up.\n\n` +
+            `EXAMPLE:\n` +
+            `  {operation: "letta_lookup", agent: "Meridian"}\n` +
+            `  {operation: "letta_lookup", agent_id: "agent-uuid"}`
           );
         }
-        const identityId = IdentityManager.generateLettaId(agent_id);
+
+        // Resolve agent name to ID
+        const resolved = await letta.resolveAgentName(agentInput);
+        if (!resolved) {
+          const suggestions = await letta.getSuggestions(agentInput, 3);
+          throw new Error(
+            `Agent not found: "${agentInput}"\n\n` +
+            (suggestions.length > 0 
+              ? `DID YOU MEAN:\n${suggestions.map(s => `  • ${s}`).join('\n')}\n\n`
+              : '') +
+            `TO SEE ALL AGENTS:\n` +
+            `  {operation: "letta_list"}`
+          );
+        }
+
+        const agent = await letta.getAgent(resolved.agent_id);
+        if (!agent) {
+          throw new Error(`Agent data not found for: ${resolved.agent_id}`);
+        }
+        
+        const identityId = IdentityManager.generateLettaId(resolved.agent_id);
         const identity = ctx.storage.getIdentity(identityId);
         return result({
           agent: { id: agent.id, name: agent.name, description: agent.description, model: agent.model },
           matrix_identity: identity ? { identity_id: identityId, mxid: identity.mxid, display_name: identity.displayName } : null,
-          has_matrix_identity: !!identity
+          has_matrix_identity: !!identity,
+          resolved_via: resolved.match_type !== 'exact_id' ? resolved.match_type : undefined
         });
       }
 
@@ -634,22 +704,48 @@ PARAMETER GUIDE
 
       case 'letta_identity': {
         const letta = requireLetta();
-        const agent_id = requireParam(input.agent_id, 'agent_id');
+        
+        // Accept agent, agent_name, or agent_id
+        const agentInput = input.agent || input.agent_name || input.agent_id;
+        if (!agentInput) {
+          throw new Error(
+            `Missing agent - specify which agent to get/create identity for.\n\n` +
+            `EXAMPLE:\n` +
+            `  {operation: "letta_identity", agent: "Meridian"}`
+          );
+        }
+
+        // Resolve agent name to ID
+        const resolved = await letta.resolveAgentName(agentInput);
+        if (!resolved) {
+          const suggestions = await letta.getSuggestions(agentInput, 3);
+          throw new Error(
+            `Agent not found: "${agentInput}"\n\n` +
+            (suggestions.length > 0 
+              ? `DID YOU MEAN:\n${suggestions.map(s => `  • ${s}`).join('\n')}\n\n`
+              : '') +
+            `TO SEE ALL AGENTS:\n` +
+            `  {operation: "letta_list"}`
+          );
+        }
+
+        const agent_id = resolved.agent_id;
         const identityId = await letta.getOrCreateAgentIdentity(agent_id);
         const identity = ctx.storage.getIdentity(identityId);
         if (!identity) {
           throw new Error(
-            `Failed to create identity for agent: ${agent_id}\n\n` +
+            `Failed to create identity for ${resolved.agent_name}.\n\n` +
             `Something went wrong creating the Matrix identity.\n\n` +
             `TRY:\n` +
-            `1. Verify the agent exists: {operation: "letta_lookup", agent_id: "${agent_id}"}\n` +
+            `1. Verify the agent exists: {operation: "letta_lookup", agent: "${resolved.agent_name}"}\n` +
             `2. Check Letta service is running and accessible`
           );
         }
         const agent = await letta.getAgent(agent_id);
         return result({
           agent_id, agent_name: agent?.name,
-          identity: { id: identity.id, mxid: identity.mxid, display_name: identity.displayName, type: identity.type, created_at: identity.createdAt }
+          identity: { id: identity.id, mxid: identity.mxid, display_name: identity.displayName, type: identity.type, created_at: identity.createdAt },
+          resolved_via: resolved.match_type !== 'exact_id' ? resolved.match_type : undefined
         });
       }
 
