@@ -756,6 +756,13 @@ TIPS
           body: message
         });
         
+        // Start tracking this conversation for cross-run handling
+        // Import dynamically to avoid circular dependencies
+        const { getConversationTracker } = await import('../core/conversation-tracker.js');
+        const tracker = getConversationTracker();
+        const conv = tracker.startConversation(eventId, roomId, agent_id, message);
+        console.log(`[MatrixMessaging] Started tracking conversation ${eventId} for agent ${agent_id}`);
+        
         return result({ 
           success: true,
           agent: agent_name,
@@ -766,7 +773,11 @@ TIPS
           message,
           resolved_via: resolved.match_type !== 'exact_id' ? resolved.match_type : undefined,
           tool_attached: toolAttachResult.attached && !toolAttachResult.alreadyHad ? 'matrix_messaging' : undefined,
-          note: `Message sent to ${agent_name}'s room. Agent will respond in Matrix.`
+          tracking: {
+            conversation_id: eventId,
+            status: conv.status
+          },
+          note: `Message sent to ${agent_name}'s room. Agent will respond in Matrix. Conversation tracked for cross-run responses.`
         });
         } catch (talkError: unknown) {
           const errMsg = talkError instanceof Error ? talkError.message : String(talkError);

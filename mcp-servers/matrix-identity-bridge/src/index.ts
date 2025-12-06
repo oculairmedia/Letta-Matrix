@@ -15,6 +15,9 @@ import { SubscriptionManager } from './core/subscription-manager.js';
 import { LettaService } from './letta/letta-service.js';
 import { OpenCodeService } from './opencode/opencode-service.js';
 import { setToolContext } from './core/tool-context.js';
+import { getConversationTracker } from './core/conversation-tracker.js';
+import { initializeResponseMonitor } from './core/response-monitor.js';
+import { createWebhookServer } from './core/webhook-server.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -27,6 +30,7 @@ const config = {
   adminToken: process.env.MATRIX_ADMIN_TOKEN || '',
   dataDir: process.env.DATA_DIR || './data',
   port: parseInt(process.env.PORT || '3100', 10),
+  webhookPort: parseInt(process.env.WEBHOOK_PORT || '3101', 10),
   lettaApiUrl: process.env.LETTA_API_URL,
   lettaApiKey: process.env.LETTA_API_KEY
 };
@@ -71,6 +75,35 @@ async function main() {
 
   // Initialize OpenCode service
   const openCodeService = new OpenCodeService(storage, identityManager, {});
+
+  // Initialize conversation tracker for cross-run tracking
+  const conversationTracker = getConversationTracker({
+    maxAgeSeconds: parseInt(process.env.CONVERSATION_TIMEOUT_SECONDS || '300', 10),
+    cleanupIntervalSeconds: 60
+  });
+  console.log('[MatrixMCP] Conversation tracker initialized');
+
+  // Initialize response monitor if Letta is configured
+  if (lettaService) {
+    const responseMonitor = initializeResponseMonitor(
+      lettaService.getClient(),
+      clientPool,
+      storage,
+      conversationTracker,
+      {
+        maxWaitSeconds: parseInt(process.env.MAX_RESPONSE_WAIT || '60', 10),
+        pollIntervalSeconds: parseInt(process.env.RESPONSE_POLL_INTERVAL || '2', 10)
+      }
+    );
+    console.log('[MatrixMCP] Response monitor initialized');
+  }
+
+  // Start webhook server for cross-run tracking
+  const webhookServer = createWebhookServer({
+    port: config.webhookPort,
+    host: '0.0.0.0'
+  });
+  await webhookServer.start();
 
   // Set global context for tools BEFORE server starts
   setToolContext({
@@ -123,6 +156,8 @@ async function main() {
   // Graceful shutdown
   process.on('SIGINT', async () => {
     console.log('[MatrixMCP] Shutting down...');
+    conversationTracker.stop();
+    await webhookServer.stop();
     await clientPool.stopAll();
     await server.stop();
     process.exit(0);
@@ -130,6 +165,8 @@ async function main() {
 
   process.on('SIGTERM', async () => {
     console.log('[MatrixMCP] Shutting down...');
+    conversationTracker.stop();
+    await webhookServer.stop();
     await clientPool.stopAll();
     await server.stop();
     process.exit(0);

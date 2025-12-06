@@ -10,6 +10,9 @@ services:
       # Matrix Configuration
       MATRIX_HOMESERVER_URL: ${MATRIX_HOMESERVER_URL:-https://matrix.oculair.ca}
       MATRIX_ADMIN_TOKEN: ${MATRIX_ADMIN_TOKEN}
+      MATRIX_SERVER_NAME: ${MATRIX_SERVER_NAME:-matrix.oculair.ca}
+      MATRIX_ADMIN_USERNAME: ${MATRIX_ADMIN_USERNAME:-@admin:matrix.oculair.ca}
+      MATRIX_ADMIN_PASSWORD: ${MATRIX_ADMIN_PASSWORD:-}
       
       # MCP Server Configuration  
       PORT: ${MCP_SERVER_PORT:-3100}
@@ -20,12 +23,19 @@ services:
       # Logging
       LOG_LEVEL: ${LOG_LEVEL:-info}
       
-      # Optional: Letta Integration
+      # Letta Integration
       LETTA_API_URL: ${LETTA_API_URL:-}
       LETTA_API_TOKEN: ${LETTA_API_TOKEN:-}
+      
+      # Cross-Run Tracking Configuration
+      WEBHOOK_PORT: ${WEBHOOK_PORT:-3101}
+      CONVERSATION_TIMEOUT_SECONDS: ${CONVERSATION_TIMEOUT_SECONDS:-300}
+      MAX_RESPONSE_WAIT: ${MAX_RESPONSE_WAIT:-60}
+      RESPONSE_POLL_INTERVAL: ${RESPONSE_POLL_INTERVAL:-2}
     
     ports:
       - "${MCP_SERVER_PORT:-3100}:3100"
+      - "${WEBHOOK_PORT:-3101}:3101"
     
     volumes:
       # Persistent data storage
