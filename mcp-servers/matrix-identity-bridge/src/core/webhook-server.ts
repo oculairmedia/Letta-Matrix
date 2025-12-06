@@ -88,6 +88,12 @@ export class WebhookServer {
         return;
       }
 
+      // Start conversation endpoint (called by letta-matrix-client)
+      if (url.pathname === '/conversations/start' && req.method === 'POST') {
+        await this.handleStartConversation(req, res);
+        return;
+      }
+
       // 404 for unknown paths
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not Found', path: url.pathname }));
@@ -178,6 +184,49 @@ export class WebhookServer {
         reason: result.reason
       }));
     }
+  }
+
+  /**
+   * Handle request to start tracking a conversation (called by letta-matrix-client)
+   */
+  private async handleStartConversation(
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ): Promise<void> {
+    const body = await this.readRequestBody(req);
+    const payload = JSON.parse(body) as {
+      matrix_event_id: string;
+      matrix_room_id: string;
+      agent_id: string;
+      original_query?: string;
+    };
+
+    console.log('[WebhookServer] Starting conversation tracking:', JSON.stringify(payload, null, 2));
+
+    if (!payload.matrix_event_id || !payload.matrix_room_id || !payload.agent_id) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'error',
+        message: 'Missing required fields: matrix_event_id, matrix_room_id, agent_id'
+      }));
+      return;
+    }
+
+    const tracker = getConversationTracker();
+    const conv = tracker.startConversation(
+      payload.matrix_event_id,
+      payload.matrix_room_id,
+      payload.agent_id,
+      payload.original_query
+    );
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      conversation_id: conv.matrix_event_id,
+      agent_id: conv.agent_id,
+      tracking: true
+    }));
   }
 
   private readRequestBody(req: http.IncomingMessage): Promise<string> {

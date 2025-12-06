@@ -21,6 +21,51 @@ from src.matrix.file_handler import LettaFileHandler, FileUploadError
 from src.core.agent_user_manager import run_agent_sync
 from src.matrix.event_dedupe import is_duplicate_event
 
+# Cross-run tracking webhook URL
+CONVERSATION_TRACKER_URL = os.getenv("CONVERSATION_TRACKER_URL", "http://127.0.0.1:3101")
+
+async def register_conversation_for_tracking(
+    matrix_event_id: str,
+    matrix_room_id: str,
+    agent_id: str,
+    original_query: str,
+    logger: logging.Logger
+) -> bool:
+    """
+    Register a conversation with the webhook server for cross-run tracking.
+    This enables the system to link responses from subsequent Letta runs
+    back to the original Matrix message.
+    """
+    if not CONVERSATION_TRACKER_URL:
+        return False
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "operation": "start_conversation",
+                "matrix_event_id": matrix_event_id,
+                "matrix_room_id": matrix_room_id,
+                "agent_id": agent_id,
+                "original_query": original_query[:500] if original_query else ""
+            }
+            
+            async with session.post(
+                f"{CONVERSATION_TRACKER_URL}/conversations/start",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    logger.info(f"[CROSS-RUN] Registered conversation {matrix_event_id} for tracking")
+                    return True
+                else:
+                    logger.warning(f"[CROSS-RUN] Failed to register conversation: {resp.status}")
+                    return False
+    except Exception as e:
+        logger.warning(f"[CROSS-RUN] Error registering conversation: {e}")
+        return False
+
+
 # Custom exception classes
 class LettaApiError(Exception):
     """Raised when Letta API calls fail"""
@@ -1452,12 +1497,23 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
                 logger.info(f"[OPENCODE] Detected message from OpenCode identity: {opencode_mxid}")
                 logger.info(f"[OPENCODE] Injected @mention instruction for response routing")
 
+            # Register this conversation for cross-run tracking
+            # This allows the webhook server to link responses from subsequent runs
+            # back to this original Matrix message
+            original_event_id = getattr(event, 'event_id', None)
+            if original_event_id and room_agent_id:
+                await register_conversation_for_tracking(
+                    matrix_event_id=original_event_id,
+                    matrix_room_id=room.room_id,
+                    agent_id=room_agent_id,
+                    original_query=message_to_send,
+                    logger=logger
+                )
+
             # Send the message to Letta with room context
             # Use streaming mode if enabled (shows progress messages for tool calls)
             if config.letta_streaming_enabled:
                 logger.info("[STREAMING] Using streaming mode for Letta API call")
-                # Get the original event ID for rich reply support
-                original_event_id = getattr(event, 'event_id', None)
                 # Streaming mode handles sending messages directly (with progress updates)
                 letta_response = await send_to_letta_api_streaming(
                     message_to_send, event.sender, config, logger, room.room_id,
