@@ -182,18 +182,27 @@ TIPS
 
   /**
    * Get the effective caller directory - from input or environment variable.
-   * This makes the tool resilient by using OPENCODE_PROJECT_DIR as default.
+   * This makes the tool resilient by checking multiple sources in order:
+   * 1. Explicit input (caller_directory parameter)
+   * 2. OPENCODE_PROJECT_DIR env var
+   * 3. PWD env var (always available, set to working directory)
    */
   private getEffectiveCallerDirectory(input: Input): string | undefined {
     // Explicit input takes priority
     if (input.caller_directory) {
       return input.caller_directory;
     }
-    // Fall back to environment variable (set in opencode.json per-project)
+    // Fall back to OPENCODE_PROJECT_DIR environment variable
     const envDir = process.env.OPENCODE_PROJECT_DIR;
     if (envDir) {
       console.log(`[MatrixMessaging] Using OPENCODE_PROJECT_DIR: ${envDir}`);
       return envDir;
+    }
+    // Fall back to PWD - this is always set to the working directory
+    const pwd = process.env.PWD;
+    if (pwd) {
+      console.log(`[MatrixMessaging] Using PWD: ${pwd}`);
+      return pwd;
     }
     return undefined;
   }
@@ -534,6 +543,15 @@ TIPS
       case 'letta_chat': {
         // Unified agent chat - supports agent name, agent_name, or agent_id
         // Sends message to the agent's Matrix room
+        console.log(`[MatrixMessaging] talk_to_agent called with:`, JSON.stringify({
+          agent: input.agent,
+          agent_name: input.agent_name, 
+          agent_id: input.agent_id,
+          message: input.message?.substring(0, 50),
+          caller_directory: callerDirectory
+        }));
+        
+        try {
         const letta = requireLetta();
         const message = requireParam(input.message, 'message');
         
@@ -584,18 +602,24 @@ TIPS
         }
         
         // Get OpenCode identity for the caller
-        const effectiveDir = callerDirectory;
-        if (!effectiveDir) {
-          throw new Error(
-            `No caller directory available.\n\n` +
-            `FOR OPENCODE USERS:\n` +
-            `  Add to your opencode.json MCP config:\n` +
-            `  "environment": { "OPENCODE_PROJECT_DIR": "/your/project/path" }\n\n` +
-            `OR provide explicitly:\n` +
-            `  {operation: "talk_to_agent", agent: "${agent_name}", message: "Hi", caller_directory: "/your/project"}`
-          );
+        // callerDirectory is derived from: input > OPENCODE_PROJECT_DIR > PWD
+        // PWD is always available, so this should always work!
+        let callerIdentity;
+        console.log(`[MatrixMessaging] Getting identity for callerDirectory: ${callerDirectory || 'NONE'}`);
+        try {
+          if (callerDirectory) {
+            callerIdentity = await ctx.openCodeService.getOrCreateIdentity(callerDirectory);
+            console.log(`[MatrixMessaging] Got identity: ${callerIdentity.mxid}`);
+          } else {
+            // Fallback to default identity (shouldn't happen since PWD is always set)
+            callerIdentity = await ctx.openCodeService.getOrCreateDefaultIdentity();
+            console.log(`[MatrixMessaging] Using default OpenCode identity: ${callerIdentity.mxid}`);
+          }
+        } catch (identityError: unknown) {
+          const errMsg = identityError instanceof Error ? identityError.message : String(identityError);
+          console.error(`[MatrixMessaging] Failed to get/create identity: ${errMsg}`);
+          throw new Error(`Failed to create sender identity: ${errMsg}`);
         }
-        const callerIdentity = await ctx.openCodeService.getOrCreateIdentity(effectiveDir);
         
         // Look up the agent's Matrix room from agent_user_mappings.json
         let roomId: string | null = null;
@@ -626,11 +650,104 @@ TIPS
         
         const client = await ctx.clientPool.getClient(callerIdentity);
         
-        // Join the room if not already joined
+        // Ensure the caller can join the room
+        // First, try to get the agent's identity to invite the caller
+        let joined = false;
         try {
+          // Try joining directly first (works if room is public or already invited)
           await client.joinRoom(roomId);
-        } catch (e) {
-          // May already be joined, ignore
+          joined = true;
+          console.log(`[MatrixMessaging] ${callerIdentity.mxid} joined room ${roomId}`);
+        } catch (joinError: unknown) {
+          const errorMessage = joinError instanceof Error ? joinError.message : String(joinError);
+          console.log(`[MatrixMessaging] Direct join failed: ${errorMessage}`);
+          
+          // If join failed, try to invite the caller using admin credentials
+          try {
+            // Get admin credentials from environment
+            const adminUsername = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
+            const adminPassword = process.env.MATRIX_ADMIN_PASSWORD;
+            const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://127.0.0.1:6167';
+            
+            if (!adminPassword) {
+              console.log(`[MatrixMessaging] No MATRIX_ADMIN_PASSWORD set, cannot invite`);
+              throw new Error('Admin credentials not configured');
+            }
+            
+            console.log(`[MatrixMessaging] Logging in as admin to invite ${callerIdentity.mxid}`);
+            
+            // Login as admin to get fresh token
+            const loginResponse = await fetch(`${homeserverUrl}/_matrix/client/v3/login`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: 'm.login.password',
+                identifier: { type: 'm.id.user', user: adminUsername.replace(/@([^:]+):.*/, '$1') },
+                password: adminPassword
+              })
+            });
+            
+            if (!loginResponse.ok) {
+              const err = await loginResponse.text();
+              throw new Error(`Admin login failed: ${err}`);
+            }
+            
+            const loginData = await loginResponse.json() as { access_token: string };
+            const adminToken = loginData.access_token;
+            console.log(`[MatrixMessaging] Admin login successful, sending invite...`);
+            
+            // Invite the user using admin token
+            const inviteResponse = await fetch(
+              `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`,
+              {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${adminToken}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ user_id: callerIdentity.mxid })
+              }
+            );
+            
+            if (!inviteResponse.ok) {
+              const err = await inviteResponse.text();
+              throw new Error(`Invite failed: ${err}`);
+            }
+            
+            console.log(`[MatrixMessaging] Invited ${callerIdentity.mxid} to room via admin`);
+            
+            // Now try to join again
+            console.log(`[MatrixMessaging] Attempting to join after invite...`);
+            await client.joinRoom(roomId);
+            joined = true;
+            console.log(`[MatrixMessaging] ${callerIdentity.mxid} joined room after admin invite`);
+            
+          } catch (inviteError: unknown) {
+            const inviteErrorMessage = inviteError instanceof Error ? inviteError.message : String(inviteError);
+            console.error(`[MatrixMessaging] Failed to invite/join via admin: ${inviteErrorMessage}`);
+            if (inviteError instanceof Error && inviteError.stack) {
+              console.error(`[MatrixMessaging] Stack: ${inviteError.stack}`);
+            }
+          }
+        }
+        
+        if (!joined) {
+          // Check why invite failed
+          const agentIdentityId = `letta_${agent_id}`;
+          const agentIdentity = ctx.storage.getIdentity(agentIdentityId);
+          const debugInfo = agentIdentity 
+            ? `Agent identity ${agentIdentity.mxid} found but invite/join failed`
+            : `Agent identity ${agentIdentityId} NOT found in storage`;
+          
+          throw new Error(
+            `Could not join room ${roomId} for ${agent_name}.\n\n` +
+            `The caller identity ${callerIdentity.mxid} needs to be invited to the room.\n\n` +
+            `Debug: ${debugInfo}\n\n` +
+            `This may happen if:\n` +
+            `• The room is private and requires an invite\n` +
+            `• The agent's Matrix identity doesn't have permission to invite\n\n` +
+            `Try having an admin invite ${callerIdentity.mxid} to the room.`
+          );
         }
         
         // Send message to the agent's room
@@ -651,6 +768,18 @@ TIPS
           tool_attached: toolAttachResult.attached && !toolAttachResult.alreadyHad ? 'matrix_messaging' : undefined,
           note: `Message sent to ${agent_name}'s room. Agent will respond in Matrix.`
         });
+        } catch (talkError: unknown) {
+          const errMsg = talkError instanceof Error ? talkError.message : String(talkError);
+          const errStack = talkError instanceof Error ? talkError.stack : '';
+          console.error(`[MatrixMessaging] talk_to_agent error: ${errMsg}`);
+          console.error(`[MatrixMessaging] Stack: ${errStack}`);
+          return result({
+            success: false,
+            error: errMsg,
+            caller_directory: callerDirectory,
+            debug: 'Check MCP server logs for more details'
+          });
+        }
       }
 
       case 'letta_lookup': {

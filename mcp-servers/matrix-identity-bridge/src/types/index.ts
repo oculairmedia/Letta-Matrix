@@ -13,6 +13,8 @@ export interface MatrixIdentity {
   avatarUrl?: string;
   /** Access token for this user */
   accessToken: string;
+  /** Password (stored for recovery if access token expires) */
+  password?: string;
   /** Identity type */
   type: 'letta' | 'opencode' | 'custom';
   /** Creation timestamp */

@@ -165,6 +165,36 @@ export class OpenCodeService {
   }
 
   /**
+   * Get or create a default OpenCode identity
+   * Used when no specific directory is provided - enables "just works" messaging
+   * This is the fallback identity for any OpenCode instance
+   */
+  async getOrCreateDefaultIdentity(): Promise<MatrixIdentity> {
+    const defaultId = 'opencode_default';
+    const defaultLocalpart = 'opencode';
+    const defaultDisplayName = 'OpenCode';
+    
+    // Check if default identity already exists
+    const existing = this.storage.getIdentity(defaultId);
+    if (existing) {
+      console.log('[OpenCodeService] Using existing default identity:', existing.mxid);
+      return existing;
+    }
+
+    // Create default identity
+    console.log('[OpenCodeService] Creating default OpenCode identity...');
+    const identity = await this.identityManager.getOrCreateIdentity({
+      id: defaultId,
+      localpart: defaultLocalpart,
+      displayName: defaultDisplayName,
+      type: 'opencode'
+    });
+    
+    console.log('[OpenCodeService] Created default identity:', identity.mxid);
+    return identity;
+  }
+
+  /**
    * Check if a directory has a Matrix identity
    */
   hasIdentity(directory: string): boolean {

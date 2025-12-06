@@ -62,20 +62,35 @@ const MATRIX_DOMAIN = process.env.MATRIX_DOMAIN || 'matrix.oculair.ca';
 
 /**
  * Derive Matrix identity MXID from directory path
- * e.g., /opt/stacks/matrix-synapse-deployment -> @oc_matrix_synapse_deployment:matrix.oculair.ca
+ * Supports both old format (@oc_xxx) and new v2 format (@oc_xxx_v2)
+ * Returns both for registration mapping
  */
 function deriveMatrixIdentity(directory: string): string {
   const dirName = directory.split('/').filter(p => p).pop() || 'default';
   const localpart = `oc_${dirName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-  return `@${localpart}:${MATRIX_DOMAIN}`;
+  // Return v2 format as primary
+  return `@${localpart}_v2:${MATRIX_DOMAIN}`;
+}
+
+/**
+ * Derive both old and new Matrix identity formats
+ */
+function deriveMatrixIdentities(directory: string): string[] {
+  const dirName = directory.split('/').filter(p => p).pop() || 'default';
+  const localpart = `oc_${dirName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+  return [
+    `@${localpart}:${MATRIX_DOMAIN}`,      // old format
+    `@${localpart}_v2:${MATRIX_DOMAIN}`,   // new v2 format
+  ];
 }
 
 /**
  * Extract @oc_* mentions from message body
- * Returns array of MXIDs that match OpenCode identity pattern
+ * Returns array of MXIDs that match OpenCode identity pattern (including v2 suffix)
  */
 function extractOpenCodeMentions(body: string): string[] {
-  const mentionRegex = /@oc_[a-z0-9_]+:[a-z0-9._-]+/gi;
+  // Match both old @oc_xxx and new @oc_xxx_v2 patterns
+  const mentionRegex = /@oc_[a-z0-9_]+(_v2)?:[a-z0-9._-]+/gi;
   const matches = body.match(mentionRegex) || [];
   return [...new Set(matches)];  // Deduplicate
 }
@@ -356,7 +371,7 @@ async function initMatrix(): Promise<void> {
   matrixClient = sdk.createClient({
     baseUrl: config.matrix.homeserverUrl,
     accessToken: config.matrix.accessToken,
-    userId: '@oc_matrix_synapse_deployment:matrix.oculair.ca', // The OpenCode identity
+    userId: '@oc_matrix_synapse_deployment_v2:matrix.oculair.ca', // The OpenCode identity (v2)
   });
 
   // Set up event handlers
@@ -464,13 +479,15 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
 
         registrations.set(id, registration);
         
-        // Map the derived Matrix identity to this registration
-        const matrixIdentity = deriveMatrixIdentity(directory);
-        identityToRegistration.set(matrixIdentity, registration);
-        console.log(`[Bridge] Registered: ${id} -> ${matrixIdentity}`);
+        // Map both old and new Matrix identity formats to this registration
+        const matrixIdentities = deriveMatrixIdentities(directory);
+        for (const identity of matrixIdentities) {
+          identityToRegistration.set(identity, registration);
+        }
+        console.log(`[Bridge] Registered: ${id} -> ${matrixIdentities.join(', ')}`);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, id, matrixIdentity, registration }));
+        res.end(JSON.stringify({ success: true, id, matrixIdentities, registration }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid JSON' }));
@@ -489,11 +506,13 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         const registration = registrations.get(id);
         const deleted = registrations.delete(id);
         
-        // Also remove from identity map
+        // Also remove from identity map (both old and new formats)
         if (registration) {
-          const matrixIdentity = deriveMatrixIdentity(registration.directory);
-          identityToRegistration.delete(matrixIdentity);
-          console.log(`[Bridge] Unregistered: ${id} (${matrixIdentity})`);
+          const matrixIdentities = deriveMatrixIdentities(registration.directory);
+          for (const identity of matrixIdentities) {
+            identityToRegistration.delete(identity);
+          }
+          console.log(`[Bridge] Unregistered: ${id} (${matrixIdentities.join(', ')})`);
         }
         
         res.writeHead(200, { 'Content-Type': 'application/json' });

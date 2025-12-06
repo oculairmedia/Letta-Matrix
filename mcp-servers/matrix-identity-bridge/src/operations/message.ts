@@ -2,6 +2,8 @@
  * Message operation handlers
  */
 
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { IdentityManager } from '../core/identity-manager.js';
 import {
   OperationContext,
   MatrixMessagingArgs,
@@ -11,12 +13,56 @@ import {
   requireIdentity
 } from './types.js';
 
+/**
+ * Helper to resolve identity - supports both direct identity_id and agent_id auto-derivation
+ */
+async function resolveIdentity(args: MatrixMessagingArgs, ctx: OperationContext) {
+  // If identity_id is provided directly, use it
+  if (args.identity_id) {
+    const identity = ctx.storage.getIdentity(args.identity_id);
+    if (!identity) {
+      throw new McpError(ErrorCode.InvalidRequest, `Identity not found: ${args.identity_id}`);
+    }
+    return identity;
+  }
+  
+  // If agent_id is provided, auto-derive the identity (like letta_send does)
+  if (args.agent_id && ctx.lettaService) {
+    const identityId = await ctx.lettaService.getOrCreateAgentIdentity(args.agent_id);
+    const identity = ctx.storage.getIdentity(identityId);
+    if (!identity) {
+      throw new McpError(ErrorCode.InternalError, `Failed to get identity for agent: ${args.agent_id}`);
+    }
+    console.log(`[Send] Auto-derived identity ${identityId} from agent_id ${args.agent_id}`);
+    return identity;
+  }
+  
+  throw new McpError(ErrorCode.InvalidParams, 'Either identity_id or agent_id is required for send operation');
+}
+
 export const send: OperationHandler = async (args, ctx) => {
-  const identity = requireIdentity(ctx, args.identity_id);
-  const to_mxid = requireParam(args.to_mxid, 'to_mxid');
+  const identity = await resolveIdentity(args, ctx);
   const message = requireParam(args.message, 'message');
 
-  const roomId = await ctx.roomManager.getOrCreateDMRoom(identity.mxid, to_mxid);
+  // Determine target room - either direct room_id or DM room from to_mxid
+  let roomId: string;
+  let targetInfo: { to?: string; room_id?: string };
+  
+  if (args.room_id) {
+    // Direct room send - use provided room_id
+    roomId = args.room_id;
+    targetInfo = { room_id: roomId };
+    console.log(`[Send] Sending to room directly: ${roomId}`);
+  } else if (args.to_mxid) {
+    // DM send - get or create DM room
+    roomId = await ctx.roomManager.getOrCreateDMRoom(identity.mxid, args.to_mxid);
+    targetInfo = { to: args.to_mxid, room_id: roomId };
+    await ctx.storage.updateDMActivity(identity.mxid, args.to_mxid);
+    console.log(`[Send] Sending DM to ${args.to_mxid} in room ${roomId}`);
+  } else {
+    throw new McpError(ErrorCode.InvalidParams, 'Either room_id or to_mxid is required for send operation');
+  }
+
   const client = await ctx.clientPool.getClient(identity);
   
   // Build message content
@@ -37,9 +83,14 @@ export const send: OperationHandler = async (args, ctx) => {
   
   console.log(`[Send] Content being sent:`, JSON.stringify(content));
   const eventId = await client.sendMessage(roomId, content);
-  await ctx.storage.updateDMActivity(identity.mxid, to_mxid);
 
-  return result({ event_id: eventId, room_id: roomId, from: identity.mxid, to: to_mxid });
+  return result({ 
+    event_id: eventId, 
+    room_id: roomId, 
+    from: identity.mxid,
+    identity_id: identity.id,
+    ...targetInfo 
+  });
 };
 
 export const read: OperationHandler = async (args, ctx) => {
