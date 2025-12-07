@@ -173,7 +173,9 @@ export class ResponseMonitor {
     try {
       // Get an identity that can post to the room
       // Preferably the agent's identity, or fall back to admin
-      const agentIdentityId = `letta_${agent_id.replace('agent-', '')}`;
+      // Identity IDs are stored as "letta_agent-UUID" (keeping the agent- prefix)
+      const agentIdentityId = `letta_${agent_id}`;
+      console.log(`[ResponseMonitor] Looking for identity: ${agentIdentityId}`);
       let client = await this.clientPool.getClientById(agentIdentityId);
       
       // If no agent identity, try to get any identity that's in the room
