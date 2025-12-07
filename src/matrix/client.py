@@ -22,7 +22,7 @@ from src.core.agent_user_manager import run_agent_sync
 from src.matrix.event_dedupe import is_duplicate_event
 
 # Cross-run tracking webhook URL
-CONVERSATION_TRACKER_URL = os.getenv("CONVERSATION_TRACKER_URL", "http://127.0.0.1:3101")
+CONVERSATION_TRACKER_URL = os.getenv("CONVERSATION_TRACKER_URL", "http://192.168.50.90:3101")
 
 async def register_conversation_for_tracking(
     matrix_event_id: str,
