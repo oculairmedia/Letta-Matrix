@@ -52,9 +52,13 @@ export class ResponseMonitor {
    * Start monitoring for a conversation after tool attachment
    */
   async monitorConversation(conv: ConversationState): Promise<MonitorResult> {
-    const { matrix_event_id, matrix_room_id, agent_id, created_at } = conv;
+    const { matrix_event_id, matrix_room_id, agent_id, created_at, runs } = conv;
     
-    console.log(`[ResponseMonitor] Starting to monitor conversation ${matrix_event_id} for agent ${agent_id}`);
+    // Get the most recent run_id to filter messages
+    const activeRun = runs.length > 0 ? runs[runs.length - 1] : null;
+    const targetRunId = activeRun?.run_id;
+    
+    console.log(`[ResponseMonitor] Starting to monitor conversation ${matrix_event_id} for agent ${agent_id}, run: ${targetRunId || 'none'}`);
     
     // Create abort controller for this monitor
     const abortController = new AbortController();
@@ -79,22 +83,36 @@ export class ResponseMonitor {
             limit: 20
           });
           
-          // Look for new assistant messages after conversation started
+          // Look for new assistant messages from the specific run
           for await (const msg of messagesPage) {
             // Check if this is an assistant message
             if (msg.message_type === 'assistant_message' && msg.content) {
+              // Get the run_id from the message (if available)
+              const msgRunId = (msg as { run_id?: string }).run_id;
+              
+              // If we have a target run_id, only accept messages from that run
+              if (targetRunId && msgRunId && msgRunId !== targetRunId) {
+                continue; // Skip messages from other runs
+              }
+              
               // Parse the date timestamp (Letta uses 'date' not 'created_at')
               const msgDate = (msg as { date?: string }).date;
               const msgCreatedAt = msgDate ? new Date(msgDate).getTime() : 0;
               
               // Check if message is newer than conversation start
               if (msgCreatedAt > convCreatedAt) {
-                console.log(`[ResponseMonitor] Found new response for conversation ${matrix_event_id}`);
+                console.log(`[ResponseMonitor] Found new response for conversation ${matrix_event_id} from run ${msgRunId || 'unknown'}`);
                 
                 // Extract content - may be string or array
                 const contentStr = typeof msg.content === 'string' 
                   ? msg.content 
                   : JSON.stringify(msg.content);
+                
+                // Skip if this looks like an inter-agent message relay (not the actual response)
+                if (contentStr.includes('[INTER-AGENT MESSAGE from') || contentStr.includes('[MESSAGE FROM OPENCODE USER]')) {
+                  console.log(`[ResponseMonitor] Skipping inter-agent/opencode relay message`);
+                  continue;
+                }
                 
                 // Post response to Matrix
                 await this.postResponseToMatrix(conv, contentStr);
