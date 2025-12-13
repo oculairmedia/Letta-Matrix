@@ -95,6 +95,64 @@ function extractOpenCodeMentions(body: string): string[] {
   return [...new Set(matches)];  // Deduplicate
 }
 
+/**
+ * Extract the directory name pattern from an OpenCode MXID
+ * @oc_letta_v2:matrix.oculair.ca -> "letta"
+ * @oc_my_project_v2:matrix.oculair.ca -> "my_project" (or "my-project" with dashes)
+ */
+function extractDirNameFromMxid(mxid: string): string | null {
+  // Match @oc_<name>_v2 or @oc_<name> pattern
+  const match = mxid.match(/@oc_([a-z0-9_]+?)(_v2)?:/i);
+  if (!match) return null;
+  return match[1];
+}
+
+/**
+ * Find a registration by trying to match MXID to discovered OpenCode instances
+ * This is called when no direct registration is found for an @mention
+ */
+async function findOrCreateRegistrationForMxid(mxid: string): Promise<OpenCodeRegistration | undefined> {
+  const dirNamePattern = extractDirNameFromMxid(mxid);
+  if (!dirNamePattern) {
+    console.log(`[Bridge] Could not extract directory pattern from MXID: ${mxid}`);
+    return undefined;
+  }
+  
+  console.log(`[Bridge] Looking for OpenCode instance matching pattern: ${dirNamePattern}`);
+  
+  // First, run discovery to find any running OpenCode instances
+  await discoverAllOpenCodeInstances();
+  
+  // Check if we now have a registration for this MXID
+  let registration = identityToRegistration.get(mxid);
+  if (registration) {
+    console.log(`[Bridge] Found registration after discovery: ${registration.id}`);
+    return registration;
+  }
+  
+  // Try to find a registration whose directory matches the pattern
+  // The pattern might be "letta" which should match "/opt/stacks/letta" or "/opt/stacks/letta-code"
+  for (const [id, reg] of registrations.entries()) {
+    const regDirName = reg.directory.split('/').filter(p => p).pop() || '';
+    const regDirNormalized = regDirName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    
+    // Check if the directory name matches the pattern
+    if (regDirNormalized === dirNamePattern || regDirNormalized.startsWith(dirNamePattern)) {
+      // Check if this registration's derived identities include our target MXID
+      const derivedIdentities = deriveMatrixIdentities(reg.directory);
+      if (derivedIdentities.includes(mxid)) {
+        // Map this registration to the MXID
+        identityToRegistration.set(mxid, reg);
+        console.log(`[Bridge] Mapped ${mxid} to existing registration ${id}`);
+        return reg;
+      }
+    }
+  }
+  
+  console.log(`[Bridge] No matching OpenCode instance found for ${mxid}`);
+  return undefined;
+}
+
 // Load agent mappings
 function loadAgentMappings(): void {
   if (config.bridge.agentMappingsPath && existsSync(config.bridge.agentMappingsPath)) {
@@ -112,66 +170,86 @@ function getAgentForRoom(roomId: string): AgentMapping | undefined {
   return Object.values(agentMappings).find(m => m.room_id === roomId);
 }
 
-// Discover all running OpenCode instances on the host
+// Discovery service URL (runs on host, accessible via localhost since we use network_mode: host)
+const DISCOVERY_SERVICE_URL = process.env.DISCOVERY_SERVICE_URL || 'http://127.0.0.1:3202';
+
+interface DiscoveredInstance {
+  pid: number;
+  directory: string;
+  port: number;
+  hostname: string;
+}
+
+// Discover all running OpenCode instances via the discovery service
 async function discoverAllOpenCodeInstances(): Promise<void> {
   try {
-    const { execSync } = await import('child_process');
-    
-    // Find all opencode processes with their PIDs
-    const psList = execSync("ps aux | grep opencode | grep -v grep | awk '{print $2}'", { encoding: 'utf-8' }).trim();
-    if (!psList) {
-      console.log('[Bridge] No OpenCode processes found');
+    // Query the discovery service running on the host
+    const response = await fetch(`${DISCOVERY_SERVICE_URL}/discover`);
+    if (!response.ok) {
+      console.log(`[Bridge] Discovery service returned ${response.status}`);
       return;
     }
     
-    const pids = psList.split('\n').filter(p => p);
-    console.log(`[Bridge] Found ${pids.length} OpenCode process(es)`);
+    const instances: DiscoveredInstance[] = await response.json();
     
-    for (const pid of pids) {
-      try {
-        // Get working directory for this PID
-        const cwd = execSync(`lsof -p ${pid} 2>/dev/null | grep cwd | awk '{print $NF}'`, { encoding: 'utf-8' }).trim();
-        
-        // Get listening port for this PID
-        const portResult = execSync(`ss -tlnp 2>/dev/null | grep "pid=${pid}" | grep -oP ':\\K\\d+' | head -1`, { encoding: 'utf-8' }).trim();
-        const port = parseInt(portResult, 10);
-        
-        if (cwd && port && port > 0) {
-          const id = `127.0.0.1:${port}:opencode-${pid}`;
-          
-          // Check if already registered with correct port
-          const existing = registrations.get(id);
-          if (existing) {
-            existing.lastSeen = Date.now();
-            continue;
-          }
-          
-          // Create new registration
-          const registration: OpenCodeRegistration = {
-            id,
-            port,
-            hostname: '127.0.0.1',
-            sessionId: `opencode-${pid}`,
-            directory: cwd,
-            rooms: [],
-            registeredAt: Date.now(),
-            lastSeen: Date.now(),
-          };
-          
-          registrations.set(id, registration);
-          console.log(`[Bridge] Auto-discovered OpenCode: ${id} (${cwd})`);
-        }
-      } catch (error) {
-        console.error(`[Bridge] Failed to process PID ${pid}:`, error);
-      }
+    if (instances.length === 0) {
+      console.log('[Bridge] No OpenCode instances discovered');
+      return;
     }
     
-    // Clean up stale registrations (older than 60 seconds)
+    console.log(`[Bridge] Discovered ${instances.length} OpenCode instance(s)`);
+    
+    for (const instance of instances) {
+      const { pid, directory, port, hostname } = instance;
+      
+      if (!directory || !port || port <= 0) {
+        continue;
+      }
+      
+      const id = `${hostname}:${port}:opencode-${pid}`;
+      
+      // Check if already registered with correct port
+      const existing = registrations.get(id);
+      if (existing) {
+        existing.lastSeen = Date.now();
+        continue;
+      }
+      
+      // Create new registration
+      const registration: OpenCodeRegistration = {
+        id,
+        port,
+        hostname: hostname || '127.0.0.1',
+        sessionId: `opencode-${pid}`,
+        directory,
+        rooms: [],
+        registeredAt: Date.now(),
+        lastSeen: Date.now(),
+      };
+      
+      registrations.set(id, registration);
+      
+      // Also map both identity formats to this registration
+      const matrixIdentities = deriveMatrixIdentities(directory);
+      for (const identity of matrixIdentities) {
+        identityToRegistration.set(identity, registration);
+      }
+      
+      console.log(`[Bridge] Auto-discovered OpenCode: ${id} (${directory}) -> ${matrixIdentities.join(', ')}`);
+    }
+    
+    // Clean up stale registrations (older than 5 minutes)
+    const STALE_TIMEOUT = 300000; // 5 minutes
     const now = Date.now();
     for (const [id, reg] of registrations.entries()) {
-      if (now - reg.lastSeen > 60000) {
+      if (now - reg.lastSeen > STALE_TIMEOUT) {
         console.log(`[Bridge] Removing stale registration: ${id}`);
         registrations.delete(id);
+        // Also remove from identity map
+        const matrixIdentities = deriveMatrixIdentities(reg.directory);
+        for (const identity of matrixIdentities) {
+          identityToRegistration.delete(identity);
+        }
       }
     }
   } catch (error) {
@@ -333,11 +411,17 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
 
   // Forward to each mentioned OpenCode identity
   for (const mention of mentions) {
-    const registration = identityToRegistration.get(mention);
+    let registration = identityToRegistration.get(mention);
     
     if (!registration) {
-      console.log(`[Bridge] No registration found for ${mention}`);
-      continue;
+      console.log(`[Bridge] No registration found for ${mention}, attempting discovery...`);
+      // Try to find or create a registration by discovering running OpenCode instances
+      registration = await findOrCreateRegistrationForMxid(mention);
+      
+      if (!registration) {
+        console.log(`[Bridge] Could not find OpenCode instance for ${mention}`);
+        continue;
+      }
     }
 
     // Get sender's display name for better context
@@ -415,7 +499,7 @@ async function initMatrix(): Promise<void> {
 }
 
 // HTTP API handlers
-function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url || '/', `http://localhost:${config.bridge.port}`);
   
   // CORS headers
@@ -447,6 +531,24 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       count: registrations.size,
       registrations: Array.from(registrations.values()),
     }));
+    return;
+  }
+
+  // Discover OpenCode instances - manually trigger discovery
+  if (url.pathname === '/discover' && (req.method === 'GET' || req.method === 'POST')) {
+    try {
+      await discoverAllOpenCodeInstances();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        count: registrations.size,
+        registrations: Array.from(registrations.values()),
+        identityMappings: Object.fromEntries(identityToRegistration)
+      }));
+    } catch (error) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: String(error) }));
+    }
     return;
   }
 
@@ -488,6 +590,48 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, id, matrixIdentities, registration }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+      }
+    });
+    return;
+  }
+
+  // Heartbeat - keep registration alive
+  if (url.pathname === '/heartbeat' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { id, directory } = data;
+
+        // Find registration by ID or directory
+        let registration: OpenCodeRegistration | undefined;
+        
+        if (id) {
+          registration = registrations.get(id);
+        }
+        
+        if (!registration && directory) {
+          // Find by directory
+          for (const reg of registrations.values()) {
+            if (reg.directory === directory) {
+              registration = reg;
+              break;
+            }
+          }
+        }
+
+        if (registration) {
+          registration.lastSeen = Date.now();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, id: registration.id, lastSeen: registration.lastSeen }));
+        } else {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Registration not found', id, directory }));
+        }
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid JSON' }));
@@ -622,25 +766,33 @@ async function main(): Promise<void> {
   await initMatrix();
 
   // Start periodic cleanup of stale registrations
-  console.log('[Bridge] Starting registration cleanup...');
+  const STALE_TIMEOUT = 300000; // 5 minutes
+  console.log('[Bridge] Starting registration cleanup (stale after 5 minutes)...');
   discoveryInterval = setInterval(async () => {
     const now = Date.now();
     for (const [id, reg] of registrations.entries()) {
-      if (now - reg.lastSeen > 60000) {
+      if (now - reg.lastSeen > STALE_TIMEOUT) {
         console.log(`[Bridge] Removing stale registration: ${id}`);
         registrations.delete(id);
+        // Also remove from identity map
+        const matrixIdentities = deriveMatrixIdentities(reg.directory);
+        for (const identity of matrixIdentities) {
+          identityToRegistration.delete(identity);
+        }
       }
     }
-  }, 30000); // Clean up every 30 seconds
+  }, 60000); // Clean up every 60 seconds
 
   console.log('[Bridge] OpenCode Matrix Bridge ready!');
   console.log('[Bridge] Endpoints:');
-  console.log(`  POST /register    - Register OpenCode instance (manual)`);
+  console.log(`  POST /register    - Register OpenCode instance`);
+  console.log(`  POST /heartbeat   - Keep registration alive (call every 2-3 min)`);
   console.log(`  POST /unregister  - Unregister OpenCode instance`);
+  console.log(`  POST /notify      - Forward message to OpenCode instance`);
   console.log(`  GET  /registrations - List registered instances`);
   console.log(`  GET  /rooms       - List available agent rooms`);
   console.log(`  GET  /health      - Health check`);
-  console.log('[Bridge] OpenCode instances should auto-register via plugin');
+  console.log('[Bridge] Registrations expire after 5 minutes without heartbeat');
 }
 
 // Cleanup on exit
