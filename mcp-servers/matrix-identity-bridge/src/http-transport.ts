@@ -14,6 +14,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { randomUUID } from 'crypto';
 import { getConversationTracker, type WebhookPayload } from './core/conversation-tracker.js';
 import { getResponseMonitor } from './core/response-monitor.js';
+import { runWithContextAsync, extractAgentIdFromHeaders } from './core/request-context.js';
 
 export interface HttpTransportOptions {
   port: number;
@@ -102,10 +103,22 @@ export class HttpTransport {
       return;
     }
 
-    // MCP endpoint - delegate to SDK transport
+    // MCP endpoint - delegate to SDK transport with agent context
     if (url.pathname === '/mcp') {
       try {
-        await this.transport.handleRequest(req, res);
+        // Extract agent ID from headers (sent by Letta)
+        const agentId = extractAgentIdFromHeaders(req.headers as Record<string, string | string[] | undefined>);
+        
+        if (agentId) {
+          console.log(`[HttpTransport] MCP request from agent: ${agentId}`);
+        }
+        
+        // Run the MCP request handler within our context
+        // This makes agentId available to tool handlers via getAgentIdFromContext()
+        await runWithContextAsync(
+          { agentId, requestId: randomUUID() },
+          () => this.transport.handleRequest(req, res)
+        );
       } catch (error) {
         console.error('[HttpTransport] Error handling MCP request:', error);
         if (!res.headersSent) {

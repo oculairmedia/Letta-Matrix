@@ -4,6 +4,7 @@
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { IdentityManager } from '../core/identity-manager.js';
+import { getAgentIdFromContext } from '../core/request-context.js';
 import {
   OperationContext,
   MatrixMessagingArgs,
@@ -15,6 +16,11 @@ import {
 
 /**
  * Helper to resolve identity - supports both direct identity_id and agent_id auto-derivation
+ * 
+ * Priority for agent_id resolution:
+ * 1. args.agent_id (explicit in tool call)
+ * 2. args.__injected_agent_id (injected by proxy from X-Agent-Id header)
+ * 3. getAgentIdFromContext() (AsyncLocalStorage, rarely works due to proxy boundary)
  */
 async function resolveIdentity(args: MatrixMessagingArgs, ctx: OperationContext) {
   // If identity_id is provided directly, use it
@@ -26,18 +32,41 @@ async function resolveIdentity(args: MatrixMessagingArgs, ctx: OperationContext)
     return identity;
   }
   
-  // If agent_id is provided, auto-derive the identity (like letta_send does)
-  if (args.agent_id && ctx.lettaService) {
-    const identityId = await ctx.lettaService.getOrCreateAgentIdentity(args.agent_id);
+  // Get agent_id from multiple sources
+  let agentId = args.agent_id;
+  let source = 'args.agent_id';
+  
+  // Check for injected agent_id from proxy (from X-Agent-Id header)
+  if (!agentId && (args as any).__injected_agent_id) {
+    agentId = (args as any).__injected_agent_id;
+    source = 'X-Agent-Id header (proxy injected)';
+    console.log(`[resolveIdentity] Using agent_id from ${source}: ${agentId}`);
+  }
+  
+  // Fallback to AsyncLocalStorage context (unlikely to work due to proxy architecture)
+  if (!agentId) {
+    const contextAgentId = getAgentIdFromContext();
+    if (contextAgentId) {
+      agentId = contextAgentId;
+      source = 'AsyncLocalStorage context';
+      console.log(`[resolveIdentity] Using agent_id from ${source}: ${agentId}`);
+    }
+  }
+  
+  // If we have an agent_id (from args or context), auto-derive the identity
+  if (agentId && ctx.lettaService) {
+    const identityId = await ctx.lettaService.getOrCreateAgentIdentity(agentId);
     const identity = ctx.storage.getIdentity(identityId);
     if (!identity) {
-      throw new McpError(ErrorCode.InternalError, `Failed to get identity for agent: ${args.agent_id}`);
+      throw new McpError(ErrorCode.InternalError, `Failed to get identity for agent: ${agentId}`);
     }
-    console.log(`[Send] Auto-derived identity ${identityId} from agent_id ${args.agent_id}`);
+    console.log(`[resolveIdentity] Auto-derived identity ${identityId} from agent_id ${agentId} (source: ${source})`);
     return identity;
   }
   
-  throw new McpError(ErrorCode.InvalidParams, 'Either identity_id or agent_id is required for send operation');
+  throw new McpError(ErrorCode.InvalidParams, 
+    'Either identity_id or agent_id is required for send operation. ' +
+    'TIP: Letta should automatically send X-Agent-Id header which gets injected into tool args.');
 }
 
 export const send: OperationHandler = async (args, ctx) => {

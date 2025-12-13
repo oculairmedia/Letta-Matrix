@@ -6,7 +6,7 @@
 
 import { MCPTool } from 'mcp-framework';
 import { z } from 'zod';
-import { getToolContext, result, requireParam, requireIdentity, requireLetta } from '../core/tool-context.js';
+import { getToolContext, result, requireParam, requireIdentity, requireLetta, ToolContext } from '../core/tool-context.js';
 import { IdentityManager } from '../core/identity-manager.js';
 
 // All supported operations
@@ -103,6 +103,13 @@ const schema = z.object({
   ),
   agent: z.string().optional().describe(
     'Agent name OR ID - the simplest way to specify an agent. Examples: "Meridian", "BMO", or a full UUID.'
+  ),
+  
+  // === INTERNAL: Injected by proxy from X-Agent-Id header ===
+  // This is NOT set by users - it's automatically injected by the HTTP proxy
+  // when Letta calls this MCP server with the X-Agent-Id header
+  __injected_agent_id: z.string().optional().describe(
+    'Internal: Agent ID injected by proxy from X-Agent-Id header. DO NOT SET MANUALLY.'
   )
 });
 
@@ -208,46 +215,77 @@ TIPS
   }
 
   async execute(input: Input): Promise<string> {
-    const ctx = getToolContext();
+    try {
+      const ctx = getToolContext();
 
-    // Get effective caller directory (from input or env)
-    const callerDirectory = this.getEffectiveCallerDirectory(input);
+      // Get effective caller directory (from input or env)
+      const callerDirectory = this.getEffectiveCallerDirectory(input);
 
-    // Auto-register with OpenCode bridge if we have a caller directory
-    if (callerDirectory) {
-      await this.autoRegisterWithBridge(callerDirectory, input.room_id);
+      // Auto-register with OpenCode bridge if we have a caller directory
+      if (callerDirectory) {
+        await this.autoRegisterWithBridge(callerDirectory, input.room_id);
+      }
+
+      return await this.executeOperation(input, ctx, callerDirectory);
+    } catch (error: unknown) {
+      // Catch all errors and return them as success responses
+      // This prevents mcp-framework from wrapping errors in a format Letta can't parse
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[MatrixMessaging] Operation ${input.operation} failed: ${errMsg}`);
+      return result({
+        success: false,
+        error: errMsg,
+        operation: input.operation
+      });
     }
+  }
 
+  private async executeOperation(input: Input, ctx: ToolContext, callerDirectory: string | undefined): Promise<string> {
     switch (input.operation) {
       // === MESSAGE OPERATIONS ===
       case 'send': {
         let identity;
         
-        // If we have a caller directory (explicit or from env), use OpenCode identity
-        if (callerDirectory) {
+        // Get agent_id from multiple sources:
+        // 1. Explicit agent_id in input (user specified)
+        // 2. __injected_agent_id (proxy injected from X-Agent-Id header)
+        const agentId = input.agent_id || input.__injected_agent_id;
+        
+        // Priority order for identity resolution:
+        // 1. Explicit identity_id (highest priority)
+        // 2. agent_id - either explicit or injected from header (derives identity)
+        // 3. callerDirectory / OpenCode identity (fallback for OpenCode callers)
+        if (input.identity_id) {
+          // Explicit identity_id takes highest priority
+          identity = requireIdentity(input.identity_id);
+          console.log(`[MatrixMessaging] send: Using explicit identity_id ${input.identity_id}`);
+        } else if (agentId && ctx.lettaService) {
+          // Auto-derive identity from agent_id (explicit or from X-Agent-Id header)
+          const source = input.agent_id ? 'explicit' : 'X-Agent-Id header';
+          console.log(`[MatrixMessaging] send: Resolving identity from agent_id (${source}): ${agentId}`);
+          const identityId = await ctx.lettaService.getOrCreateAgentIdentity(agentId);
+          identity = ctx.storage.getIdentity(identityId);
+          if (!identity) {
+            throw new Error(`Failed to get identity for agent: ${agentId}`);
+          }
+          console.log(`[MatrixMessaging] send: Auto-derived identity ${identityId} from agent_id ${agentId}`);
+        } else if (callerDirectory) {
+          // Fallback: use OpenCode identity from caller directory
           identity = await ctx.openCodeService.getOrCreateIdentity(callerDirectory);
+          console.log(`[MatrixMessaging] send: Using OpenCode identity for ${callerDirectory}`);
           // Update display name if caller_name provided
           if (input.caller_name && identity.displayName !== input.caller_name) {
             // TODO: Could update display name here if needed
           }
-        } else if (input.agent_id && ctx.lettaService) {
-          // Auto-derive identity from agent_id (like letta_send does)
-          const identityId = await ctx.lettaService.getOrCreateAgentIdentity(input.agent_id);
-          identity = ctx.storage.getIdentity(identityId);
-          if (!identity) {
-            throw new Error(`Failed to get identity for agent: ${input.agent_id}`);
-          }
-          console.log(`[MatrixMessaging] send: Auto-derived identity ${identityId} from agent_id ${input.agent_id}`);
-        } else if (input.identity_id) {
-          identity = requireIdentity(input.identity_id);
         } else {
           // No identity available - provide helpful error
           throw new Error(
             `No identity available for send operation.\n\n` +
             `OPTIONS:\n` +
-            `• Use agent_id: {operation: "send", agent_id: "agent-uuid", room_id: "!room:domain", message: "Hi"}\n` +
-            `• Use identity_id: {operation: "send", identity_id: "your-id", room_id: "!room:domain", message: "Hi"}\n\n` +
-            `TIP: Use {operation: "letta_list"} to find agent IDs, or {operation: "identity_list"} for identities.`
+            `• Use identity_id: {operation: "send", identity_id: "your-id", room_id: "!room:domain", message: "Hi"}\n` +
+            `• Use agent_id: {operation: "send", agent_id: "agent-uuid", room_id: "!room:domain", message: "Hi"}\n\n` +
+            `TIP: Letta agents should automatically have X-Agent-Id header which gets injected.\n` +
+            `Use {operation: "letta_list"} to find agent IDs, or {operation: "identity_list"} for identities.`
           );
         }
         
@@ -290,7 +328,15 @@ TIPS
         }
         
         console.log(`[MatrixMessaging] Sending content:`, JSON.stringify(content));
-        const eventId = await client.sendMessage(roomId, content);
+        // Use doRequest directly to bypass SDK membership checks (avoids sync race conditions)
+        const txnId = `m${Date.now()}`;
+        const sendResult = await client.doRequest(
+          'PUT',
+          `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
+          {},
+          content
+        ) as { event_id: string };
+        const eventId = sendResult.event_id;
         console.log(`[MatrixMessaging] Sent event: ${eventId}`);
         
         return result({ event_id: eventId, room_id: roomId, from: identity.mxid, identity_id: identity.id });
@@ -551,7 +597,6 @@ TIPS
           caller_directory: callerDirectory
         }));
         
-        try {
         const letta = requireLetta();
         const message = requireParam(input.message, 'message');
         
@@ -779,18 +824,6 @@ TIPS
           },
           note: `Message sent to ${agent_name}'s room. Agent will respond in Matrix. Conversation tracked for cross-run responses.`
         });
-        } catch (talkError: unknown) {
-          const errMsg = talkError instanceof Error ? talkError.message : String(talkError);
-          const errStack = talkError instanceof Error ? talkError.stack : '';
-          console.error(`[MatrixMessaging] talk_to_agent error: ${errMsg}`);
-          console.error(`[MatrixMessaging] Stack: ${errStack}`);
-          return result({
-            success: false,
-            error: errMsg,
-            caller_directory: callerDirectory,
-            debug: 'Check MCP server logs for more details'
-          });
-        }
       }
 
       case 'letta_lookup': {

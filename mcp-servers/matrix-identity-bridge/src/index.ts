@@ -4,6 +4,11 @@ import 'dotenv/config';
  * 
  * Using mcp-framework for proper HTTP stream transport.
  * Tools are auto-discovered from the dist/tools directory.
+ * 
+ * Architecture:
+ * - HTTP Proxy (external port) captures X-Agent-Id headers
+ * - mcp-framework (internal port) handles MCP protocol
+ * - AsyncLocalStorage bridges context between them
  */
 
 import { MCPServer } from 'mcp-framework';
@@ -18,6 +23,7 @@ import { setToolContext } from './core/tool-context.js';
 import { getConversationTracker } from './core/conversation-tracker.js';
 import { initializeResponseMonitor } from './core/response-monitor.js';
 import { createWebhookServer } from './core/webhook-server.js';
+import { HttpAgentProxy } from './core/http-proxy.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -29,7 +35,8 @@ const config = {
   homeserverUrl: process.env.MATRIX_HOMESERVER_URL || 'https://matrix.oculair.ca',
   adminToken: process.env.MATRIX_ADMIN_TOKEN || '',
   dataDir: process.env.DATA_DIR || './data',
-  port: parseInt(process.env.PORT || '3100', 10),
+  port: parseInt(process.env.PORT || '3100', 10),  // External port (proxy)
+  internalPort: parseInt(process.env.INTERNAL_PORT || '3102', 10),  // Internal mcp-framework port
   webhookPort: parseInt(process.env.WEBHOOK_PORT || '3101', 10),
   lettaApiUrl: process.env.LETTA_API_URL,
   lettaApiKey: process.env.LETTA_API_KEY
@@ -98,12 +105,21 @@ async function main() {
     console.log('[MatrixMCP] Response monitor initialized');
   }
 
-  // Start webhook server for cross-run tracking
-  const webhookServer = createWebhookServer({
-    port: config.webhookPort,
-    host: '0.0.0.0'
-  });
-  await webhookServer.start();
+  // Determine which transport to use based on environment
+  const useStdio = process.env.MCP_TRANSPORT === 'stdio';
+
+  // Start webhook server for cross-run tracking (only in HTTP mode, not stdio)
+  let webhookServer: Awaited<ReturnType<typeof createWebhookServer>> | null = null;
+  if (!useStdio) {
+    webhookServer = createWebhookServer({
+      port: config.webhookPort,
+      host: '0.0.0.0'
+    });
+    await webhookServer.start();
+    console.log('[MatrixMCP] Webhook server started on port', config.webhookPort);
+  } else {
+    console.log('[MatrixMCP] Webhook server disabled in stdio mode');
+  }
 
   // Set global context for tools BEFORE server starts
   setToolContext({
@@ -117,12 +133,12 @@ async function main() {
   });
 
   console.log('[MatrixMCP] Tool context initialized');
-
-  // Determine which transport to use based on environment
-  const useStdio = process.env.MCP_TRANSPORT === 'stdio';
   
   // Create MCP server with appropriate transport
   // The basePath tells the framework where to find the tools directory
+  // For HTTP mode, mcp-framework listens on internal port, proxy on external
+  const mcpPort = useStdio ? config.port : config.internalPort;
+  
   const server = new MCPServer({
     name: 'matrix-messaging',
     version: '2.0.0',
@@ -132,45 +148,64 @@ async function main() {
     } : {
       type: 'http-stream',
       options: {
-        port: config.port,
+        port: mcpPort,  // Internal port for mcp-framework
         endpoint: '/mcp',
         cors: {
           allowOrigin: '*',
           allowMethods: 'GET, POST, DELETE, OPTIONS',
-          allowHeaders: 'Content-Type, Authorization, Mcp-Session-Id',
+          allowHeaders: 'Content-Type, Authorization, Mcp-Session-Id, X-Agent-Id',
           exposeHeaders: 'Mcp-Session-Id'
         }
       }
     }
   });
 
-  // Start server - tools are auto-discovered from the tools directory
-  await server.start();
+  // For HTTP mode, start the proxy BEFORE mcp-framework (since server.start() blocks)
+  let httpProxy: HttpAgentProxy | null = null;
+  if (!useStdio) {
+    httpProxy = new HttpAgentProxy({
+      externalPort: config.port,  // External port clients connect to
+      internalPort: config.internalPort,  // Internal mcp-framework port
+      host: '0.0.0.0'
+    });
+    await httpProxy.start();
+    console.log(`[MatrixMCP] Agent context proxy running on http://0.0.0.0:${config.port}`);
+    console.log(`[MatrixMCP] mcp-framework will run internally on port ${config.internalPort}`);
+  }
+
+  // Start mcp-framework server (this blocks until shutdown for HTTP mode)
+  // Don't await - let it run in the background and use its built-in signal handlers
+  const serverPromise = server.start();
+  
+  // Wait a bit for the server to actually start listening
+  await new Promise(resolve => setTimeout(resolve, 100));
 
   if (useStdio) {
     console.log(`[MatrixMCP] Server running on STDIO transport`);
+    // For stdio, we need to wait for the server
+    await serverPromise;
   } else {
-    console.log(`[MatrixMCP] Server running on http://0.0.0.0:${config.port}/mcp`);
+    console.log(`[MatrixMCP] External endpoint: http://0.0.0.0:${config.port}/mcp`);
+    // For HTTP, server runs in background, we continue to set up shutdown handlers
   }
 
   // Graceful shutdown
-  process.on('SIGINT', async () => {
+  const shutdown = async () => {
     console.log('[MatrixMCP] Shutting down...');
     conversationTracker.stop();
-    await webhookServer.stop();
+    if (webhookServer) {
+      await webhookServer.stop();
+    }
+    if (httpProxy) {
+      await httpProxy.stop();
+    }
     await clientPool.stopAll();
     await server.stop();
     process.exit(0);
-  });
+  };
 
-  process.on('SIGTERM', async () => {
-    console.log('[MatrixMCP] Shutting down...');
-    conversationTracker.stop();
-    await webhookServer.stop();
-    await clientPool.stopAll();
-    await server.stop();
-    process.exit(0);
-  });
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 main().catch((error) => {
