@@ -685,6 +685,180 @@ async function testMockServerPortChange(): Promise<void> {
 }
 
 // ============================================================================
+// IDENTITY MAPPING TESTS
+// ============================================================================
+
+/**
+ * Test that when a new instance is discovered for the same directory,
+ * the identity mapping is updated to point to the new instance.
+ *
+ * This is the bug we found: when OpenCode restarts on a different port,
+ * the discovery creates a new registration but the identity mapping
+ * may still point to the old stale registration.
+ */
+async function testIdentityMappingUpdatesOnPortChange(): Promise<void> {
+  const directory = "/tmp/test-identity-update";
+  const oldPort = 59985;
+  const newPort = 59984;
+  const matrixDomain = "matrix.oculair.ca";
+
+  // Expected identity format for this directory
+  const expectedIdentityV2 = `@oc_test_identity_update_v2:${matrixDomain}`;
+  const expectedIdentityV1 = `@oc_test_identity_update:${matrixDomain}`;
+
+  // Clean up any existing registrations for this directory first
+  let { data: existingRegs } = await request(`${BRIDGE_URL}/registrations`);
+  for (const reg of existingRegs.registrations) {
+    if (reg.directory === directory) {
+      await request(`${BRIDGE_URL}/unregister`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: reg.id }),
+      });
+    }
+  }
+
+  // Register with old port (simulating first OpenCode start)
+  const { data: regData1 } = await request(`${BRIDGE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      port: oldPort,
+      hostname: "127.0.0.1",
+      sessionId: "old-session-123",
+      directory,
+    }),
+  });
+
+  // Check identity mapping points to old port
+  let { data: discoverData } = await request(`${BRIDGE_URL}/discover`);
+  let identityMapping =
+    discoverData.identityMappings[expectedIdentityV2] ||
+    discoverData.identityMappings[expectedIdentityV1];
+
+  assert(
+    identityMapping !== undefined,
+    "Should have identity mapping after first registration",
+  );
+  assertEqual(
+    identityMapping.port,
+    oldPort,
+    "Identity should point to old port initially",
+  );
+
+  // Now register with new port WITHOUT unregistering old one first
+  // This simulates what happens when discovery finds a new instance
+  // while the old registration hasn't been cleaned up yet
+  const { data: regData2 } = await request(`${BRIDGE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      port: newPort,
+      hostname: "127.0.0.1",
+      sessionId: "new-session-456",
+      directory,
+    }),
+  });
+
+  // Check identity mapping NOW points to new port
+  ({ data: discoverData } = await request(`${BRIDGE_URL}/discover`));
+  identityMapping =
+    discoverData.identityMappings[expectedIdentityV2] ||
+    discoverData.identityMappings[expectedIdentityV1];
+
+  assert(
+    identityMapping !== undefined,
+    "Should still have identity mapping after second registration",
+  );
+  assertEqual(
+    identityMapping.port,
+    newPort,
+    `Identity should point to NEW port (${newPort}), not old port (${oldPort})`,
+  );
+
+  // Also verify there's only ONE registration for this directory that matters
+  // (the one the identity points to should be reachable)
+  const { data: regsData } = await request(`${BRIDGE_URL}/registrations`);
+  const directoryRegs = regsData.registrations.filter(
+    (r: any) => r.directory === directory,
+  );
+
+  // Find the registration that the identity points to
+  const activeReg = directoryRegs.find(
+    (r: any) => r.port === identityMapping.port,
+  );
+  assert(
+    activeReg !== undefined,
+    "Identity mapping should point to an existing registration",
+  );
+
+  // Clean up all registrations for this directory
+  for (const reg of directoryRegs) {
+    await request(`${BRIDGE_URL}/unregister`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: reg.id }),
+    });
+  }
+}
+
+/**
+ * Test that verifies the current state of identity mappings matches
+ * the discovery service's view of running instances.
+ *
+ * This catches the bug where stale registrations cause identity mappings
+ * to point to wrong ports.
+ */
+async function testIdentityMappingsMatchDiscoveryService(): Promise<void> {
+  // Get actual running instances from discovery service
+  const { data: discovery } = await request(`${DISCOVERY_URL}/discover`);
+  if (discovery.length === 0) {
+    console.log(`  ${YELLOW}⚠ Skipped: No OpenCode instances running${RESET}`);
+    return;
+  }
+
+  // Trigger bridge discovery to sync
+  const { data: bridgeData } = await request(`${BRIDGE_URL}/discover`);
+
+  // For each running instance, verify the identity mapping points to correct port
+  for (const instance of discovery) {
+    const dirName =
+      instance.directory
+        .split("/")
+        .filter((p: string) => p)
+        .pop() || "default";
+    const localpart = `oc_${dirName.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+    const identityV2 = `@${localpart}_v2:matrix.oculair.ca`;
+    const identityV1 = `@${localpart}:matrix.oculair.ca`;
+
+    // Check v2 identity mapping
+    const mappingV2 = bridgeData.identityMappings[identityV2];
+    if (mappingV2) {
+      assertEqual(
+        mappingV2.port,
+        instance.port,
+        `Identity ${identityV2} should map to port ${instance.port} (discovery service), not ${mappingV2.port}`,
+      );
+      assertEqual(
+        mappingV2.directory,
+        instance.directory,
+        `Identity ${identityV2} should map to directory ${instance.directory}`,
+      );
+    }
+
+    // Check v1 identity mapping
+    const mappingV1 = bridgeData.identityMappings[identityV1];
+    if (mappingV1) {
+      assertEqual(
+        mappingV1.port,
+        instance.port,
+        `Identity ${identityV1} should map to port ${instance.port} (discovery service), not ${mappingV1.port}`,
+      );
+    }
+  }
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -727,6 +901,17 @@ async function main(): Promise<void> {
   console.log("\n🎭 Mock Server Tests\n");
   await runTest("Mock server forwarding", testMockServerForwarding);
   await runTest("Mock server port change", testMockServerPortChange);
+
+  // Identity mapping tests (the bug we found)
+  console.log("\n🔗 Identity Mapping Tests\n");
+  await runTest(
+    "Identity mapping updates on port change",
+    testIdentityMappingUpdatesOnPortChange,
+  );
+  await runTest(
+    "Identity mappings match discovery service",
+    testIdentityMappingsMatchDiscoveryService,
+  );
 
   // Summary
   console.log("\n" + "─".repeat(60));

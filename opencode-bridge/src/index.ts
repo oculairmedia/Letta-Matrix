@@ -244,34 +244,37 @@ async function discoverAllOpenCodeInstances(): Promise<void> {
 
       // Check if already registered with correct port
       const existing = registrations.get(id);
+      let registration: OpenCodeRegistration;
+
       if (existing) {
         existing.lastSeen = Date.now();
-        continue;
+        registration = existing;
+      } else {
+        // Create new registration
+        registration = {
+          id,
+          port,
+          hostname: hostname || "127.0.0.1",
+          sessionId: `opencode-${pid}`,
+          directory,
+          rooms: [],
+          registeredAt: Date.now(),
+          lastSeen: Date.now(),
+        };
+        registrations.set(id, registration);
+        console.log(`[Bridge] Auto-discovered OpenCode: ${id} (${directory})`);
       }
 
-      // Create new registration
-      const registration: OpenCodeRegistration = {
-        id,
-        port,
-        hostname: hostname || "127.0.0.1",
-        sessionId: `opencode-${pid}`,
-        directory,
-        rooms: [],
-        registeredAt: Date.now(),
-        lastSeen: Date.now(),
-      };
-
-      registrations.set(id, registration);
-
-      // Also map both identity formats to this registration
+      // Always ensure identity mappings point to the correct (latest) registration
+      // This handles the case where identity mappings were deleted during stale cleanup
       const matrixIdentities = deriveMatrixIdentities(directory);
       for (const identity of matrixIdentities) {
-        identityToRegistration.set(identity, registration);
+        const currentMapping = identityToRegistration.get(identity);
+        // Update mapping if it doesn't exist or points to a different/stale registration
+        if (!currentMapping || currentMapping.directory === directory) {
+          identityToRegistration.set(identity, registration);
+        }
       }
-
-      console.log(
-        `[Bridge] Auto-discovered OpenCode: ${id} (${directory}) -> ${matrixIdentities.join(", ")}`,
-      );
     }
 
     // Clean up stale registrations (older than 5 minutes)
