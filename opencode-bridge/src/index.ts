@@ -1,8 +1,8 @@
 /**
  * OpenCode Matrix Bridge
- * 
+ *
  * Syncs Matrix rooms and forwards messages to registered OpenCode instances.
- * 
+ *
  * Flow:
  * 1. OpenCode instances register via HTTP API (port, session, rooms to monitor)
  * 2. Bridge syncs Matrix rooms using a bot account
@@ -10,11 +10,11 @@
  * 4. Uses OpenCode SDK to inject messages via session.prompt({ noReply: true })
  */
 
-import 'dotenv/config';
-import * as sdk from 'matrix-js-sdk';
-import { createOpencodeClient } from '@opencode-ai/sdk';
-import { createServer, IncomingMessage, ServerResponse } from 'http';
-import { readFileSync, existsSync } from 'fs';
+import "dotenv/config";
+import * as sdk from "matrix-js-sdk";
+import { createOpencodeClient } from "@opencode-ai/sdk";
+import { createServer, IncomingMessage, ServerResponse } from "http";
+import { readFileSync, existsSync } from "fs";
 
 // Types
 interface OpenCodeRegistration {
@@ -23,7 +23,7 @@ interface OpenCodeRegistration {
   hostname: string;
   sessionId: string;
   directory: string;
-  rooms: string[];  // Room IDs to monitor
+  rooms: string[]; // Room IDs to monitor
   registeredAt: number;
   lastSeen: number;
 }
@@ -38,27 +38,28 @@ interface AgentMapping {
 // Configuration
 const config = {
   matrix: {
-    homeserverUrl: process.env.MATRIX_HOMESERVER_URL || 'https://matrix.oculair.ca',
-    accessToken: process.env.MATRIX_ACCESS_TOKEN || '',
+    homeserverUrl:
+      process.env.MATRIX_HOMESERVER_URL || "https://matrix.oculair.ca",
+    accessToken: process.env.MATRIX_ACCESS_TOKEN || "",
   },
   bridge: {
-    port: parseInt(process.env.BRIDGE_PORT || '3200'),
-    agentMappingsPath: process.env.AGENT_MAPPINGS_PATH || '',
+    port: parseInt(process.env.BRIDGE_PORT || "3200"),
+    agentMappingsPath: process.env.AGENT_MAPPINGS_PATH || "",
   },
   opencode: {
-    defaultHost: process.env.OPENCODE_DEFAULT_HOST || '127.0.0.1',
-  }
+    defaultHost: process.env.OPENCODE_DEFAULT_HOST || "127.0.0.1",
+  },
 };
 
 // State
 const registrations = new Map<string, OpenCodeRegistration>();
-const identityToRegistration = new Map<string, OpenCodeRegistration>();  // @oc_* MXID -> registration
+const identityToRegistration = new Map<string, OpenCodeRegistration>(); // @oc_* MXID -> registration
 let matrixClient: sdk.MatrixClient | null = null;
 let agentMappings: Record<string, AgentMapping> = {};
 let discoveryInterval: NodeJS.Timeout | null = null;
 
 // Matrix server domain for identity derivation
-const MATRIX_DOMAIN = process.env.MATRIX_DOMAIN || 'matrix.oculair.ca';
+const MATRIX_DOMAIN = process.env.MATRIX_DOMAIN || "matrix.oculair.ca";
 
 /**
  * Derive Matrix identity MXID from directory path
@@ -66,8 +67,12 @@ const MATRIX_DOMAIN = process.env.MATRIX_DOMAIN || 'matrix.oculair.ca';
  * Returns both for registration mapping
  */
 function deriveMatrixIdentity(directory: string): string {
-  const dirName = directory.split('/').filter(p => p).pop() || 'default';
-  const localpart = `oc_${dirName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+  const dirName =
+    directory
+      .split("/")
+      .filter((p) => p)
+      .pop() || "default";
+  const localpart = `oc_${dirName.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
   // Return v2 format as primary
   return `@${localpart}_v2:${MATRIX_DOMAIN}`;
 }
@@ -76,11 +81,15 @@ function deriveMatrixIdentity(directory: string): string {
  * Derive both old and new Matrix identity formats
  */
 function deriveMatrixIdentities(directory: string): string[] {
-  const dirName = directory.split('/').filter(p => p).pop() || 'default';
-  const localpart = `oc_${dirName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+  const dirName =
+    directory
+      .split("/")
+      .filter((p) => p)
+      .pop() || "default";
+  const localpart = `oc_${dirName.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
   return [
-    `@${localpart}:${MATRIX_DOMAIN}`,      // old format
-    `@${localpart}_v2:${MATRIX_DOMAIN}`,   // new v2 format
+    `@${localpart}:${MATRIX_DOMAIN}`, // old format
+    `@${localpart}_v2:${MATRIX_DOMAIN}`, // new v2 format
   ];
 }
 
@@ -92,7 +101,7 @@ function extractOpenCodeMentions(body: string): string[] {
   // Match both old @oc_xxx and new @oc_xxx_v2 patterns
   const mentionRegex = /@oc_[a-z0-9_]+(_v2)?:[a-z0-9._-]+/gi;
   const matches = body.match(mentionRegex) || [];
-  return [...new Set(matches)];  // Deduplicate
+  return [...new Set(matches)]; // Deduplicate
 }
 
 /**
@@ -111,33 +120,50 @@ function extractDirNameFromMxid(mxid: string): string | null {
  * Find a registration by trying to match MXID to discovered OpenCode instances
  * This is called when no direct registration is found for an @mention
  */
-async function findOrCreateRegistrationForMxid(mxid: string): Promise<OpenCodeRegistration | undefined> {
+async function findOrCreateRegistrationForMxid(
+  mxid: string,
+): Promise<OpenCodeRegistration | undefined> {
   const dirNamePattern = extractDirNameFromMxid(mxid);
   if (!dirNamePattern) {
-    console.log(`[Bridge] Could not extract directory pattern from MXID: ${mxid}`);
+    console.log(
+      `[Bridge] Could not extract directory pattern from MXID: ${mxid}`,
+    );
     return undefined;
   }
-  
-  console.log(`[Bridge] Looking for OpenCode instance matching pattern: ${dirNamePattern}`);
-  
+
+  console.log(
+    `[Bridge] Looking for OpenCode instance matching pattern: ${dirNamePattern}`,
+  );
+
   // First, run discovery to find any running OpenCode instances
   await discoverAllOpenCodeInstances();
-  
+
   // Check if we now have a registration for this MXID
   let registration = identityToRegistration.get(mxid);
   if (registration) {
-    console.log(`[Bridge] Found registration after discovery: ${registration.id}`);
+    console.log(
+      `[Bridge] Found registration after discovery: ${registration.id}`,
+    );
     return registration;
   }
-  
+
   // Try to find a registration whose directory matches the pattern
   // The pattern might be "letta" which should match "/opt/stacks/letta" or "/opt/stacks/letta-code"
   for (const [id, reg] of registrations.entries()) {
-    const regDirName = reg.directory.split('/').filter(p => p).pop() || '';
-    const regDirNormalized = regDirName.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    
+    const regDirName =
+      reg.directory
+        .split("/")
+        .filter((p) => p)
+        .pop() || "";
+    const regDirNormalized = regDirName
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "_");
+
     // Check if the directory name matches the pattern
-    if (regDirNormalized === dirNamePattern || regDirNormalized.startsWith(dirNamePattern)) {
+    if (
+      regDirNormalized === dirNamePattern ||
+      regDirNormalized.startsWith(dirNamePattern)
+    ) {
       // Check if this registration's derived identities include our target MXID
       const derivedIdentities = deriveMatrixIdentities(reg.directory);
       if (derivedIdentities.includes(mxid)) {
@@ -148,30 +174,38 @@ async function findOrCreateRegistrationForMxid(mxid: string): Promise<OpenCodeRe
       }
     }
   }
-  
+
   console.log(`[Bridge] No matching OpenCode instance found for ${mxid}`);
   return undefined;
 }
 
 // Load agent mappings
 function loadAgentMappings(): void {
-  if (config.bridge.agentMappingsPath && existsSync(config.bridge.agentMappingsPath)) {
+  if (
+    config.bridge.agentMappingsPath &&
+    existsSync(config.bridge.agentMappingsPath)
+  ) {
     try {
-      agentMappings = JSON.parse(readFileSync(config.bridge.agentMappingsPath, 'utf-8'));
-      console.log(`[Bridge] Loaded ${Object.keys(agentMappings).length} agent mappings`);
+      agentMappings = JSON.parse(
+        readFileSync(config.bridge.agentMappingsPath, "utf-8"),
+      );
+      console.log(
+        `[Bridge] Loaded ${Object.keys(agentMappings).length} agent mappings`,
+      );
     } catch (e) {
-      console.error('[Bridge] Failed to load agent mappings:', e);
+      console.error("[Bridge] Failed to load agent mappings:", e);
     }
   }
 }
 
 // Get agent info from room
 function getAgentForRoom(roomId: string): AgentMapping | undefined {
-  return Object.values(agentMappings).find(m => m.room_id === roomId);
+  return Object.values(agentMappings).find((m) => m.room_id === roomId);
 }
 
 // Discovery service URL (runs on host, accessible via localhost since we use network_mode: host)
-const DISCOVERY_SERVICE_URL = process.env.DISCOVERY_SERVICE_URL || 'http://127.0.0.1:3202';
+const DISCOVERY_SERVICE_URL =
+  process.env.DISCOVERY_SERVICE_URL || "http://127.0.0.1:3202";
 
 interface DiscoveredInstance {
   pid: number;
@@ -189,55 +223,57 @@ async function discoverAllOpenCodeInstances(): Promise<void> {
       console.log(`[Bridge] Discovery service returned ${response.status}`);
       return;
     }
-    
+
     const instances: DiscoveredInstance[] = await response.json();
-    
+
     if (instances.length === 0) {
-      console.log('[Bridge] No OpenCode instances discovered');
+      console.log("[Bridge] No OpenCode instances discovered");
       return;
     }
-    
+
     console.log(`[Bridge] Discovered ${instances.length} OpenCode instance(s)`);
-    
+
     for (const instance of instances) {
       const { pid, directory, port, hostname } = instance;
-      
+
       if (!directory || !port || port <= 0) {
         continue;
       }
-      
+
       const id = `${hostname}:${port}:opencode-${pid}`;
-      
+
       // Check if already registered with correct port
       const existing = registrations.get(id);
       if (existing) {
         existing.lastSeen = Date.now();
         continue;
       }
-      
+
       // Create new registration
       const registration: OpenCodeRegistration = {
         id,
         port,
-        hostname: hostname || '127.0.0.1',
+        hostname: hostname || "127.0.0.1",
         sessionId: `opencode-${pid}`,
         directory,
         rooms: [],
         registeredAt: Date.now(),
         lastSeen: Date.now(),
       };
-      
+
       registrations.set(id, registration);
-      
+
       // Also map both identity formats to this registration
       const matrixIdentities = deriveMatrixIdentities(directory);
       for (const identity of matrixIdentities) {
         identityToRegistration.set(identity, registration);
       }
-      
-      console.log(`[Bridge] Auto-discovered OpenCode: ${id} (${directory}) -> ${matrixIdentities.join(', ')}`);
+
+      console.log(
+        `[Bridge] Auto-discovered OpenCode: ${id} (${directory}) -> ${matrixIdentities.join(", ")}`,
+      );
     }
-    
+
     // Clean up stale registrations (older than 5 minutes)
     const STALE_TIMEOUT = 300000; // 5 minutes
     const now = Date.now();
@@ -253,47 +289,33 @@ async function discoverAllOpenCodeInstances(): Promise<void> {
       }
     }
   } catch (error) {
-    console.error('[Bridge] Failed to discover OpenCode instances:', error);
+    console.error("[Bridge] Failed to discover OpenCode instances:", error);
   }
-}
-
-// Discover OpenCode port dynamically
-async function discoverOpenCodePort(directory: string): Promise<number | null> {
-  try {
-    const { execSync } = await import('child_process');
-    // Find opencode process listening port
-    const result = execSync("ss -tlnp | grep opencode | grep -oP ':\\K\\d+' | head -1", { encoding: 'utf-8' }).trim();
-    const port = parseInt(result, 10);
-    if (port && port > 0) {
-      console.log(`[Bridge] Discovered OpenCode port: ${port}`);
-      return port;
-    }
-  } catch (error) {
-    console.error('[Bridge] Failed to discover OpenCode port:', error);
-  }
-  return null;
 }
 
 // Get the most recently active session ID for a directory
-async function getActiveSessionId(baseUrl: string, directory: string): Promise<string | null> {
+async function getActiveSessionId(
+  baseUrl: string,
+  directory: string,
+): Promise<string | null> {
   try {
     const client = createOpencodeClient({ baseUrl });
     const result = await client.session.list();
-    
+
     if (!result.data) {
       return null;
     }
-    
+
     // Find sessions for this directory, sorted by most recently updated
     const sessions = result.data
       .filter((s: any) => s.directory === directory)
       .sort((a: any, b: any) => b.time.updated - a.time.updated);
-    
+
     if (sessions.length > 0) {
       return sessions[0].id;
     }
   } catch (error) {
-    console.error('[Bridge] Failed to list sessions:', error);
+    console.error("[Bridge] Failed to list sessions:", error);
   }
   return null;
 }
@@ -305,119 +327,162 @@ async function forwardToOpenCode(
   sender: string,
   content: string,
   eventId: string,
-  agentNameOverride?: string
+  agentNameOverride?: string,
+): Promise<boolean> {
+  // Use override if provided, otherwise look up from room
+  const agentName =
+    agentNameOverride || getAgentForRoom(roomId)?.agent_name || "Unknown Agent";
+
+  // Format the message for injection
+  const messageText = `[Message from ${agentName}]\n${content}`;
+
+  // Try to forward with current registration
+  const result = await tryForwardToRegistration(
+    registration,
+    messageText,
+    content,
+  );
+  if (result) {
+    return true;
+  }
+
+  // If failed, run discovery to find updated ports
+  console.log(
+    `[Bridge] Forward failed, running discovery service to refresh registrations...`,
+  );
+  await discoverAllOpenCodeInstances();
+
+  // Find the updated registration for this directory
+  const updatedRegistration = findRegistrationByDirectory(
+    registration.directory,
+  );
+  if (!updatedRegistration) {
+    console.error(
+      `[Bridge] No registration found for directory after discovery: ${registration.directory}`,
+    );
+    return false;
+  }
+
+  // If port changed, try again with updated registration
+  if (updatedRegistration.port !== registration.port) {
+    console.log(
+      `[Bridge] Port changed from ${registration.port} to ${updatedRegistration.port}, retrying...`,
+    );
+    return await tryForwardToRegistration(
+      updatedRegistration,
+      messageText,
+      content,
+    );
+  }
+
+  console.error(
+    `[Bridge] Forward failed and no port change detected for ${registration.directory}`,
+  );
+  return false;
+}
+
+// Helper: Find registration by directory
+function findRegistrationByDirectory(
+  directory: string,
+): OpenCodeRegistration | undefined {
+  for (const reg of registrations.values()) {
+    if (reg.directory === directory) {
+      return reg;
+    }
+  }
+  return undefined;
+}
+
+// Helper: Try to forward message to a specific registration
+async function tryForwardToRegistration(
+  registration: OpenCodeRegistration,
+  messageText: string,
+  contentPreview: string,
 ): Promise<boolean> {
   try {
-    let port = registration.port;
-    let hostname = registration.hostname;
-    
-    // Try the registered port first
-    let client = createOpencodeClient({
+    const { port, hostname } = registration;
+
+    const client = createOpencodeClient({
       baseUrl: `http://${hostname}:${port}`,
     });
 
-    // Use override if provided, otherwise look up from room
-    const agentName = agentNameOverride || getAgentForRoom(roomId)?.agent_name || 'Unknown Agent';
-    
-    // Format the message for injection
-    const messageText = `[Message from ${agentName}]\n${content}`;
+    // Get the actual active session ID for this directory
+    const sessionId = await getActiveSessionId(
+      `http://${hostname}:${port}`,
+      registration.directory,
+    );
 
-    try {
-      // Get the actual active session ID for this directory
-      const sessionId = await getActiveSessionId(`http://${hostname}:${port}`, registration.directory);
-      
-      if (!sessionId) {
-        console.error(`[Bridge] No active session found for directory: ${registration.directory}`);
-        return false;
-      }
-      
-      // Send message to session - let the OpenCode agent see and respond to it
-      // Using prompt WITHOUT noReply so the AI actually processes the message
-      await client.session.prompt({
-        path: { id: sessionId },
-        body: {
-          parts: [{ type: 'text', text: messageText }],
-        },
-      });
-
-      console.log(`[Bridge] Forwarded message to OpenCode ${registration.id} (session ${sessionId}): ${content.substring(0, 50)}...`);
-      return true;
-    } catch (firstError) {
-      // If registered port failed, try to discover the current port
-      console.log(`[Bridge] Registered port ${port} failed, attempting discovery...`);
-      const discoveredPort = await discoverOpenCodePort(registration.directory);
-      
-      if (discoveredPort && discoveredPort !== port) {
-        console.log(`[Bridge] Retrying with discovered port ${discoveredPort}`);
-        client = createOpencodeClient({
-          baseUrl: `http://${hostname}:${discoveredPort}`,
-        });
-        
-        // Get session ID for the discovered port
-        const sessionId = await getActiveSessionId(`http://${hostname}:${discoveredPort}`, registration.directory);
-        
-        if (!sessionId) {
-          console.error(`[Bridge] No active session found on discovered port`);
-          throw firstError;
-        }
-        
-        await client.session.prompt({
-          path: { id: sessionId },
-          body: {
-            noReply: true,
-            parts: [{ type: 'text', text: messageText }],
-          },
-        });
-        
-        // Update the registration with the new port
-        registration.port = discoveredPort;
-        registration.lastSeen = Date.now();
-        
-        console.log(`[Bridge] Forwarded message to OpenCode on discovered port ${discoveredPort} (session ${sessionId}): ${content.substring(0, 50)}...`);
-        return true;
-      }
-      
-      throw firstError;
+    if (!sessionId) {
+      console.error(
+        `[Bridge] No active session found for directory: ${registration.directory}`,
+      );
+      return false;
     }
+
+    // Send message to session - let the OpenCode agent see and respond to it
+    await client.session.prompt({
+      path: { id: sessionId },
+      body: {
+        parts: [{ type: "text", text: messageText }],
+      },
+    });
+
+    // Update last seen on success
+    registration.lastSeen = Date.now();
+
+    console.log(
+      `[Bridge] Forwarded message to OpenCode ${registration.id} (session ${sessionId}): ${contentPreview.substring(0, 50)}...`,
+    );
+    return true;
   } catch (error) {
-    console.error(`[Bridge] Failed to forward to OpenCode ${registration.id}:`, error);
+    console.error(
+      `[Bridge] Failed to forward to OpenCode ${registration.id}:`,
+      error,
+    );
     return false;
   }
 }
 
 // Handle incoming Matrix message - forward ONLY if message @mentions an OpenCode identity
-async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Promise<void> {
+async function handleMatrixMessage(
+  event: sdk.MatrixEvent,
+  room: sdk.Room,
+): Promise<void> {
   // Ignore our own messages
   if (event.getSender() === matrixClient?.getUserId()) return;
-  
+
   // Only handle text messages
-  if (event.getType() !== 'm.room.message') return;
+  if (event.getType() !== "m.room.message") return;
   const content = event.getContent();
-  if (content.msgtype !== 'm.text') return;
+  if (content.msgtype !== "m.text") return;
 
   const roomId = room.roomId;
-  const sender = event.getSender() || 'unknown';
-  const body = content.body || '';
+  const sender = event.getSender() || "unknown";
+  const body = content.body || "";
 
   // Extract @oc_* mentions from the message
   const mentions = extractOpenCodeMentions(body);
-  
+
   // If no OpenCode mentions, ignore this message entirely
   if (mentions.length === 0) {
     return;
   }
 
-  console.log(`[Bridge] Message with @mention(s): ${mentions.join(', ')} from ${sender}`);
+  console.log(
+    `[Bridge] Message with @mention(s): ${mentions.join(", ")} from ${sender}`,
+  );
 
   // Forward to each mentioned OpenCode identity
   for (const mention of mentions) {
     let registration = identityToRegistration.get(mention);
-    
+
     if (!registration) {
-      console.log(`[Bridge] No registration found for ${mention}, attempting discovery...`);
+      console.log(
+        `[Bridge] No registration found for ${mention}, attempting discovery...`,
+      );
       // Try to find or create a registration by discovering running OpenCode instances
       registration = await findOrCreateRegistrationForMxid(mention);
-      
+
       if (!registration) {
         console.log(`[Bridge] Could not find OpenCode instance for ${mention}`);
         continue;
@@ -426,18 +491,19 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
 
     // Get sender's display name for better context
     const senderMember = room.getMember?.(sender);
-    const senderName = senderMember?.name || getAgentForRoom(roomId)?.agent_name || sender;
-    
+    const senderName =
+      senderMember?.name || getAgentForRoom(roomId)?.agent_name || sender;
+
     console.log(`[Bridge] Forwarding to ${registration.id} (${mention})`);
-    
+
     try {
       await forwardToOpenCode(
         registration,
         roomId,
         sender,
         body,
-        event.getId() || '',
-        senderName
+        event.getId() || "",
+        senderName,
       );
     } catch (error) {
       console.error(`[Bridge] Failed to forward to ${registration.id}:`, error);
@@ -448,42 +514,49 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
 // Initialize Matrix client
 async function initMatrix(): Promise<void> {
   if (!config.matrix.accessToken) {
-    console.error('[Bridge] No Matrix access token configured');
+    console.error("[Bridge] No Matrix access token configured");
     return;
   }
 
   matrixClient = sdk.createClient({
     baseUrl: config.matrix.homeserverUrl,
     accessToken: config.matrix.accessToken,
-    userId: '@oc_matrix_synapse_deployment_v2:matrix.oculair.ca', // The OpenCode identity (v2)
+    userId: "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca", // The OpenCode identity (v2)
   });
 
   // Set up event handlers
   matrixClient.on(sdk.RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
     // Skip old messages during initial sync
     if (toStartOfTimeline) return;
-    
+
     const eventType = event.getType();
     const sender = event.getSender();
-    
+
     // Log all message events for debugging
-    if (eventType === 'm.room.message') {
+    if (eventType === "m.room.message") {
       const content = event.getContent();
-      console.log(`[Bridge] Timeline event: type=${eventType}, sender=${sender}, body="${content.body?.substring(0, 50)}..."`);
+      console.log(
+        `[Bridge] Timeline event: type=${eventType}, sender=${sender}, body="${content.body?.substring(0, 50)}..."`,
+      );
     }
-    
+
     if (room) {
-      handleMatrixMessage(event, room).catch(err => {
-        console.error('[Bridge] Error in handleMatrixMessage:', err);
+      handleMatrixMessage(event, room).catch((err) => {
+        console.error("[Bridge] Error in handleMatrixMessage:", err);
       });
     }
   });
 
   // Auto-accept room invites
   matrixClient.on(sdk.RoomMemberEvent.Membership, async (event, member) => {
-    if (member.membership === 'invite' && member.userId === matrixClient?.getUserId()) {
+    if (
+      member.membership === "invite" &&
+      member.userId === matrixClient?.getUserId()
+    ) {
       const roomId = member.roomId;
-      console.log(`[Bridge] Received invite to room ${roomId}, auto-accepting...`);
+      console.log(
+        `[Bridge] Received invite to room ${roomId}, auto-accepting...`,
+      );
       try {
         await matrixClient?.joinRoom(roomId);
         console.log(`[Bridge] Successfully joined room ${roomId}`);
@@ -495,75 +568,91 @@ async function initMatrix(): Promise<void> {
 
   // Start syncing
   await matrixClient.startClient({ initialSyncLimit: 0 });
-  console.log('[Bridge] Matrix client started, syncing...');
+  console.log("[Bridge] Matrix client started, syncing...");
 }
 
 // HTTP API handlers
-async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const url = new URL(req.url || '/', `http://localhost:${config.bridge.port}`);
-  
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+async function handleRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const url = new URL(req.url || "/", `http://localhost:${config.bridge.port}`);
 
-  if (req.method === 'OPTIONS') {
+  // CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
     return;
   }
 
   // Health check
-  if (url.pathname === '/health' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      status: 'ok', 
-      registrations: registrations.size,
-      matrixConnected: matrixClient?.isLoggedIn() || false 
-    }));
+  if (url.pathname === "/health" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        registrations: registrations.size,
+        matrixConnected: matrixClient?.isLoggedIn() || false,
+      }),
+    );
     return;
   }
 
   // List registrations
-  if (url.pathname === '/registrations' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      count: registrations.size,
-      registrations: Array.from(registrations.values()),
-    }));
+  if (url.pathname === "/registrations" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        count: registrations.size,
+        registrations: Array.from(registrations.values()),
+      }),
+    );
     return;
   }
 
   // Discover OpenCode instances - manually trigger discovery
-  if (url.pathname === '/discover' && (req.method === 'GET' || req.method === 'POST')) {
+  if (
+    url.pathname === "/discover" &&
+    (req.method === "GET" || req.method === "POST")
+  ) {
     try {
       await discoverAllOpenCodeInstances();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        success: true,
-        count: registrations.size,
-        registrations: Array.from(registrations.values()),
-        identityMappings: Object.fromEntries(identityToRegistration)
-      }));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          success: true,
+          count: registrations.size,
+          registrations: Array.from(registrations.values()),
+          identityMappings: Object.fromEntries(identityToRegistration),
+        }),
+      );
     } catch (error) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: String(error) }));
     }
     return;
   }
 
   // Register OpenCode instance
-  if (url.pathname === '/register' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
+  if (url.pathname === "/register" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
       try {
         const data = JSON.parse(body);
         const { port, hostname, sessionId, directory, rooms } = data;
 
         if (!port || !sessionId || !directory) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Missing required fields: port, sessionId, directory' }));
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: "Missing required fields: port, sessionId, directory",
+            }),
+          );
           return;
         }
 
@@ -580,40 +669,44 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         };
 
         registrations.set(id, registration);
-        
+
         // Map both old and new Matrix identity formats to this registration
         const matrixIdentities = deriveMatrixIdentities(directory);
         for (const identity of matrixIdentities) {
           identityToRegistration.set(identity, registration);
         }
-        console.log(`[Bridge] Registered: ${id} -> ${matrixIdentities.join(', ')}`);
+        console.log(
+          `[Bridge] Registered: ${id} -> ${matrixIdentities.join(", ")}`,
+        );
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, id, matrixIdentities, registration }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({ success: true, id, matrixIdentities, registration }),
+        );
       } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
       }
     });
     return;
   }
 
   // Heartbeat - keep registration alive
-  if (url.pathname === '/heartbeat' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
+  if (url.pathname === "/heartbeat" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
       try {
         const data = JSON.parse(body);
         const { id, directory } = data;
 
         // Find registration by ID or directory
         let registration: OpenCodeRegistration | undefined;
-        
+
         if (id) {
           registration = registrations.get(id);
         }
-        
+
         if (!registration && directory) {
           // Find by directory
           for (const reg of registrations.values()) {
@@ -626,75 +719,91 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
         if (registration) {
           registration.lastSeen = Date.now();
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true, id: registration.id, lastSeen: registration.lastSeen }));
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              success: true,
+              id: registration.id,
+              lastSeen: registration.lastSeen,
+            }),
+          );
         } else {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Registration not found', id, directory }));
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ error: "Registration not found", id, directory }),
+          );
         }
       } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
       }
     });
     return;
   }
 
   // Unregister OpenCode instance
-  if (url.pathname === '/unregister' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
+  if (url.pathname === "/unregister" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
       try {
         const { id } = JSON.parse(body);
         const registration = registrations.get(id);
         const deleted = registrations.delete(id);
-        
+
         // Also remove from identity map (both old and new formats)
         if (registration) {
-          const matrixIdentities = deriveMatrixIdentities(registration.directory);
+          const matrixIdentities = deriveMatrixIdentities(
+            registration.directory,
+          );
           for (const identity of matrixIdentities) {
             identityToRegistration.delete(identity);
           }
-          console.log(`[Bridge] Unregistered: ${id} (${matrixIdentities.join(', ')})`);
+          console.log(
+            `[Bridge] Unregistered: ${id} (${matrixIdentities.join(", ")})`,
+          );
         }
-        
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+
+        res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: deleted }));
       } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
       }
     });
     return;
   }
 
   // List available rooms (from agent mappings)
-  if (url.pathname === '/rooms' && req.method === 'GET') {
-    const rooms = Object.values(agentMappings).map(m => ({
+  if (url.pathname === "/rooms" && req.method === "GET") {
+    const rooms = Object.values(agentMappings).map((m) => ({
       room_id: m.room_id,
       agent_name: m.agent_name,
       agent_id: m.agent_id,
     }));
-    
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+
+    res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ count: rooms.length, rooms }));
     return;
   }
 
   // Notify OpenCode instance - explicit message forwarding
   // Called by MCP tool when an agent wants to send to OpenCode
-  if (url.pathname === '/notify' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', async () => {
+  if (url.pathname === "/notify" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", async () => {
       try {
         const data = JSON.parse(body);
         const { directory, message, sender, agentName } = data;
 
         if (!directory || !message) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Missing required fields: directory, message' }));
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: "Missing required fields: directory, message",
+            }),
+          );
           return;
         }
 
@@ -703,56 +812,68 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         for (const reg of registrations.values()) {
           if (reg.directory === directory) {
             // Pick the most recently registered/seen one
-            if (!targetRegistration || reg.lastSeen > targetRegistration.lastSeen) {
+            if (
+              !targetRegistration ||
+              reg.lastSeen > targetRegistration.lastSeen
+            ) {
               targetRegistration = reg;
             }
           }
         }
 
         if (!targetRegistration) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ 
-            error: 'No OpenCode instance registered for directory', 
-            directory,
-            registeredDirectories: Array.from(registrations.values()).map(r => r.directory)
-          }));
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: "No OpenCode instance registered for directory",
+              directory,
+              registeredDirectories: Array.from(registrations.values()).map(
+                (r) => r.directory,
+              ),
+            }),
+          );
           return;
         }
 
         // Forward to OpenCode
         const success = await forwardToOpenCode(
           targetRegistration,
-          '', // roomId not needed for explicit notify
-          sender || 'unknown',
+          "", // roomId not needed for explicit notify
+          sender || "unknown",
           message,
-          '', // eventId not needed
-          agentName // pass agent name for cleaner formatting
+          "", // eventId not needed
+          agentName, // pass agent name for cleaner formatting
         );
 
         if (success) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true, forwarded_to: targetRegistration.id }));
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              success: true,
+              forwarded_to: targetRegistration.id,
+            }),
+          );
         } else {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Failed to forward to OpenCode' }));
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Failed to forward to OpenCode" }));
         }
       } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
       }
     });
     return;
   }
 
   // 404
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Not found' }));
+  res.writeHead(404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: "Not found" }));
 }
 
 // Main
 async function main(): Promise<void> {
-  console.log('[Bridge] Starting OpenCode Matrix Bridge...');
-  
+  console.log("[Bridge] Starting OpenCode Matrix Bridge...");
+
   // Load agent mappings
   loadAgentMappings();
 
@@ -767,7 +888,9 @@ async function main(): Promise<void> {
 
   // Start periodic cleanup of stale registrations
   const STALE_TIMEOUT = 300000; // 5 minutes
-  console.log('[Bridge] Starting registration cleanup (stale after 5 minutes)...');
+  console.log(
+    "[Bridge] Starting registration cleanup (stale after 5 minutes)...",
+  );
   discoveryInterval = setInterval(async () => {
     const now = Date.now();
     for (const [id, reg] of registrations.entries()) {
@@ -783,20 +906,24 @@ async function main(): Promise<void> {
     }
   }, 60000); // Clean up every 60 seconds
 
-  console.log('[Bridge] OpenCode Matrix Bridge ready!');
-  console.log('[Bridge] Endpoints:');
+  console.log("[Bridge] OpenCode Matrix Bridge ready!");
+  console.log("[Bridge] Endpoints:");
   console.log(`  POST /register    - Register OpenCode instance`);
-  console.log(`  POST /heartbeat   - Keep registration alive (call every 2-3 min)`);
+  console.log(
+    `  POST /heartbeat   - Keep registration alive (call every 2-3 min)`,
+  );
   console.log(`  POST /unregister  - Unregister OpenCode instance`);
   console.log(`  POST /notify      - Forward message to OpenCode instance`);
   console.log(`  GET  /registrations - List registered instances`);
   console.log(`  GET  /rooms       - List available agent rooms`);
   console.log(`  GET  /health      - Health check`);
-  console.log('[Bridge] Registrations expire after 5 minutes without heartbeat');
+  console.log(
+    "[Bridge] Registrations expire after 5 minutes without heartbeat",
+  );
 }
 
 // Cleanup on exit
-process.on('SIGTERM', () => {
+process.on("SIGTERM", () => {
   if (discoveryInterval) clearInterval(discoveryInterval);
   process.exit(0);
 });
