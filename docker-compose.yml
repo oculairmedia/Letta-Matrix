@@ -239,7 +239,7 @@ services:
       - homepage.href=http://192.168.50.90:3100
       - homepage.description=Matrix identity bridge MCP with Letta integration and cross-run tracking
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/health"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3101/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
