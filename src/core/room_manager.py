@@ -366,12 +366,13 @@ class MatrixRoomManager:
                 # Now create the room as the agent user (inside the session)
                 room_url = f"{self.homeserver_url}/_matrix/client/r0/createRoom"
 
-                # Define the users to invite: admin users, main letta bot, and opencode bridge
+                # Define the users to invite: admin users, main letta bot, and bridges
                 invites = [
                     "@admin:matrix.oculair.ca",  # Your actual admin account
                     self.admin_username,  # Admin user (matrixadmin)
                     self.config.username,  # Main Letta bot (@letta)
-                    "@oc_matrix_synapse_deployment:matrix.oculair.ca"  # OpenCode bridge bot for inter-agent messaging
+                    "@oc_matrix_synapse_deployment:matrix.oculair.ca",  # OpenCode bridge bot for inter-agent messaging
+                    "@agent_mail_bridge:matrix.oculair.ca"  # Agent Mail bridge for dev agent coordination
                 ]
 
                 room_data = {
