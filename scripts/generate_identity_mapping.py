@@ -19,20 +19,26 @@ def sanitize_for_agent_mail(matrix_name: str) -> str:
     """
     Convert Matrix agent name to valid Agent Mail name
     
+    Strategy:
+    1. For simple names (no special chars), keep as-is: "BMO" → "BMO"
+    2. For complex names, use CamelCase: "Huly - Matrix Synapse" → "HulyMatrixSynapse"
+    
     Examples:
-        "Huly - Matrix Synapse Deployment" → "HulyMatrixSynapse"
         "BMO" → "BMO"
         "Meridian" → "Meridian"
         "GraphitiExplorer" → "GraphitiExplorer"
+        "Huly - Matrix Synapse Deployment" → "HulyMatrixSynapse"
         "letta-cli-agent" → "LettaCliAgent"
     """
-    # Remove special chars except spaces
-    clean = re.sub(r'[^a-zA-Z0-9\s]', '', matrix_name)
+    # Check if name is simple (alphanumeric only)
+    if re.match(r'^[a-zA-Z0-9]+$', matrix_name):
+        # Keep as-is (preserves "BMO", "Meridian", etc.)
+        return matrix_name
     
-    # Split and capitalize
+    # Complex name - remove special chars and CamelCase
+    clean = re.sub(r'[^a-zA-Z0-9\s]', '', matrix_name)
     words = clean.split()
     
-    # Handle single word
     if len(words) == 1:
         return words[0].capitalize()
     
