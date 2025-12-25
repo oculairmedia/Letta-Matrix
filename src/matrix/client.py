@@ -773,16 +773,14 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
         )
         client = get_letta_client(sdk_config)
         
-        # Run sync SDK call in thread pool (SDK is synchronous)
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            response = await loop.run_in_executor(
-                executor,
-                lambda: client.agents.messages.create(
-                    agent_id=current_agent_id,
-                    messages=[{"role": "user", "content": message_body}]
-                )
+        # Run sync SDK call in thread (SDK is synchronous)
+        # Use asyncio.to_thread which properly manages the thread pool
+        def _sync_send():
+            return client.agents.messages.create(
+                agent_id=current_agent_id,
+                messages=[{"role": "user", "content": message_body}]
             )
+        response = await asyncio.to_thread(_sync_send)
         
         # Convert SDK response to dict for compatibility with existing code
         if hasattr(response, 'model_dump'):
@@ -1870,14 +1868,21 @@ async def main():
     logger.info(f"File handler initialized with embedding: model={config.embedding_model}, endpoint={config.embedding_endpoint or 'default'}, dim={config.embedding_dim}")
 
     # Add the callback for text messages with config and logger
+    # Wrap in try/except to prevent callback errors from breaking the sync loop
     async def callback_wrapper(room, event):
-        await message_callback(room, event, config, logger, client)
+        try:
+            await message_callback(room, event, config, logger, client)
+        except Exception as e:
+            logger.error(f"Error in message callback: {e}", exc_info=True)
     
     client.add_event_callback(callback_wrapper, RoomMessageText)
     
     # Add the callback for file messages
     async def file_callback_wrapper(room, event):
-        await file_callback(room, event, config, logger, file_handler)
+        try:
+            await file_callback(room, event, config, logger, file_handler)
+        except Exception as e:
+            logger.error(f"Error in file callback: {e}", exc_info=True)
     
     client.add_event_callback(file_callback_wrapper, RoomMessageMedia)
 

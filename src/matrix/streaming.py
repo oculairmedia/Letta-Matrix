@@ -164,8 +164,8 @@ class StepStreamReader:
             thread.start()
             
             # Consume from queue asynchronously
-            loop = asyncio.get_event_loop()
-            start_time = asyncio.get_event_loop().time()
+            loop = asyncio.get_running_loop()
+            start_time = loop.time()
             
             while True:
                 # Check timeout

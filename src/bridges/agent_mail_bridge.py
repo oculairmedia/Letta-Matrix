@@ -63,6 +63,7 @@ class AgentMailBridge:
         """
         self.matrix_homeserver = matrix_homeserver
         self.matrix_user_id = matrix_user_id
+        self.matrix_access_token = matrix_access_token
         self.agent_mail_url = agent_mail_url
         self.data_dir = Path(data_dir)
         self.poll_interval = poll_interval
@@ -87,8 +88,12 @@ class AgentMailBridge:
         # Last poll timestamps per agent
         self.last_poll_times = {}
         
-        # Track processed messages to avoid duplicates
+        # Track processed messages per agent to avoid duplicates
+        # Key: (agent_id, message_id) to allow same message to different recipients
         self.processed_messages = set()
+        
+        # Reverse lookup: code_name -> friendly_name
+        self.code_name_to_friendly = {}
     
     def load_identity_mapping(self) -> Dict[str, dict]:
         """
@@ -214,10 +219,47 @@ class AgentMailBridge:
                 }
             }
             
-            response = await self.http_client.post(self.agent_mail_url, json=payload)
+            # Add authentication header if token is available
+            headers = {}
+            api_token = os.getenv('AGENT_MAIL_API_TOKEN')
+            if api_token:
+                headers['Authorization'] = f'Bearer {api_token}'
+            
+            response = await self.http_client.post(
+                self.agent_mail_url, 
+                json=payload,
+                headers=headers if headers else None
+            )
             
             if response.status_code == 200:
-                logger.info(f"Successfully registered {mail_name}")
+                # Parse the response to get the assigned agent name
+                result = response.json()
+                
+                # MCP response structure: check for the assigned name
+                assigned_name = None
+                if isinstance(result, dict):
+                    # Try to extract from MCP response structure
+                    if 'result' in result:
+                        mcp_result = result['result']
+                        if isinstance(mcp_result, dict) and 'content' in mcp_result:
+                            # Parse structured content
+                            for content_item in mcp_result['content']:
+                                if content_item.get('type') == 'text':
+                                    # Extract agent name from text response
+                                    text = content_item.get('text', '')
+                                    if 'assigned name:' in text.lower():
+                                        # Extract the name after "assigned name:"
+                                        parts = text.split('assigned name:', 1)
+                                        if len(parts) > 1:
+                                            assigned_name = parts[1].strip().split()[0]
+                
+                # Update mapping with assigned name if we got one
+                if assigned_name:
+                    agent_info['agent_mail_name'] = assigned_name
+                    logger.info(f"Registered {mail_name} -> assigned name: {assigned_name}")
+                else:
+                    logger.info(f"Successfully registered {mail_name}")
+                    
                 agent_info['agent_mail_registered'] = True
                 self.save_identity_mapping()
                 return True
@@ -265,7 +307,17 @@ class AgentMailBridge:
             if since_ts:
                 payload["params"]["arguments"]["since_ts"] = since_ts
             
-            response = await self.http_client.post(self.agent_mail_url, json=payload)
+            # Add authentication header if token is available
+            headers = {}
+            api_token = os.getenv('AGENT_MAIL_API_TOKEN')
+            if api_token:
+                headers['Authorization'] = f'Bearer {api_token}'
+            
+            response = await self.http_client.post(
+                self.agent_mail_url, 
+                json=payload,
+                headers=headers if headers else None
+            )
             
             if response.status_code == 200:
                 result = response.json()
@@ -319,10 +371,14 @@ class AgentMailBridge:
         if importance in ['high', 'urgent']:
             importance_icon = '⚠️ '
         
+        # Look up friendly name from code name
+        code_name = message.get('from', 'Unknown')
+        friendly_name = self.code_name_to_friendly.get(code_name, code_name)
+        
         lines = [
             "📬 **Agent Mail Message**",
             "",
-            f"**From:** {message.get('from', 'Unknown')}",
+            f"**From:** {friendly_name}",
             f"**Subject:** {message.get('subject', 'No subject')}",
         ]
         
@@ -363,9 +419,10 @@ class AgentMailBridge:
             logger.error(f"No room_id for agent {agent_id}")
             return
         
-        # Check if already processed
+        # Check if already processed for THIS agent
         msg_id = message.get('id')
-        if msg_id and msg_id in self.processed_messages:
+        dedup_key = (agent_id, msg_id) if msg_id else None
+        if dedup_key and dedup_key in self.processed_messages:
             return
         
         # Format message
@@ -374,23 +431,27 @@ class AgentMailBridge:
         logger.info(f"Sending to room {room_id}: {body[:100]}...")
         
         try:
-            # Send to Matrix room
-            response = await self.matrix_client.room_send(
-                room_id=room_id,
-                message_type="m.room.message",
-                content={
-                    "msgtype": "m.notice",
+            # Send to Matrix room via direct HTTP (avoids nio sync issues)
+            import uuid
+            txn_id = str(uuid.uuid4())
+            url = f"{self.matrix_homeserver}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
+            
+            response = await self.http_client.put(
+                url,
+                params={"access_token": self.matrix_access_token},
+                json={
+                    "msgtype": "m.text",
                     "body": body,
                     "format": "org.matrix.custom.html",
                     "formatted_body": self.markdown_to_html(body)
                 }
             )
             
-            logger.info(f"Forwarded message to Matrix room {room_id}, response: {response}")
+            logger.info(f"Forwarded message to Matrix room {room_id}, status: {response.status_code}")
             
-            # Mark as processed
-            if msg_id:
-                self.processed_messages.add(msg_id)
+            # Mark as processed for this agent
+            if dedup_key:
+                self.processed_messages.add(dedup_key)
                 
         except Exception as e:
             logger.error(f"Error sending to Matrix room {room_id}: {e}", exc_info=True)
@@ -422,8 +483,9 @@ class AgentMailBridge:
                 for agent_id, agent_info in self.identity_map.items():
                     mail_name = agent_info['agent_mail_name']
                     
-                    # NOTE: Skip auto-registration - agents self-register when using Agent Mail
-                    # The bridge will start forwarding once agents begin using Agent Mail
+                    # Auto-register agent if not already registered
+                    if not agent_info.get('agent_mail_registered'):
+                        await self.register_agent_in_mail(agent_id)
                     
                     # Fetch new messages (will return empty if agent not yet registered)
                     messages = await self.fetch_agent_mail_inbox(mail_name)
@@ -431,6 +493,9 @@ class AgentMailBridge:
                     # Forward to Matrix
                     for msg in messages:
                         await self.send_to_matrix(agent_id, msg)
+                    
+                    # Small delay between agents to avoid overwhelming Agent Mail
+                    await asyncio.sleep(0.1)
                 
                 # Wait before next poll
                 await asyncio.sleep(self.poll_interval)
@@ -522,11 +587,18 @@ class AgentMailBridge:
         """Join all agent rooms so bridge can listen to messages"""
         logger.info("Joining all agent rooms")
         
-        # First, check for and accept any invitations
-        sync_response = await self.matrix_client.sync(timeout=10000)
+        # First, check for and accept any invitations (with timeout)
+        try:
+            sync_response = await asyncio.wait_for(
+                self.matrix_client.sync(timeout=10000), 
+                timeout=15
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Sync for room invitations timed out, skipping invitation check")
+            sync_response = None
         
         # Check if sync was successful (SyncResponse type, not SyncError)
-        if isinstance(sync_response, SyncResponse) and sync_response.rooms.invite:
+        if sync_response and isinstance(sync_response, SyncResponse) and sync_response.rooms.invite:
             invited_rooms = sync_response.rooms.invite
             logger.info(f"Found {len(invited_rooms)} room invitations")
             for room_id in invited_rooms:
@@ -563,12 +635,27 @@ class AgentMailBridge:
         self.identity_map = self.load_identity_mapping()
         logger.info(f"Loaded {len(self.identity_map)} agent identities")
         
-        # Connect to Matrix
-        logger.info(f"Connecting to Matrix as {self.matrix_user_id}")
-        await self.matrix_client.sync(timeout=30000)
+        # Build reverse lookup: code_name -> friendly_name
+        self.code_name_to_friendly = {}
+        for agent_id, info in self.identity_map.items():
+            code_name = info.get('agent_mail_name')
+            friendly_name = info.get('matrix_name')
+            if code_name and friendly_name:
+                self.code_name_to_friendly[code_name] = friendly_name
+        logger.info(f"Built code name lookup for {len(self.code_name_to_friendly)} agents")
         
-        # Join all agent rooms
-        await self.join_agent_rooms()
+        # Connect to Matrix - skip initial sync since we just need to send messages
+        logger.info(f"Connecting to Matrix as {self.matrix_user_id}")
+        # Use a short timeout for initial sync to avoid blocking
+        try:
+            await asyncio.wait_for(self.matrix_client.sync(timeout=10000), timeout=30)
+            logger.info("Initial sync completed")
+        except asyncio.TimeoutError:
+            logger.warning("Initial sync timed out, continuing anyway (sending should still work)")
+        
+        # Skip room joins - room_send works without joining, and join causes slow syncs
+        # await self.join_agent_rooms()
+        logger.info("Skipping room joins (sending works without joining)")
         
         # Register Matrix message callback
         self.matrix_client.add_event_callback(
