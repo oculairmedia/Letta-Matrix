@@ -24,6 +24,9 @@ from src.matrix.event_dedupe import is_duplicate_event
 # Cross-run tracking webhook URL
 CONVERSATION_TRACKER_URL = os.getenv("CONVERSATION_TRACKER_URL", "http://192.168.50.90:3101")
 
+# Agent Mail MCP server URL for reverse bridge
+AGENT_MAIL_URL = os.getenv("AGENT_MAIL_URL", "http://192.168.50.90:8766/mcp/")
+
 async def register_conversation_for_tracking(
     matrix_event_id: str,
     matrix_room_id: str,
@@ -64,6 +67,130 @@ async def register_conversation_for_tracking(
     except Exception as e:
         logger.warning(f"[CROSS-RUN] Error registering conversation: {e}")
         return False
+
+
+async def forward_to_agent_mail(
+    sender_code_name: str,
+    recipient_code_name: str,
+    subject: str,
+    body_md: str,
+    thread_id: Optional[str],
+    original_message_id: Optional[int],
+    logger: logging.Logger
+) -> bool:
+    """
+    Forward a Matrix response back to Agent Mail (reverse bridge).
+    
+    This is called when an agent responds to a message that originated
+    from Agent Mail, allowing the original sender to see the response.
+    
+    Args:
+        sender_code_name: Agent Mail code name of the responder (e.g., "WhiteStone")
+        recipient_code_name: Agent Mail code name of the original sender (e.g., "BlueCreek")
+        subject: Subject line (typically "Re: <original subject>")
+        body_md: Response body in Markdown
+        thread_id: Original thread ID for reply chain continuity
+        original_message_id: ID of the message being replied to
+        logger: Logger instance
+        
+    Returns:
+        True if forwarded successfully, False otherwise
+    """
+    if not AGENT_MAIL_URL:
+        logger.warning("[REVERSE-BRIDGE] AGENT_MAIL_URL not configured, skipping forward")
+        return False
+    
+    try:
+        # Use reply_message if we have the original message ID, otherwise send_message
+        if original_message_id:
+            payload = {
+                "jsonrpc": "2.0",
+                "id": f"reverse-bridge-{time.time()}",
+                "method": "tools/call",
+                "params": {
+                    "name": "reply_message",
+                    "arguments": {
+                        "project_key": "/opt/stacks/matrix-synapse-deployment",
+                        "message_id": original_message_id,
+                        "sender_name": sender_code_name,
+                        "body_md": body_md,
+                        "to": [recipient_code_name]
+                    }
+                }
+            }
+        else:
+            # Fallback to send_message if no original message ID
+            payload = {
+                "jsonrpc": "2.0",
+                "id": f"reverse-bridge-{time.time()}",
+                "method": "tools/call",
+                "params": {
+                    "name": "send_message",
+                    "arguments": {
+                        "project_key": "/opt/stacks/matrix-synapse-deployment",
+                        "sender_name": sender_code_name,
+                        "to": [recipient_code_name],
+                        "subject": subject,
+                        "body_md": body_md,
+                        "thread_id": thread_id
+                    }
+                }
+            }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                AGENT_MAIL_URL,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    logger.info(f"[REVERSE-BRIDGE] Forwarded response from {sender_code_name} to {recipient_code_name}")
+                    logger.debug(f"[REVERSE-BRIDGE] Response: {result}")
+                    return True
+                else:
+                    response_text = await resp.text()
+                    logger.warning(f"[REVERSE-BRIDGE] Failed to forward: {resp.status} - {response_text[:200]}")
+                    return False
+                    
+    except Exception as e:
+        logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {e}", exc_info=True)
+        return False
+
+
+def load_agent_mail_mappings(logger: logging.Logger) -> Dict[str, Dict[str, Any]]:
+    """
+    Load Agent Mail mappings to get code names for agents.
+    
+    Returns a dict keyed by agent_id with code name and other info.
+    """
+    mappings_file = "/app/data/agent_mail_mappings.json"
+    try:
+        if os.path.exists(mappings_file):
+            with open(mappings_file, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"[REVERSE-BRIDGE] Could not load agent mail mappings: {e}")
+    return {}
+
+
+def get_agent_code_name(agent_id: str, logger: logging.Logger) -> Optional[str]:
+    """
+    Get the Agent Mail code name for a Letta agent ID.
+    
+    Args:
+        agent_id: Letta agent UUID
+        logger: Logger instance
+        
+    Returns:
+        Agent Mail code name (e.g., "WhiteStone") or None if not found
+    """
+    mappings = load_agent_mail_mappings(logger)
+    agent_info = mappings.get(agent_id)
+    if agent_info:
+        return agent_info.get('agent_mail_name')
+    return None
 
 
 # Custom exception classes
@@ -1418,7 +1545,11 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             from_agent_id = None
             from_agent_name = None
             
-            # Method 1: Check for metadata (from MCP tool)
+            # Check if this is a message from Agent Mail bridge (for reverse bridge)
+            is_agent_mail_message = False
+            agent_mail_metadata = None
+            
+            # Method 1: Check for metadata (from MCP tool or Agent Mail bridge)
             if hasattr(event, 'source') and isinstance(event.source, dict):
                 content = event.source.get("content", {})
                 from_agent_id = content.get("m.letta.from_agent_id")
@@ -1427,6 +1558,12 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                 if from_agent_id and from_agent_name:
                     is_inter_agent_message = True
                     logger.info(f"Detected inter-agent message (via metadata) from {from_agent_name} ({from_agent_id})")
+                
+                # Check for Agent Mail bridge metadata
+                agent_mail_metadata = content.get("m.agent_mail")
+                if agent_mail_metadata:
+                    is_agent_mail_message = True
+                    logger.info(f"[REVERSE-BRIDGE] Detected Agent Mail message from {agent_mail_metadata.get('sender_friendly_name', 'Unknown')}")
             
             # Method 2: Check if sender is an agent user (even without metadata)
             if not is_inter_agent_message and os.path.exists(mappings_file):
@@ -1526,6 +1663,33 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
                     "streaming": True,
                     "reply_to": original_event_id
                 })
+                
+                # REVERSE BRIDGE (streaming mode): Forward response back to Agent Mail if original was from bridge
+                if is_agent_mail_message and agent_mail_metadata and room_agent_id:
+                    try:
+                        # Get the responding agent's code name
+                        responder_code_name = get_agent_code_name(room_agent_id, logger)
+                        sender_code_name = agent_mail_metadata.get('sender_code_name')
+                        
+                        if responder_code_name and sender_code_name:
+                            original_subject = agent_mail_metadata.get('subject', 'No subject')
+                            original_msg_id = agent_mail_metadata.get('message_id')
+                            thread_id = agent_mail_metadata.get('thread_id')
+                            
+                            # Forward the response back to Agent Mail
+                            await forward_to_agent_mail(
+                                sender_code_name=responder_code_name,
+                                recipient_code_name=sender_code_name,
+                                subject=f"Re: {original_subject}",
+                                body_md=letta_response,
+                                thread_id=thread_id,
+                                original_message_id=original_msg_id,
+                                logger=logger
+                            )
+                        else:
+                            logger.warning(f"[REVERSE-BRIDGE] Could not get code names: responder={responder_code_name}, sender={sender_code_name}")
+                    except Exception as bridge_error:
+                        logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
             else:
                 # Non-streaming mode (original behavior)
                 letta_response = await send_to_letta_api(message_to_send, event.sender, config, logger, room.room_id)
@@ -1566,6 +1730,33 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
                     "sent_as_agent": sent_as_agent,
                     "reply_to": original_event_id
                 })
+            
+            # REVERSE BRIDGE: Forward response back to Agent Mail if original was from bridge
+            if is_agent_mail_message and agent_mail_metadata and room_agent_id:
+                try:
+                    # Get the responding agent's code name
+                    responder_code_name = get_agent_code_name(room_agent_id, logger)
+                    sender_code_name = agent_mail_metadata.get('sender_code_name')
+                    
+                    if responder_code_name and sender_code_name:
+                        original_subject = agent_mail_metadata.get('subject', 'No subject')
+                        original_msg_id = agent_mail_metadata.get('message_id')
+                        thread_id = agent_mail_metadata.get('thread_id')
+                        
+                        # Forward the response back to Agent Mail
+                        await forward_to_agent_mail(
+                            sender_code_name=responder_code_name,
+                            recipient_code_name=sender_code_name,
+                            subject=f"Re: {original_subject}",
+                            body_md=letta_response,
+                            thread_id=thread_id,
+                            original_message_id=original_msg_id,
+                            logger=logger
+                        )
+                    else:
+                        logger.warning(f"[REVERSE-BRIDGE] Could not get code names: responder={responder_code_name}, sender={sender_code_name}")
+                except Exception as bridge_error:
+                    logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
             
         except LettaApiError as e:
             logger.error("Letta API error in message callback", extra={

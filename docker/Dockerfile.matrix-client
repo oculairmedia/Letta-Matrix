@@ -22,6 +22,9 @@ COPY src/ ./src/
 # Create directories for matrix store and agent mappings
 RUN mkdir -p /app/matrix_store /app/data
 
+# Ensure Python output is not buffered (for real-time logs)
+ENV PYTHONUNBUFFERED=1
+
 # Set environment variables with defaults
 ENV MATRIX_HOMESERVER_URL=http://synapse:8008
 ENV MATRIX_USERNAME=@letta:matrix.oculair.ca

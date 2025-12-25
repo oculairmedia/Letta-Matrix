@@ -436,6 +436,11 @@ class AgentMailBridge:
             txn_id = str(uuid.uuid4())
             url = f"{self.matrix_homeserver}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
             
+            # Include Agent Mail metadata for reverse bridge tracking
+            # This allows matrix-client to forward responses back to Agent Mail
+            sender_code_name = message.get('from', 'Unknown')
+            sender_friendly_name = self.code_name_to_friendly.get(sender_code_name, sender_code_name)
+            
             response = await self.http_client.put(
                 url,
                 params={"access_token": self.matrix_access_token},
@@ -443,7 +448,18 @@ class AgentMailBridge:
                     "msgtype": "m.text",
                     "body": body,
                     "format": "org.matrix.custom.html",
-                    "formatted_body": self.markdown_to_html(body)
+                    "formatted_body": self.markdown_to_html(body),
+                    # Agent Mail metadata for reverse bridge
+                    "m.agent_mail": {
+                        "message_id": msg_id,
+                        "sender_code_name": sender_code_name,
+                        "sender_friendly_name": sender_friendly_name,
+                        "thread_id": message.get('thread_id'),
+                        "subject": message.get('subject', 'No subject'),
+                        "importance": message.get('importance', 'normal'),
+                        "ack_required": message.get('ack_required', False),
+                        "bridged_at": datetime.now(timezone.utc).isoformat()
+                    }
                 }
             )
             
