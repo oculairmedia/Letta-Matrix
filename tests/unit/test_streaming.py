@@ -27,7 +27,8 @@ class TestStreamEventType:
         """Verify all expected event types exist"""
         expected_types = [
             'REASONING', 'TOOL_CALL', 'TOOL_RETURN', 
-            'ASSISTANT', 'STOP', 'USAGE', 'ERROR', 'PING'
+            'ASSISTANT', 'STOP', 'USAGE', 'ERROR', 'PING',
+            'APPROVAL_REQUEST'
         ]
         for event_type in expected_types:
             assert hasattr(StreamEventType, event_type)
@@ -42,6 +43,7 @@ class TestStreamEventType:
         assert StreamEventType.USAGE.value == "usage"
         assert StreamEventType.ERROR.value == "error"
         assert StreamEventType.PING.value == "ping"
+        assert StreamEventType.APPROVAL_REQUEST.value == "approval_request"
 
 
 class TestStreamEvent:
@@ -99,6 +101,14 @@ class TestStreamEvent:
         event2 = StreamEvent(type=StreamEventType.ASSISTANT)
         assert event2.is_error is False
     
+    def test_is_approval_request(self):
+        """Test is_approval_request property"""
+        event = StreamEvent(type=StreamEventType.APPROVAL_REQUEST)
+        assert event.is_approval_request is True
+        
+        event2 = StreamEvent(type=StreamEventType.TOOL_CALL)
+        assert event2.is_approval_request is False
+    
     def test_format_progress_tool_call(self):
         """Test format_progress for tool call"""
         event = StreamEvent(
@@ -149,6 +159,30 @@ class TestStreamEvent:
             content="Hello there!"
         )
         assert event.format_progress() == "Hello there!"
+    
+    def test_format_progress_approval_request_with_tools(self):
+        """Test format_progress for approval request with tool calls"""
+        event = StreamEvent(
+            type=StreamEventType.APPROVAL_REQUEST,
+            metadata={
+                "tool_calls": [
+                    {"name": "Bash", "tool_call_id": "tc-123"},
+                    {"name": "Write", "tool_call_id": "tc-456"}
+                ]
+            }
+        )
+        progress = event.format_progress()
+        assert "**Approval Required**" in progress
+        assert "Bash" in progress
+        assert "Write" in progress
+    
+    def test_format_progress_approval_request_empty(self):
+        """Test format_progress for approval request without tool info"""
+        event = StreamEvent(
+            type=StreamEventType.APPROVAL_REQUEST,
+            metadata={"tool_calls": []}
+        )
+        assert event.format_progress() == "⏳ **Approval Required**"
 
 
 class TestStepStreamReader:
@@ -342,6 +376,82 @@ class TestStepStreamReader:
         
         event = reader._parse_chunk(chunk)
         assert event is None
+    
+    def test_parse_chunk_approval_request_with_tool_calls_list(self):
+        """Test parsing approval_request_message with tool_calls list"""
+        mock_client = MagicMock()
+        reader = StepStreamReader(letta_client=mock_client)
+        
+        tool_call1 = MagicMock()
+        tool_call1.name = 'Bash'
+        tool_call1.tool_call_id = 'tc-123'
+        tool_call1.arguments = '{"command": "ls -la"}'
+        
+        tool_call2 = MagicMock()
+        tool_call2.name = 'Write'
+        tool_call2.tool_call_id = 'tc-456'
+        tool_call2.arguments = '{"filePath": "/tmp/test.txt"}'
+        
+        chunk = MagicMock()
+        chunk.message_type = 'approval_request_message'
+        chunk.tool_calls = [tool_call1, tool_call2]
+        chunk.tool_call = None
+        chunk.id = 'msg-approval-1'
+        chunk.run_id = 'run-approval-1'
+        chunk.step_id = 'step-approval-1'
+        
+        event = reader._parse_chunk(chunk)
+        assert event is not None
+        assert event.type == StreamEventType.APPROVAL_REQUEST
+        assert event.metadata['id'] == 'msg-approval-1'
+        assert event.metadata['run_id'] == 'run-approval-1'
+        assert event.metadata['step_id'] == 'step-approval-1'
+        assert len(event.metadata['tool_calls']) == 2
+        assert event.metadata['tool_calls'][0]['name'] == 'Bash'
+        assert event.metadata['tool_calls'][1]['name'] == 'Write'
+    
+    def test_parse_chunk_approval_request_with_single_tool_call(self):
+        """Test parsing approval_request_message with single tool_call"""
+        mock_client = MagicMock()
+        reader = StepStreamReader(letta_client=mock_client)
+        
+        tool_call = MagicMock()
+        tool_call.name = 'Bash'
+        tool_call.tool_call_id = 'tc-789'
+        tool_call.arguments = '{"command": "rm -rf /"}'
+        
+        chunk = MagicMock()
+        chunk.message_type = 'approval_request_message'
+        chunk.tool_calls = []  # Empty list
+        chunk.tool_call = tool_call  # Fallback to single tool_call
+        chunk.id = 'msg-approval-2'
+        chunk.run_id = 'run-approval-2'
+        chunk.step_id = 'step-approval-2'
+        
+        event = reader._parse_chunk(chunk)
+        assert event is not None
+        assert event.type == StreamEventType.APPROVAL_REQUEST
+        assert len(event.metadata['tool_calls']) == 1
+        assert event.metadata['tool_calls'][0]['name'] == 'Bash'
+        assert event.metadata['tool_calls'][0]['tool_call_id'] == 'tc-789'
+    
+    def test_parse_chunk_approval_request_empty(self):
+        """Test parsing approval_request_message with no tool info"""
+        mock_client = MagicMock()
+        reader = StepStreamReader(letta_client=mock_client)
+        
+        chunk = MagicMock()
+        chunk.message_type = 'approval_request_message'
+        chunk.tool_calls = None  # No tool_calls attribute
+        chunk.tool_call = None
+        chunk.id = 'msg-approval-3'
+        chunk.run_id = 'run-approval-3'
+        chunk.step_id = None
+        
+        event = reader._parse_chunk(chunk)
+        assert event is not None
+        assert event.type == StreamEventType.APPROVAL_REQUEST
+        assert event.metadata['tool_calls'] == []
 
 
 class TestStreamingMessageHandler:
@@ -481,6 +591,51 @@ class TestStreamingMessageHandler:
         
         assert result is None
         handler.send_message.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_handle_approval_request_event(self, handler):
+        """Test handling approval request event"""
+        event = StreamEvent(
+            type=StreamEventType.APPROVAL_REQUEST,
+            metadata={
+                'tool_calls': [
+                    {'name': 'Bash', 'tool_call_id': 'tc-123', 'arguments': '{"command": "ls"}'},
+                    {'name': 'Write', 'tool_call_id': 'tc-456', 'arguments': '{"filePath": "/tmp/x"}'}
+                ],
+                'id': 'msg-approval-1',
+                'run_id': 'run-1',
+                'step_id': 'step-1'
+            }
+        )
+        result = await handler.handle_event(event)
+        
+        assert result == "$event_123"
+        handler.send_message.assert_called_once()
+        call_args = handler.send_message.call_args[0]
+        assert call_args[0] == "!test:matrix.example.com"
+        # Verify message content includes approval info
+        message_content = call_args[1]
+        assert "**Approval Required**" in message_content
+        assert "Bash" in message_content
+        assert "Write" in message_content
+        assert "Tools awaiting approval" in message_content
+    
+    @pytest.mark.asyncio
+    async def test_handle_approval_request_empty(self, handler):
+        """Test handling approval request with no tool calls"""
+        event = StreamEvent(
+            type=StreamEventType.APPROVAL_REQUEST,
+            metadata={'tool_calls': [], 'id': 'msg-1', 'run_id': 'run-1'}
+        )
+        result = await handler.handle_event(event)
+        
+        assert result == "$event_123"
+        handler.send_message.assert_called_once()
+        call_args = handler.send_message.call_args[0]
+        message_content = call_args[1]
+        assert "**Approval Required**" in message_content
+        # Should NOT have "Tools awaiting approval" since there are none
+        assert "Tools awaiting approval" not in message_content
     
     @pytest.mark.asyncio
     async def test_cleanup_no_delete(self, handler):
