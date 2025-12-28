@@ -600,6 +600,39 @@ async def health_check():
         "agent_sync_available": AGENT_SYNC_AVAILABLE
     }
 
+
+@app.get("/health/agent-provisioning")
+async def agent_provisioning_health():
+    """
+    Check health of agent room provisioning.
+    
+    Returns status of all Letta agents and their Matrix room mappings.
+    Status can be: healthy, degraded, unhealthy, or error.
+    """
+    try:
+        if not AGENT_SYNC_AVAILABLE:
+            return {
+                "status": "unavailable",
+                "message": "Agent sync functionality not available",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        from src.core.agent_user_manager import check_provisioning_health
+        config = Config.from_env()
+        health = await check_provisioning_health(config)
+        health["timestamp"] = datetime.now().isoformat()
+        
+        return health
+        
+    except Exception as e:
+        logger.error(f"Error checking agent provisioning health: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+
 if __name__ == "__main__":
     # Configuration
     host = os.environ.get("API_HOST", "0.0.0.0")

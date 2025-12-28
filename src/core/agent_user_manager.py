@@ -740,6 +740,78 @@ class AgentUserManager:
 # Global manager instance to preserve cache between sync runs
 _global_manager = None
 
+
+async def check_provisioning_health(config) -> dict:
+    """
+    Check the health of agent room provisioning.
+    
+    Returns a dict with:
+    - total_agents: Number of Letta agents
+    - agents_with_rooms: Number with valid room mappings
+    - agents_missing_rooms: List of agents without rooms
+    - status: 'healthy', 'degraded', or 'unhealthy'
+    """
+    global _global_manager
+    
+    if _global_manager is None:
+        _global_manager = AgentUserManager(config)
+    
+    manager = _global_manager
+    
+    try:
+        # Get all Letta agents
+        agents = await manager.get_letta_agents()
+        total_agents = len(agents)
+        
+        # Load current mappings
+        await manager.load_existing_mappings()
+        
+        # Check which agents have rooms
+        agents_with_rooms = 0
+        agents_missing_rooms = []
+        
+        for agent in agents:
+            agent_id = agent.get("id", "")
+            agent_name = agent.get("name", "Unknown")
+            
+            mapping = manager.mappings.get(agent_id)
+            if mapping and mapping.room_id and mapping.room_created:
+                agents_with_rooms += 1
+            else:
+                agents_missing_rooms.append({
+                    "agent_id": agent_id,
+                    "agent_name": agent_name
+                })
+        
+        # Determine status
+        missing_count = len(agents_missing_rooms)
+        if missing_count == 0:
+            status = "healthy"
+        elif missing_count <= 3:
+            status = "degraded"
+        else:
+            status = "unhealthy"
+        
+        return {
+            "total_agents": total_agents,
+            "agents_with_rooms": agents_with_rooms,
+            "agents_missing_rooms": agents_missing_rooms,
+            "missing_count": missing_count,
+            "status": status
+        }
+        
+    except Exception as e:
+        logger.error(f"Error checking provisioning health: {e}")
+        return {
+            "total_agents": 0,
+            "agents_with_rooms": 0,
+            "agents_missing_rooms": [],
+            "missing_count": -1,
+            "status": "error",
+            "error": str(e)
+        }
+
+
 async def run_agent_sync(config):
     """Run the agent sync process"""
     global _global_manager
