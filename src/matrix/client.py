@@ -699,7 +699,8 @@ async def send_to_letta_api_streaming(
     logger: logging.Logger, 
     room_id: str,
     reply_to_event_id: Optional[str] = None,
-    reply_to_sender: Optional[str] = None
+    reply_to_sender: Optional[str] = None,
+    opencode_sender: Optional[str] = None
 ) -> str:
     """
     Sends a message to the Letta API using step streaming with progress display.
@@ -713,6 +714,7 @@ async def send_to_letta_api_streaming(
         room_id: Matrix room ID
         reply_to_event_id: Optional event ID to reply to for the final response
         reply_to_sender: Optional sender to mention in the reply
+        opencode_sender: Optional OpenCode sender MXID to ensure @mention in response
     """
     from src.matrix.streaming import StepStreamReader, StreamingMessageHandler, StreamEventType
     from src.letta.client import get_letta_client, LettaConfig
@@ -764,8 +766,16 @@ async def send_to_letta_api_streaming(
     
     async def send_final_message(rid: str, content: str) -> str:
         """Send a final response message with rich reply context"""
+        final_content = content
+        
+        # If this is a response to an OpenCode user, ensure @mention is included
+        # This is a fallback in case the agent didn't follow the metaprompt instruction
+        if opencode_sender and opencode_sender not in content:
+            logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_sender}")
+            final_content = f"{opencode_sender} {content}"
+        
         event_id = await send_as_agent_with_event_id(
-            rid, content, config, logger,
+            rid, final_content, config, logger,
             reply_to_event_id=reply_to_event_id,
             reply_to_sender=reply_to_sender
         )
@@ -1570,6 +1580,7 @@ collaborate with you.
             # Check if sender is an OpenCode identity (@oc_*)
             # If so, inject @mention instruction so agent knows how to respond
             is_opencode_sender = event.sender.startswith("@oc_")
+            opencode_mxid: Optional[str] = None  # Track OpenCode sender for response post-processing
             if is_opencode_sender and not is_inter_agent_message:
                 opencode_mxid = event.sender
                 message_to_send = f"""[MESSAGE FROM OPENCODE USER]
@@ -1608,7 +1619,8 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
                 letta_response = await send_to_letta_api_streaming(
                     message_to_send, event.sender, config, logger, room.room_id,
                     reply_to_event_id=original_event_id,
-                    reply_to_sender=event.sender
+                    reply_to_sender=event.sender,
+                    opencode_sender=opencode_mxid  # Pass OpenCode sender for @mention fallback
                 )
                 # In streaming mode, the final message is already sent by the handler
                 # We don't need to send it again, just log the result
@@ -1648,6 +1660,11 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
             else:
                 # Non-streaming mode (original behavior)
                 letta_response = await send_to_letta_api(message_to_send, event.sender, config, logger, room.room_id)
+                
+                # If this is a response to an OpenCode user, ensure @mention is included
+                if opencode_mxid and opencode_mxid not in letta_response:
+                    logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_mxid}")
+                    letta_response = f"{opencode_mxid} {letta_response}"
                 
                 # Try to send as the agent user first - use rich reply to the original message
                 original_event_id = getattr(event, 'event_id', None)
