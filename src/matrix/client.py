@@ -1005,21 +1005,9 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
 async def delete_message_as_agent(room_id: str, event_id: str, config: Config, logger: logging.Logger) -> bool:
     """Redact (delete) a message as the agent user for this room"""
     try:
-        # Load agent mappings to find which agent owns this room
-        mappings_file = "/app/data/agent_user_mappings.json"
-        if not os.path.exists(mappings_file):
-            logger.warning("No agent mappings file found")
-            return False
-            
-        with open(mappings_file, 'r') as f:
-            mappings = json.load(f)
-        
-        # Find the agent for this room
-        agent_mapping = None
-        for agent_id, mapping in mappings.items():
-            if mapping.get("room_id") == room_id:
-                agent_mapping = mapping
-                break
+        # Load agent mapping from database
+        from src.core.mapping_service import get_mapping_by_room_id
+        agent_mapping = get_mapping_by_room_id(room_id)
         
         if not agent_mapping:
             logger.warning(f"No agent mapping found for room {room_id}")
@@ -1096,20 +1084,9 @@ async def set_typing_as_agent(room_id: str, typing: bool, config: Config, logger
         True if successful, False otherwise
     """
     try:
-        # Load agent mappings to find which agent owns this room
-        mappings_file = "/app/data/agent_user_mappings.json"
-        if not os.path.exists(mappings_file):
-            return False
-            
-        with open(mappings_file, 'r') as f:
-            mappings = json.load(f)
-        
-        # Find the agent for this room
-        agent_mapping = None
-        for agent_id, mapping in mappings.items():
-            if mapping.get("room_id") == room_id:
-                agent_mapping = mapping
-                break
+        # Load agent mapping from database
+        from src.core.mapping_service import get_mapping_by_room_id
+        agent_mapping = get_mapping_by_room_id(room_id)
         
         if not agent_mapping:
             return False
@@ -1264,21 +1241,9 @@ async def send_as_agent_with_event_id(
     Returns the event_id on success, None on failure.
     """
     try:
-        # Load agent mappings to find which agent owns this room
-        mappings_file = "/app/data/agent_user_mappings.json"
-        if not os.path.exists(mappings_file):
-            logger.warning("No agent mappings file found")
-            return None
-            
-        with open(mappings_file, 'r') as f:
-            mappings = json.load(f)
-        
-        # Find the agent for this room
-        agent_mapping = None
-        for agent_id, mapping in mappings.items():
-            if mapping.get("room_id") == room_id:
-                agent_mapping = mapping
-                break
+        # Load agent mapping from database
+        from src.core.mapping_service import get_mapping_by_room_id
+        agent_mapping = get_mapping_by_room_id(room_id)
         
         if not agent_mapping:
             logger.warning(f"No agent mapping found for room {room_id}")
@@ -1454,36 +1419,31 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
         
         # Only process messages in rooms that have a dedicated agent mapping
         # This prevents auto-forwarding content in relay/bridge rooms
-        mappings_file = "/app/data/agent_user_mappings.json"
+        from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_matrix_user, get_all_mappings
         room_agent_user_id = None
         room_has_agent = False
         room_agent_id = None
         room_agent_name = None
         room_agent_mapping = None
         
-        if os.path.exists(mappings_file):
-            with open(mappings_file, 'r') as f:
-                mappings = json.load(f)
-                # Find the agent that owns this room
-                for agent_id, mapping in mappings.items():
-                    if mapping.get("room_id") == room.room_id:
-                        room_agent_user_id = mapping.get("matrix_user_id")
-                        room_has_agent = True
-                        room_agent_id = agent_id
-                        room_agent_name = mapping.get("agent_name", "Unknown")
-                        room_agent_mapping = mapping
-                        break
+        # Find the agent that owns this room
+        room_agent_mapping = get_mapping_by_room_id(room.room_id)
+        if room_agent_mapping:
+            room_agent_user_id = room_agent_mapping.get("matrix_user_id")
+            room_has_agent = True
+            room_agent_id = room_agent_mapping.get("agent_id")
+            room_agent_name = room_agent_mapping.get("agent_name", "Unknown")
 
-                # Only ignore messages from THIS room's own agent (prevent self-loops)
-                if room_agent_user_id and event.sender == room_agent_user_id:
-                    logger.debug(f"Ignoring message from room's own agent {event.sender}")
-                    return
+        # Only ignore messages from THIS room's own agent (prevent self-loops)
+        if room_agent_user_id and event.sender == room_agent_user_id:
+            logger.debug(f"Ignoring message from room's own agent {event.sender}")
+            return
 
-                # Allow messages from OTHER agents (inter-agent communication)
-                for agent_id, mapping in mappings.items():
-                    if mapping.get("matrix_user_id") == event.sender and event.sender != room_agent_user_id:
-                        logger.info(f"Received inter-agent message from {event.sender} in {room.display_name}")
-                        break
+        # Allow messages from OTHER agents (inter-agent communication)
+        if room_agent_user_id:
+            sender_mapping = get_mapping_by_matrix_user(event.sender)
+            if sender_mapping and event.sender != room_agent_user_id:
+                logger.info(f"Received inter-agent message from {event.sender} in {room.display_name}")
         
         # Skip processing for rooms without a dedicated agent (relay/bridge rooms)
         # Letta can still write to these rooms via MCP tools, but won't auto-respond
@@ -1566,20 +1526,15 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                     logger.info(f"[REVERSE-BRIDGE] Detected Agent Mail message from {agent_mail_metadata.get('sender_friendly_name', 'Unknown')}")
             
             # Method 2: Check if sender is an agent user (even without metadata)
-            if not is_inter_agent_message and os.path.exists(mappings_file):
-                with open(mappings_file, 'r') as f:
-                    mappings = json.load(f)
-                    
-                    # Check if sender is an agent user
-                    for agent_id, mapping in mappings.items():
-                        if mapping.get("matrix_user_id") == event.sender:
-                            # This is an agent user sending to another agent's room
-                            # (We already filtered out self-messages above)
-                            from_agent_id = agent_id
-                            from_agent_name = mapping.get("agent_name", "Unknown Agent")
-                            is_inter_agent_message = True
-                            logger.info(f"Detected inter-agent message (via sender check) from {from_agent_name} ({from_agent_id})")
-                            break
+            if not is_inter_agent_message:
+                sender_agent_mapping = get_mapping_by_matrix_user(event.sender)
+                if sender_agent_mapping:
+                    # This is an agent user sending to another agent's room
+                    # (We already filtered out self-messages above)
+                    from_agent_id = sender_agent_mapping.get("agent_id")
+                    from_agent_name = sender_agent_mapping.get("agent_name", "Unknown Agent")
+                    is_inter_agent_message = True
+                    logger.info(f"Detected inter-agent message (via sender check) from {from_agent_name} ({from_agent_id})")
             
             # If this is an inter-agent message, enhance it with context
             if is_inter_agent_message and from_agent_id and from_agent_name:
@@ -2009,23 +1964,22 @@ async def main():
     # Join all agent rooms
     logger.info("Joining agent rooms...")
     agent_rooms_joined = 0
-    if os.path.exists("/app/data/agent_user_mappings.json"):
-        try:
-            with open("/app/data/agent_user_mappings.json", 'r') as f:
-                mappings = json.load(f)
-                for agent_id, mapping in mappings.items():
-                    room_id = mapping.get("room_id")
-                    agent_name = mapping.get("agent_name")
-                    if room_id:
-                        logger.info(f"Attempting to join room for agent {agent_name}")
-                        joined = await join_room_if_needed(client, room_id, logger)
-                        if joined:
-                            agent_rooms_joined += 1
-                            logger.info(f"Successfully joined room for agent {agent_name}: {room_id}")
-                        else:
-                            logger.warning(f"Failed to join room for agent {agent_name}: {room_id}")
-        except Exception as e:
-            logger.error(f"Error loading agent mappings: {e}")
+    try:
+        from src.core.mapping_service import get_all_mappings
+        mappings = get_all_mappings()
+        for agent_id, mapping in mappings.items():
+            room_id = mapping.get("room_id")
+            agent_name = mapping.get("agent_name")
+            if room_id:
+                logger.info(f"Attempting to join room for agent {agent_name}")
+                joined = await join_room_if_needed(client, room_id, logger)
+                if joined:
+                    agent_rooms_joined += 1
+                    logger.info(f"Successfully joined room for agent {agent_name}: {room_id}")
+                else:
+                    logger.warning(f"Failed to join room for agent {agent_name}: {room_id}")
+    except Exception as e:
+        logger.error(f"Error loading agent mappings: {e}")
     
     logger.info(f"Joined {agent_rooms_joined} agent rooms")
 

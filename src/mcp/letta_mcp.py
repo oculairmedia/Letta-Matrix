@@ -269,36 +269,20 @@ class MatrixAgentMessageTool(MCPTool):
         return result
 
     async def _get_matrix_mapping(self, agent_id: str) -> Dict:
-        """Get Matrix mapping from agent_user_mappings.json"""
+        """Get Matrix mapping from database via mapping_service"""
         try:
-            mappings_file = "/app/data/agent_user_mappings.json"
-
-            # Read the mappings file
-            if not os.path.exists(mappings_file):
-                logger.warning(f"Mappings file not found: {mappings_file}")
-                raise AgentNotFoundError(f"Agent {agent_id} not found in mappings")
-
-            with open(mappings_file, 'r') as f:
-                mappings = json.load(f)
-
-            # Check if mappings is a dict (new format) or list (old format)
-            if isinstance(mappings, dict):
-                # New format: dict with agent_id as key
-                if agent_id in mappings:
-                    return mappings[agent_id]
-            else:
-                # Old format: list of mappings
-                for mapping in mappings:
-                    if mapping.get("agent_id") == agent_id:
-                        return mapping
+            from src.core.mapping_service import get_mapping_by_agent_id
+            
+            mapping = get_mapping_by_agent_id(agent_id)
+            if mapping:
+                return mapping
 
             raise AgentNotFoundError(f"Agent {agent_id} not found in mappings")
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse mappings file: {e}")
-            raise AgentNotFoundError(f"Invalid mappings file format")
+        except AgentNotFoundError:
+            raise
         except Exception as e:
-            logger.error(f"Error reading mappings: {e}")
+            logger.error(f"Error reading mappings from database: {e}")
             raise
 
     async def _ensure_agent_room(self, agent_info: Dict) -> str:
@@ -829,7 +813,7 @@ class MatrixAgentMessageAsyncTool(MCPTool):
             )
 
     async def _get_agent_info(self, agent_id: str) -> Dict:
-        """Get agent info from mappings"""
+        """Get agent info from database via mapping_service"""
         if agent_id == "system":
             return {
                 "agent_id": "system",
@@ -838,22 +822,12 @@ class MatrixAgentMessageAsyncTool(MCPTool):
                 "room_id": None
             }
 
-        # Read from mappings file
-        mappings_file = "/app/data/agent_user_mappings.json"
-
-        if not os.path.exists(mappings_file):
-            raise AgentNotFoundError(f"Mappings file not found")
-
-        with open(mappings_file, 'r') as f:
-            mappings = json.load(f)
-
-        if isinstance(mappings, dict):
-            if agent_id in mappings:
-                return mappings[agent_id]
-        else:
-            for mapping in mappings:
-                if mapping.get("agent_id") == agent_id:
-                    return mapping
+        # Get from database via mapping_service
+        from src.core.mapping_service import get_mapping_by_agent_id
+        
+        mapping = get_mapping_by_agent_id(agent_id)
+        if mapping:
+            return mapping
 
         raise AgentNotFoundError(f"Agent {agent_id} not found in mappings")
 

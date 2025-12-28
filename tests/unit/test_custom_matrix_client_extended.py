@@ -64,7 +64,7 @@ def mock_logger():
 
 @pytest.fixture
 def temp_mappings_file(tmp_path):
-    """Create a temporary agent mappings file"""
+    """Create a temporary agent mappings file (legacy - kept for compatibility)"""
     mappings_data = {
         "agent-001": {
             "agent_id": "agent-001",
@@ -91,6 +91,60 @@ def temp_mappings_file(tmp_path):
         json.dump(mappings_data, f)
 
     return str(mappings_file)
+
+
+@pytest.fixture
+def mock_mapping_data():
+    """Return mock mapping data for tests"""
+    return {
+        "agent-001": {
+            "agent_id": "agent-001",
+            "agent_name": "TestAgent",
+            "matrix_user_id": "@agent_001:test.com",
+            "matrix_password": "agent_password",
+            "room_id": "!agentroom:test.com",
+            "created": True,
+            "room_created": True,
+            "invitation_status": {}
+        },
+        "agent-002": {
+            "agent_id": "agent-002",
+            "agent_name": "SecondAgent",
+            "matrix_user_id": "@agent_002:test.com",
+            "matrix_password": "agent_password2",
+            "room_id": "!secondroom:test.com",
+            "created": True,
+            "room_created": True,
+            "invitation_status": {}
+        }
+    }
+
+
+def mock_get_mapping_by_room_id(mappings_data):
+    """Create a mock get_mapping_by_room_id function"""
+    def _get_by_room_id(room_id):
+        for mapping in mappings_data.values():
+            if mapping.get("room_id") == room_id:
+                return mapping
+        return None
+    return _get_by_room_id
+
+
+def mock_get_mapping_by_matrix_user(mappings_data):
+    """Create a mock get_mapping_by_matrix_user function"""
+    def _get_by_matrix_user(matrix_user_id):
+        for mapping in mappings_data.values():
+            if mapping.get("matrix_user_id") == matrix_user_id:
+                return mapping
+        return None
+    return _get_by_matrix_user
+
+
+def mock_get_all_mappings(mappings_data):
+    """Create a mock get_all_mappings function"""
+    def _get_all():
+        return mappings_data
+    return _get_all
 
 
 # ============================================================================
@@ -428,6 +482,16 @@ class TestSendAsAgent:
     @pytest.mark.asyncio
     async def test_send_as_agent_success(self, mock_config, mock_logger, temp_mappings_file):
         """Test successfully sending message as agent"""
+        # Mock mapping service
+        mock_mapping = {
+            "agent_id": "agent-001",
+            "agent_name": "TestAgent",
+            "matrix_user_id": "@agent_001:test.com",
+            "matrix_password": "agent_password",
+            "room_id": "!agentroom:test.com",
+            "room_created": True
+        }
+        
         # Mock login response
         login_response = AsyncMock()
         login_response.status = 200
@@ -448,14 +512,13 @@ class TestSendAsAgent:
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
         with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
-            with patch('src.matrix.client.os.path.exists', return_value=True):
-                with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                    result = await send_as_agent(
-                        room_id="!agentroom:test.com",
-                        message="Test response",
-                        config=mock_config,
-                        logger=mock_logger
-                    )
+            with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=mock_mapping):
+                result = await send_as_agent(
+                    room_id="!agentroom:test.com",
+                    message="Test response",
+                    config=mock_config,
+                    logger=mock_logger
+                )
 
         assert result is True
         mock_session.post.assert_called_once()  # Login
@@ -463,8 +526,8 @@ class TestSendAsAgent:
 
     @pytest.mark.asyncio
     async def test_send_as_agent_no_mappings_file(self, mock_config, mock_logger):
-        """Test handling when mappings file doesn't exist"""
-        with patch('src.matrix.client.os.path.exists', return_value=False):
+        """Test handling when no mapping found"""
+        with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=None):
             result = await send_as_agent(
                 room_id="!agentroom:test.com",
                 message="Test",
@@ -478,21 +541,29 @@ class TestSendAsAgent:
     @pytest.mark.asyncio
     async def test_send_as_agent_room_not_found(self, mock_config, mock_logger, temp_mappings_file):
         """Test handling when room is not in mappings"""
-        with patch('src.matrix.client.os.path.exists', return_value=True):
-            with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                result = await send_as_agent(
-                    room_id="!unknownroom:test.com",  # Not in mappings
-                    message="Test",
-                    config=mock_config,
-                    logger=mock_logger
-                )
+        with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=None):
+            result = await send_as_agent(
+                room_id="!unknownroom:test.com",  # Not in mappings
+                message="Test",
+                config=mock_config,
+                logger=mock_logger
+            )
 
         assert result is False
         # Should log warning about no agent mapping found
 
     @pytest.mark.asyncio
-    async def test_send_as_agent_login_failure(self, mock_config, mock_logger, temp_mappings_file):
+    async def test_send_as_agent_login_failure(self, mock_config, mock_logger, mock_mapping_data):
         """Test handling of login failure"""
+        mock_mapping = {
+            "agent_id": "agent-001",
+            "agent_name": "TestAgent",
+            "matrix_user_id": "@agent_001:test.com",
+            "matrix_password": "agent_password",
+            "room_id": "!agentroom:test.com",
+            "room_created": True
+        }
+        
         login_response = AsyncMock()
         login_response.status = 403  # Forbidden
         login_response.text = AsyncMock(return_value="Invalid credentials")
@@ -504,22 +575,23 @@ class TestSendAsAgent:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
-            with patch('src.matrix.client.os.path.exists', return_value=True):
-                with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                    result = await send_as_agent(
-                        room_id="!agentroom:test.com",
-                        message="Test",
-                        config=mock_config,
-                        logger=mock_logger
-                    )
+        with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=mock_mapping):
+            with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+                result = await send_as_agent(
+                    room_id="!agentroom:test.com",
+                    message="Test",
+                    config=mock_config,
+                    logger=mock_logger
+                )
 
         assert result is False
         mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
-    async def test_send_as_agent_message_send_failure(self, mock_config, mock_logger, temp_mappings_file):
+    async def test_send_as_agent_message_send_failure(self, mock_config, mock_logger, mock_mapping_data):
         """Test handling of message send failure"""
+        mock_mapping = mock_mapping_data["agent-001"]
+        
         login_response = AsyncMock()
         login_response.status = 200
         login_response.json = AsyncMock(return_value={"access_token": "agent_token"})
@@ -538,15 +610,14 @@ class TestSendAsAgent:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
-            with patch('src.matrix.client.os.path.exists', return_value=True):
-                with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                    result = await send_as_agent(
-                        room_id="!agentroom:test.com",
-                        message="Test",
-                        config=mock_config,
-                        logger=mock_logger
-                    )
+        with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=mock_mapping):
+            with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+                result = await send_as_agent(
+                    room_id="!agentroom:test.com",
+                    message="Test",
+                    config=mock_config,
+                    logger=mock_logger
+                )
 
         assert result is False
         # Should have logged error about failed message send
@@ -605,7 +676,7 @@ class TestMessageCallback:
         # Should return early without processing
 
     @pytest.mark.asyncio
-    async def test_message_callback_ignores_room_agent_self_messages(self, mock_config, mock_logger, temp_mappings_file):
+    async def test_message_callback_ignores_room_agent_self_messages(self, mock_config, mock_logger, mock_mapping_data):
         """Test that room's own agent messages are ignored (prevent self-loops)"""
         mock_room = Mock()
         mock_room.room_id = "!agentroom:test.com"  # TestAgent's room
@@ -620,9 +691,13 @@ class TestMessageCallback:
         mock_client.user_id = "@bot:test.com"
 
         with patch('src.matrix.client.is_duplicate_event', return_value=False):
-            with patch('src.matrix.client.os.path.exists', return_value=True):
-                with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                    await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
+            with patch('src.core.mapping_service.get_mapping_by_room_id', 
+                       side_effect=mock_get_mapping_by_room_id(mock_mapping_data)):
+                with patch('src.core.mapping_service.get_mapping_by_matrix_user', 
+                           side_effect=mock_get_mapping_by_matrix_user(mock_mapping_data)):
+                    with patch('src.core.mapping_service.get_all_mappings', 
+                               side_effect=mock_get_all_mappings(mock_mapping_data)):
+                        await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
         # Should log that it's ignoring the room's own agent
         debug_calls = [str(call) for call in mock_logger.debug.call_args_list]
@@ -630,7 +705,7 @@ class TestMessageCallback:
         assert len(agent_self_ignore) > 0
 
     @pytest.mark.asyncio
-    async def test_message_callback_processes_user_message(self, mock_config, mock_logger, temp_mappings_file):
+    async def test_message_callback_processes_user_message(self, mock_config, mock_logger, mock_mapping_data):
         """Test that valid user messages are processed"""
         mock_room = Mock()
         mock_room.room_id = "!agentroom:test.com"
@@ -647,11 +722,15 @@ class TestMessageCallback:
 
         # Mock Letta API response
         with patch('src.matrix.client.is_duplicate_event', return_value=False):
-            with patch('src.matrix.client.os.path.exists', return_value=True):
-                with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                    with patch('src.matrix.client.send_to_letta_api', return_value="Agent response"):
-                        with patch('src.matrix.client.send_as_agent', return_value=True):
-                            await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
+            with patch('src.core.mapping_service.get_mapping_by_room_id', 
+                       side_effect=mock_get_mapping_by_room_id(mock_mapping_data)):
+                with patch('src.core.mapping_service.get_mapping_by_matrix_user', 
+                           side_effect=mock_get_mapping_by_matrix_user(mock_mapping_data)):
+                    with patch('src.core.mapping_service.get_all_mappings', 
+                               side_effect=mock_get_all_mappings(mock_mapping_data)):
+                        with patch('src.matrix.client.send_to_letta_api', return_value="Agent response"):
+                            with patch('src.matrix.client.send_as_agent', return_value=True):
+                                await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
         # Should have logged "Received message from user"
         info_calls = [str(call) for call in mock_logger.info.call_args_list]
@@ -659,7 +738,7 @@ class TestMessageCallback:
         assert len(received_msg) > 0
 
     @pytest.mark.asyncio
-    async def test_message_callback_detects_inter_agent_message(self, mock_config, mock_logger, temp_mappings_file):
+    async def test_message_callback_detects_inter_agent_message(self, mock_config, mock_logger, mock_mapping_data):
         """Test detection of inter-agent messages"""
         mock_room = Mock()
         mock_room.room_id = "!agentroom:test.com"  # agent-001's room
@@ -675,11 +754,15 @@ class TestMessageCallback:
         mock_client.user_id = "@bot:test.com"
 
         with patch('src.matrix.client.is_duplicate_event', return_value=False):
-            with patch('src.matrix.client.os.path.exists', return_value=True):
-                with patch('builtins.open', mock_open(read_data=open(temp_mappings_file).read())):
-                    with patch('src.matrix.client.send_to_letta_api', return_value="Response"):
-                        with patch('src.matrix.client.send_as_agent', return_value=True):
-                            await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
+            with patch('src.core.mapping_service.get_mapping_by_room_id', 
+                       side_effect=mock_get_mapping_by_room_id(mock_mapping_data)):
+                with patch('src.core.mapping_service.get_mapping_by_matrix_user', 
+                           side_effect=mock_get_mapping_by_matrix_user(mock_mapping_data)):
+                    with patch('src.core.mapping_service.get_all_mappings', 
+                               side_effect=mock_get_all_mappings(mock_mapping_data)):
+                        with patch('src.matrix.client.send_to_letta_api', return_value="Response"):
+                            with patch('src.matrix.client.send_as_agent', return_value=True):
+                                await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
         # Should have detected inter-agent message
         info_calls = [str(call) for call in mock_logger.info.call_args_list]
@@ -740,18 +823,15 @@ class TestRichReplies:
         reply_to_event_id = "$original_event_abc123"
         reply_to_sender = "@user:matrix"
         
-        # Mock the file read and aiohttp session
-        mock_mappings = {
-            "agent-123": {
-                "room_id": room_id,
-                "agent_name": "Test Agent",
-                "matrix_user_id": "@test_agent:matrix",
-                "matrix_password": "secret123"
-            }
+        # Mock the mapping service
+        mock_mapping = {
+            "room_id": room_id,
+            "agent_name": "Test Agent",
+            "matrix_user_id": "@test_agent:matrix",
+            "matrix_password": "secret123"
         }
         
-        with patch("os.path.exists", return_value=True), \
-             patch("builtins.open", mock_open(read_data=json.dumps(mock_mappings))), \
+        with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=mock_mapping), \
              patch("aiohttp.ClientSession") as mock_session_class:
             
             # Setup mock session responses
@@ -813,18 +893,15 @@ class TestRichReplies:
         room_id = "!testroom:matrix"
         message = "Just a regular message"
         
-        # Mock the file read and aiohttp session
-        mock_mappings = {
-            "agent-123": {
-                "room_id": room_id,
-                "agent_name": "Test Agent",
-                "matrix_user_id": "@test_agent:matrix",
-                "matrix_password": "secret123"
-            }
+        # Mock the mapping service
+        mock_mapping = {
+            "room_id": room_id,
+            "agent_name": "Test Agent",
+            "matrix_user_id": "@test_agent:matrix",
+            "matrix_password": "secret123"
         }
         
-        with patch("os.path.exists", return_value=True), \
-             patch("builtins.open", mock_open(read_data=json.dumps(mock_mappings))), \
+        with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=mock_mapping), \
              patch("aiohttp.ClientSession") as mock_session_class:
             
             # Setup mock session responses

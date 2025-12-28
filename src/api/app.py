@@ -462,16 +462,8 @@ async def new_agent_webhook(notification: NewAgentNotification, background_tasks
 async def get_agent_mappings():
     """Get all agent-to-room mappings."""
     try:
-        mappings_file = "/app/data/agent_user_mappings.json"
-        if not os.path.exists(mappings_file):
-            return {
-                "success": False,
-                "message": "Agent mappings file not found",
-                "mappings": {}
-            }
-
-        with open(mappings_file, 'r') as f:
-            mappings = json.load(f)
+        from src.core.mapping_service import get_all_mappings
+        mappings = get_all_mappings()
 
         return {
             "success": True,
@@ -490,17 +482,11 @@ async def get_agent_mappings():
 async def get_agent_room(agent_id: str):
     """Get the Matrix room ID for a specific agent."""
     try:
-        mappings_file = "/app/data/agent_user_mappings.json"
-        if not os.path.exists(mappings_file):
-            raise HTTPException(status_code=404, detail="Agent mappings file not found")
+        from src.core.mapping_service import get_mapping_by_agent_id
+        mapping = get_mapping_by_agent_id(agent_id)
 
-        with open(mappings_file, 'r') as f:
-            mappings = json.load(f)
-
-        if agent_id not in mappings:
+        if not mapping:
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found in mappings")
-
-        mapping = mappings[agent_id]
 
         if not mapping.get("room_created") or not mapping.get("room_id"):
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} does not have a room created yet")
@@ -527,17 +513,16 @@ async def auto_join_rooms(request: AutoJoinRequest):
     access_token = request.access_token
     homeserver = request.homeserver
     try:
-        # Get all agent mappings to find all rooms
-        mappings_file = "/app/data/agent_user_mappings.json"
-        if not os.path.exists(mappings_file):
+        # Get all agent mappings from database
+        from src.core.mapping_service import get_all_mappings
+        mappings = get_all_mappings()
+        
+        if not mappings:
             return {
                 "success": False,
-                "message": "Agent mappings file not found",
+                "message": "No agent mappings found",
                 "joined_rooms": []
             }
-
-        with open(mappings_file, 'r') as f:
-            mappings = json.load(f)
 
         joined_rooms = []
         failed_rooms = []

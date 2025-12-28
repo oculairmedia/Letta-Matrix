@@ -110,17 +110,20 @@ class AgentMailBridge:
             with open(self.agent_mappings_file) as f:
                 return json.load(f)
         
-        # Generate new mapping from agent_user_mappings.json
-        logger.info("Generating new identity mapping from Matrix data")
+        # Generate new mapping from database via mapping_service
+        logger.info("Generating new identity mapping from database")
         mappings = {}
         
-        agent_file = self.data_dir / "agent_user_mappings.json"
-        if not agent_file.exists():
-            logger.error(f"Matrix agent mappings not found: {agent_file}")
+        try:
+            from src.core.mapping_service import get_all_mappings
+            agent_data = get_all_mappings()
+        except Exception as e:
+            logger.error(f"Failed to load agent mappings from database: {e}")
             return mappings
         
-        with open(agent_file) as f:
-            agent_data = json.load(f)
+        if not agent_data:
+            logger.warning("No agent mappings found in database")
+            return mappings
         
         for agent_id, data in agent_data.items():
             matrix_name = data.get('agent_name', 'UnknownAgent')

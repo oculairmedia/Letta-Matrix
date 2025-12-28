@@ -131,19 +131,8 @@ class AgentUserManager:
             logger.info(f"Loaded {len(self.mappings)} existing agent-user mappings from database")
         except Exception as e:
             logger.error(f"Error loading mappings from database: {e}")
-            # Fallback to JSON file if DB fails
-            logger.info("Attempting to fallback to JSON file...")
-            try:
-                if os.path.exists(self.mappings_file):
-                    with open(self.mappings_file, 'r') as f:
-                        data = json.load(f)
-                        for agent_id, mapping_data in data.items():
-                            if "invitation_status" not in mapping_data:
-                                mapping_data["invitation_status"] = None
-                            self.mappings[agent_id] = AgentUserMapping(**mapping_data)
-                    logger.info(f"Loaded {len(self.mappings)} mappings from JSON fallback")
-            except Exception as fallback_error:
-                logger.error(f"Fallback to JSON also failed: {fallback_error}")
+            # Database is the single source of truth - no JSON fallback
+            logger.warning("Database is unavailable. Agent mappings will be empty until DB is restored.")
 
 
     async def save_mappings(self):
@@ -200,27 +189,8 @@ class AgentUserManager:
 
         except Exception as e:
             logger.error(f"Error saving mappings to database: {e}")
-            # Fallback to JSON file
-            logger.info("Attempting to fallback to JSON file...")
-            try:
-                data = {}
-                for agent_id, mapping in self.mappings.items():
-                    data[agent_id] = {
-                        "agent_id": mapping.agent_id,
-                        "agent_name": mapping.agent_name,
-                        "matrix_user_id": mapping.matrix_user_id,
-                        "matrix_password": mapping.matrix_password,
-                        "created": mapping.created,
-                        "room_id": mapping.room_id,
-                        "room_created": mapping.room_created,
-                        "invitation_status": mapping.invitation_status
-                    }
-
-                with open(self.mappings_file, 'w') as f:
-                    json.dump(data, f, indent=2)
-                logger.info(f"Saved {len(self.mappings)} agent-user mappings to JSON fallback")
-            except Exception as fallback_error:
-                logger.error(f"Fallback to JSON also failed: {fallback_error}")
+            # Database is the single source of truth - no JSON fallback
+            logger.warning("Failed to save mappings. Changes will be lost if not retried.")
 
     async def get_letta_agents(self) -> List[dict]:
         """Get all Letta agents using the Letta SDK with pagination support"""
@@ -625,36 +595,28 @@ class AgentUserManager:
 
     async def discover_agent_room(self, agent_user_id: str) -> Optional[str]:
         """
-        Discover the actual room for an agent by checking the JSON file.
-        The JSON file is the source of truth for current room assignments.
+        Discover the actual room for an agent by checking the database.
+        The database is the source of truth for current room assignments.
         Returns the room_id if found, None otherwise.
         """
         try:
-            # Read from the JSON file which is updated when rooms are joined
-            json_path = "/app/data/agent_user_mappings.json"
-            if not os.path.exists(json_path):
-                logger.warning(f"JSON mapping file not found: {json_path}")
-                return None
+            from src.core.mapping_service import get_mapping_by_matrix_user
             
-            with open(json_path, 'r') as f:
-                json_mappings = json.load(f)
+            mapping = get_mapping_by_matrix_user(agent_user_id)
+            if mapping:
+                room_id = mapping.get("room_id")
+                if room_id:
+                    logger.info(f"Found room in database for {agent_user_id}: {room_id}")
+                    return room_id
+                else:
+                    logger.warning(f"Agent {agent_user_id} has no room_id in database")
+                    return None
             
-            # Find the agent by matrix_user_id
-            for agent_id, mapping in json_mappings.items():
-                if mapping.get("matrix_user_id") == agent_user_id:
-                    room_id = mapping.get("room_id")
-                    if room_id:
-                        logger.info(f"Found room in JSON for {agent_user_id}: {room_id}")
-                        return room_id
-                    else:
-                        logger.warning(f"Agent {agent_user_id} has no room_id in JSON")
-                        return None
-            
-            logger.warning(f"Agent {agent_user_id} not found in JSON mappings")
+            logger.warning(f"Agent {agent_user_id} not found in database mappings")
             return None
                     
         except Exception as e:
-            logger.error(f"Error discovering room from JSON for {agent_user_id}: {e}")
+            logger.error(f"Error discovering room from database for {agent_user_id}: {e}")
             return None
     
     async def get_agent_user_mapping(self, agent_id: str) -> Optional[AgentUserMapping]:

@@ -738,19 +738,15 @@ class MCPHTTPServer:
         self._setup_routes()
     
     def _load_agent_mappings(self) -> Dict[str, Dict[str, str]]:
-        """Load agent-to-room mappings from JSON file"""
+        """Load agent-to-room mappings from database via mapping_service"""
         try:
-            mappings_file = "/app/data/agent_user_mappings.json"
-            if not os.path.exists(mappings_file):
-                logger.warning("Agent mappings file not found, using default credentials")
-                return {}
+            from src.core.mapping_service import get_all_mappings
             
-            with open(mappings_file, 'r') as f:
-                mappings = json.load(f)
-                logger.info(f"Loaded {len(mappings)} agent mappings from {mappings_file}")
-                return mappings
+            mappings = get_all_mappings()
+            logger.info(f"Loaded {len(mappings)} agent mappings from database")
+            return mappings
         except Exception as e:
-            logger.error(f"Error loading agent mappings: {e}")
+            logger.error(f"Error loading agent mappings from database: {e}")
             return {}
     
     def _register_tools(self) -> None:
