@@ -60,9 +60,12 @@ describe('IdentityManager', () => {
       expect(localpart).toMatch(/^[a-z0-9._=-]+$/);
     });
 
-    it('should include letta prefix', () => {
-      const localpart = IdentityManager.generateLettaLocalpart('test-agent');
-      expect(localpart).toContain('letta_');
+    it('should use agent_ prefix to match matrix-client format', () => {
+      // CRITICAL: This format MUST match what matrix-client's user_manager.py generates
+      // The Python code uses: f"agent_{clean_id}" where clean_id has hyphens replaced with underscores
+      const localpart = IdentityManager.generateLettaLocalpart('agent-test-123');
+      expect(localpart).toMatch(/^agent_/);
+      expect(localpart).not.toContain('letta_'); // Must NOT use letta_ prefix
     });
 
     it('should be consistent', () => {
@@ -70,6 +73,37 @@ describe('IdentityManager', () => {
       const lp1 = IdentityManager.generateLettaLocalpart(agentId);
       const lp2 = IdentityManager.generateLettaLocalpart(agentId);
       expect(lp1).toBe(lp2);
+    });
+
+    it('should match matrix-client format exactly for real agent IDs', () => {
+      // This test ensures identity-bridge creates the SAME Matrix username
+      // as matrix-client (Python), preventing duplicate user creation.
+      // 
+      // Python user_manager.py logic:
+      //   1. Remove 'agent-' prefix if present
+      //   2. Replace hyphens with underscores
+      //   3. Prefix with 'agent_'
+      
+      const testCases = [
+        { agentId: 'agent-597b5756-2915-4560-ba6b-91005f085166', expected: 'agent_597b5756_2915_4560_ba6b_91005f085166' },
+        { agentId: 'agent-0a0867cb-09a4-4a9d-ad97-884773b7cbbc', expected: 'agent_0a0867cb_09a4_4a9d_ad97_884773b7cbbc' },
+        { agentId: '12345678-abcd-efgh-ijkl-mnopqrstuvwx', expected: 'agent_12345678_abcd_efgh_ijkl_mnopqrstuvwx' },
+      ];
+
+      for (const { agentId, expected } of testCases) {
+        const localpart = IdentityManager.generateLettaLocalpart(agentId);
+        expect(localpart).toBe(expected);
+      }
+    });
+
+    it('should strip agent- prefix before processing', () => {
+      // With agent- prefix
+      const withPrefix = IdentityManager.generateLettaLocalpart('agent-abc-123');
+      // Without agent- prefix (should produce same result)
+      const withoutPrefix = IdentityManager.generateLettaLocalpart('abc-123');
+      
+      expect(withPrefix).toBe('agent_abc_123');
+      expect(withoutPrefix).toBe('agent_abc_123');
     });
   });
 

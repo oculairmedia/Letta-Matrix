@@ -470,10 +470,28 @@ export class IdentityManager {
 
   /**
    * Generate Letta localpart from agent_id
+   * 
+   * IMPORTANT: This must match the format used by matrix-client's user_manager.py
+   * Format: agent_{uuid_with_underscores} (NOT letta_agent_...)
+   * 
+   * The matrix-client (Python) creates users as @agent_{uuid}:matrix.oculair.ca
+   * We must use the same format to avoid creating duplicate Matrix users.
    */
   static generateLettaLocalpart(agentId: string): string {
-    // Sanitize agent_id for Matrix username (lowercase, alphanumeric + underscore)
-    return `letta_${agentId.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+    // Extract UUID from agent ID (remove 'agent-' prefix if present)
+    let cleanId = agentId;
+    if (cleanId.startsWith('agent-')) {
+      cleanId = cleanId.substring(6); // Remove 'agent-' prefix
+    }
+    
+    // Replace hyphens with underscores for Matrix compatibility
+    cleanId = cleanId.replace(/-/g, '_');
+    
+    // Ensure it only contains valid characters (lowercase alphanumeric + underscore)
+    cleanId = cleanId.toLowerCase().replace(/[^a-z0-9_]/g, '');
+    
+    // Create username as 'agent_{id}' to match matrix-client format
+    return `agent_${cleanId}`;
   }
 
   /**
