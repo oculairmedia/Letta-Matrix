@@ -70,6 +70,36 @@ class TestCreateUserForAgent:
                             assert mapping.created is True
 
     @pytest.mark.asyncio
+    async def test_create_user_for_agent_uses_agent_name_as_display_name(self, mock_config):
+        """Test that user creation uses agent name directly as display name (not 'Letta Agent: ...')"""
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
+                manager = AgentUserManager(config=mock_config)
+
+                agent = {
+                    "id": "agent-display-test",
+                    "name": "My Cool Agent",
+                    "created_at": 1234567890
+                }
+
+                # Track what display name is passed to create_matrix_user
+                captured_display_name = None
+
+                async def mock_create_matrix_user(username, password, display_name):
+                    nonlocal captured_display_name
+                    captured_display_name = display_name
+                    return True
+
+                with patch.object(manager, 'create_matrix_user', side_effect=mock_create_matrix_user):
+                    with patch.object(manager, 'create_or_update_agent_room', new_callable=AsyncMock):
+                        await manager.create_user_for_agent(agent)
+
+                        # Verify the display name is the agent name, NOT "Letta Agent: ..."
+                        assert captured_display_name == "My Cool Agent"
+                        assert captured_display_name != "Letta Agent: My Cool Agent"
+                        assert not captured_display_name.startswith("Letta Agent:")
+
+    @pytest.mark.asyncio
     async def test_create_user_for_agent_already_exists(self, mock_config):
         """Test creating user when agent already exists in mappings"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
@@ -243,6 +273,68 @@ class TestUsernameGeneration:
                 username = manager.generate_username("Test", "agent-xyz789")
 
                 assert username == "agent_xyz789"  # Prefix removed, underscores added
+
+@pytest.mark.unit
+class TestAgentNameChanges:
+    """Test handling of agent name changes during sync"""
+
+    @pytest.mark.asyncio
+    async def test_agent_name_change_updates_display_name_with_password(self, mock_config):
+        """Test that when agent name changes, update_display_name is called with password"""
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
+                manager = AgentUserManager(config=mock_config)
+
+                # Pre-populate mapping with old name
+                manager.mappings["agent-rename-test"] = AgentUserMapping(
+                    agent_id="agent-rename-test",
+                    agent_name="Old Agent Name",
+                    matrix_user_id="@agent_rename_test:matrix.oculair.ca",
+                    matrix_password="secret_password",
+                    created=True,
+                    room_id="!room123:matrix.oculair.ca",
+                    room_created=True
+                )
+
+                # Track calls to update_display_name
+                update_calls = []
+
+                async def mock_update_display_name(user_id, display_name, password=None):
+                    update_calls.append({
+                        "user_id": user_id,
+                        "display_name": display_name,
+                        "password": password
+                    })
+                    return True
+
+                async def mock_update_room_name(room_id, name):
+                    return True
+
+                async def mock_check_room_exists(room_id):
+                    return True
+
+                async def mock_discover_agent_room(user_id):
+                    return "!room123:matrix.oculair.ca"
+
+                with patch.object(manager, 'update_display_name', side_effect=mock_update_display_name):
+                    with patch.object(manager, 'update_room_name', side_effect=mock_update_room_name):
+                        with patch.object(manager.space_manager, 'check_room_exists', side_effect=mock_check_room_exists):
+                            with patch.object(manager, 'discover_agent_room', side_effect=mock_discover_agent_room):
+                                with patch.object(manager, 'auto_accept_invitations_with_tracking', new_callable=AsyncMock):
+                                    with patch.object(manager.room_manager, 'check_admin_in_room', return_value=True):
+                                        with patch.object(manager, 'get_letta_agents', return_value=[
+                                            {"id": "agent-rename-test", "name": "New Agent Name"}
+                                        ]):
+                                            with patch.object(manager, 'save_mappings', new_callable=AsyncMock):
+                                                with patch.object(manager.space_manager, 'load_space_config', new_callable=AsyncMock):
+                                                    with patch.object(manager.space_manager, 'get_space_id', return_value="!space:matrix.oculair.ca"):
+                                                        await manager.sync_agents_to_users()
+
+                # Verify update_display_name was called with the password
+                assert len(update_calls) == 1
+                assert update_calls[0]["user_id"] == "@agent_rename_test:matrix.oculair.ca"
+                assert update_calls[0]["display_name"] == "New Agent Name"
+                assert update_calls[0]["password"] == "secret_password"
 
 
 @pytest.mark.unit
