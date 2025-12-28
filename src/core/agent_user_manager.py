@@ -5,7 +5,6 @@ Agent User Manager - Creates Matrix users for each Letta agent
 import asyncio
 import logging
 import os
-import json
 import time
 import aiohttp
 import random
@@ -63,7 +62,6 @@ class AgentUserManager:
         
         # Configure data directory - use env var or default to /app/data
         self.data_dir = os.getenv("MATRIX_DATA_DIR", "/app/data")
-        self.mappings_file = os.path.join(self.data_dir, "agent_user_mappings.json")
         self.mappings: Dict[str, AgentUserMapping] = {}
         # Note: admin_token is now a property that proxies to user_manager.admin_token
 

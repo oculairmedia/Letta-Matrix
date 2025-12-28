@@ -249,7 +249,7 @@ class MatrixAgentMessageTool(MCPTool):
 
         logger.info(f"Fetching agent info for {agent_id}")
 
-        # Get Matrix mapping from agent_user_mappings.json
+        # Get Matrix mapping from database
         matrix_info = await self._get_matrix_mapping(agent_id)
 
         result = {
