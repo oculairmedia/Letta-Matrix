@@ -26,6 +26,7 @@ class StreamEventType(Enum):
     USAGE = "usage"
     ERROR = "error"
     PING = "ping"
+    APPROVAL_REQUEST = "approval_request"
 
 
 @dataclass
@@ -39,6 +40,11 @@ class StreamEvent:
     def is_progress(self) -> bool:
         """Whether this event should show as progress (deletable)"""
         return self.type in (StreamEventType.TOOL_CALL, StreamEventType.TOOL_RETURN)
+    
+    @property
+    def is_approval_request(self) -> bool:
+        """Whether this is an approval request that needs user action"""
+        return self.type == StreamEventType.APPROVAL_REQUEST
     
     @property
     def is_final(self) -> bool:
@@ -68,6 +74,12 @@ class StreamEvent:
             if len(text) > 50:
                 text = text[:50] + "..."
             return f"💭 {text}"
+        elif self.type == StreamEventType.APPROVAL_REQUEST:
+            tool_calls = self.metadata.get('tool_calls', [])
+            if tool_calls:
+                tool_names = [tc.get('name', 'unknown') for tc in tool_calls]
+                return f"⏳ **Approval Required**: {', '.join(tool_names)}"
+            return "⏳ **Approval Required**"
         return str(self.content or "")
 
 
@@ -297,6 +309,38 @@ class StepStreamReader:
                 }
             )
         
+        elif msg_type == 'approval_request_message':
+            # Extract tool call information for approval
+            tool_calls = getattr(chunk, 'tool_calls', [])
+            tool_call = getattr(chunk, 'tool_call', None)
+            
+            # Build list of tools needing approval
+            tools_info = []
+            if tool_calls:
+                for tc in tool_calls:
+                    tools_info.append({
+                        'name': getattr(tc, 'name', 'unknown'),
+                        'tool_call_id': getattr(tc, 'tool_call_id', ''),
+                        'arguments': getattr(tc, 'arguments', ''),
+                    })
+            elif tool_call:
+                tools_info.append({
+                    'name': getattr(tool_call, 'name', 'unknown'),
+                    'tool_call_id': getattr(tool_call, 'tool_call_id', ''),
+                    'arguments': getattr(tool_call, 'arguments', ''),
+                })
+            
+            return StreamEvent(
+                type=StreamEventType.APPROVAL_REQUEST,
+                content=None,
+                metadata={
+                    'id': getattr(chunk, 'id', None),
+                    'run_id': getattr(chunk, 'run_id', None),
+                    'step_id': getattr(chunk, 'step_id', None),
+                    'tool_calls': tools_info,
+                }
+            )
+        
         else:
             logger.debug(f"Unknown message type: {msg_type}")
             return None
@@ -389,6 +433,29 @@ class StreamingMessageHandler:
             # Reasoning - could optionally display in debug mode
             # For now, skip
             return None
+        
+        elif event.is_approval_request:
+            # Send approval request message to Matrix
+            # This allows the user or connected system to approve/deny
+            approval_text = event.format_progress()
+            tool_calls = event.metadata.get('tool_calls', [])
+            
+            # Add details about what needs approval
+            if tool_calls:
+                approval_text += "\n\nTools awaiting approval:"
+                for tc in tool_calls:
+                    tool_name = tc.get('name', 'unknown')
+                    tool_id = tc.get('tool_call_id', '')
+                    args = tc.get('arguments', '')
+                    # Truncate long arguments
+                    if len(args) > 200:
+                        args = args[:200] + "..."
+                    approval_text += f"\n- **{tool_name}** (`{tool_id[:20]}...`)"
+                    if args:
+                        approval_text += f"\n  ```\n  {args}\n  ```"
+            
+            logger.info(f"[APPROVAL] Sending approval request to Matrix: {len(tool_calls)} tool(s)")
+            return await self.send_message(self.room_id, approval_text)
         
         return None
     
