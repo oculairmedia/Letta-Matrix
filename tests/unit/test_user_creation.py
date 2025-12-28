@@ -427,6 +427,221 @@ class TestUserCreation:
             assert result is False
 
 
+class TestRegistrationTokenFlow:
+    """Test the two-step registration with m.login.registration_token (Tuwunel)"""
+
+    @pytest.fixture
+    def user_manager(self):
+        """Create a MatrixUserManager instance for testing"""
+        return MatrixUserManager(
+            homeserver_url="http://test-homeserver:8008",
+            admin_username="@admin:test.com",
+            admin_password="admin_pass"
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_user_with_registration_token(self, user_manager):
+        """Test user creation with m.login.registration_token (Tuwunel flow)"""
+        # Step 1: Initial request returns 401 with session and flows
+        initial_response = MagicMock()
+        initial_response.status = 401
+        initial_response.json = AsyncMock(return_value={
+            "session": "test_session_id",
+            "flows": [{"stages": ["m.login.registration_token"]}]
+        })
+        initial_response.__aenter__ = AsyncMock(return_value=initial_response)
+        initial_response.__aexit__ = AsyncMock(return_value=None)
+
+        # Step 2: Complete registration returns 200 with access token
+        complete_response = MagicMock()
+        complete_response.status = 200
+        complete_response.json = AsyncMock(return_value={
+            "access_token": "new_user_token",
+            "user_id": "@testuser:matrix.oculair.ca"
+        })
+        complete_response.__aenter__ = AsyncMock(return_value=complete_response)
+        complete_response.__aexit__ = AsyncMock(return_value=None)
+
+        # Mock session that returns different responses for each POST call
+        mock_post = MagicMock(side_effect=[initial_response, complete_response])
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            with patch.dict('os.environ', {'MATRIX_REGISTRATION_TOKEN': 'test_token_123'}):
+                with patch.object(user_manager, 'set_user_display_name', new_callable=AsyncMock) as mock_set_display:
+                    mock_set_display.return_value = True
+
+                    result = await user_manager.create_matrix_user("testuser", "password", "Test User")
+
+                    assert result is True
+                    # Verify two POST calls were made (initial + complete)
+                    assert mock_post.call_count == 2
+
+                    # Verify the second call used registration_token auth
+                    second_call_args = mock_post.call_args_list[1]
+                    call_json = second_call_args[1].get('json', {})
+                    assert call_json.get('auth', {}).get('type') == 'm.login.registration_token'
+                    assert call_json.get('auth', {}).get('token') == 'test_token_123'
+                    assert call_json.get('auth', {}).get('session') == 'test_session_id'
+
+    @pytest.mark.asyncio
+    async def test_create_user_with_dummy_auth_fallback(self, user_manager):
+        """Test user creation falls back to m.login.dummy when token not required"""
+        # Step 1: Initial request returns 401 with session and dummy flow
+        initial_response = MagicMock()
+        initial_response.status = 401
+        initial_response.json = AsyncMock(return_value={
+            "session": "test_session_id",
+            "flows": [{"stages": ["m.login.dummy"]}]
+        })
+        initial_response.__aenter__ = AsyncMock(return_value=initial_response)
+        initial_response.__aexit__ = AsyncMock(return_value=None)
+
+        # Step 2: Complete registration returns 200
+        complete_response = MagicMock()
+        complete_response.status = 200
+        complete_response.json = AsyncMock(return_value={
+            "access_token": "new_user_token",
+            "user_id": "@testuser:test.com"
+        })
+        complete_response.__aenter__ = AsyncMock(return_value=complete_response)
+        complete_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_post = MagicMock(side_effect=[initial_response, complete_response])
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            with patch.object(user_manager, 'set_user_display_name', new_callable=AsyncMock) as mock_set_display:
+                mock_set_display.return_value = True
+
+                result = await user_manager.create_matrix_user("testuser", "password", "Test User")
+
+                assert result is True
+                # Verify the second call used dummy auth
+                second_call_args = mock_post.call_args_list[1]
+                call_json = second_call_args[1].get('json', {})
+                assert call_json.get('auth', {}).get('type') == 'm.login.dummy'
+
+    @pytest.mark.asyncio
+    async def test_create_user_fails_without_registration_token(self, user_manager):
+        """Test user creation fails when token required but not configured"""
+        # Initial request returns 401 requiring registration_token
+        initial_response = MagicMock()
+        initial_response.status = 401
+        initial_response.json = AsyncMock(return_value={
+            "session": "test_session_id",
+            "flows": [{"stages": ["m.login.registration_token"]}]
+        })
+        initial_response.__aenter__ = AsyncMock(return_value=initial_response)
+        initial_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_post = MagicMock(return_value=initial_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            # Clear the registration token env var
+            with patch.dict('os.environ', {'MATRIX_REGISTRATION_TOKEN': ''}, clear=False):
+                # Remove the key entirely if it exists
+                import os
+                if 'MATRIX_REGISTRATION_TOKEN' in os.environ:
+                    del os.environ['MATRIX_REGISTRATION_TOKEN']
+
+                result = await user_manager.create_matrix_user("testuser", "password", "Test User")
+
+                # Should fail because no token is available
+                assert result is False
+
+    @pytest.mark.asyncio
+    async def test_create_user_no_session_returned(self, user_manager):
+        """Test user creation fails when no session is returned"""
+        initial_response = MagicMock()
+        initial_response.status = 401
+        initial_response.json = AsyncMock(return_value={
+            # No session field
+            "flows": [{"stages": ["m.login.registration_token"]}]
+        })
+        initial_response.__aenter__ = AsyncMock(return_value=initial_response)
+        initial_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_post = MagicMock(return_value=initial_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            result = await user_manager.create_matrix_user("testuser", "password", "Test User")
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_create_user_registration_completes_on_first_request(self, user_manager):
+        """Test user creation when registration succeeds without auth (rare case)"""
+        # Some servers might accept registration without auth
+        immediate_response = MagicMock()
+        immediate_response.status = 200
+        immediate_response.json = AsyncMock(return_value={
+            "access_token": "immediate_token",
+            "user_id": "@testuser:test.com"
+        })
+        immediate_response.__aenter__ = AsyncMock(return_value=immediate_response)
+        immediate_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_post = MagicMock(return_value=immediate_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            with patch.object(user_manager, 'set_user_display_name', new_callable=AsyncMock) as mock_set_display:
+                mock_set_display.return_value = True
+
+                result = await user_manager.create_matrix_user("testuser", "password", "Test User")
+
+                assert result is True
+                # Only one POST call needed
+                assert mock_post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_create_user_second_step_fails(self, user_manager):
+        """Test user creation when second step (complete registration) fails"""
+        initial_response = MagicMock()
+        initial_response.status = 401
+        initial_response.json = AsyncMock(return_value={
+            "session": "test_session",
+            "flows": [{"stages": ["m.login.registration_token"]}]
+        })
+        initial_response.__aenter__ = AsyncMock(return_value=initial_response)
+        initial_response.__aexit__ = AsyncMock(return_value=None)
+
+        # Second step fails with 403
+        complete_response = MagicMock()
+        complete_response.status = 403
+        complete_response.text = AsyncMock(return_value="Invalid registration token")
+        complete_response.__aenter__ = AsyncMock(return_value=complete_response)
+        complete_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_post = MagicMock(side_effect=[initial_response, complete_response])
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            with patch.dict('os.environ', {'MATRIX_REGISTRATION_TOKEN': 'wrong_token'}):
+                result = await user_manager.create_matrix_user("testuser", "password", "Test User")
+                assert result is False
+
+
 class TestUserCreationIntegration:
     """Integration tests for user creation workflow"""
 

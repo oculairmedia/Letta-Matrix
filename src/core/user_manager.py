@@ -140,6 +140,9 @@ class MatrixUserManager:
     async def create_matrix_user(self, username: str, password: str, display_name: str) -> bool:
         """Create a new Matrix user via registration API (Tuwunel compatible)
 
+        Uses two-step registration with m.login.registration_token for Tuwunel.
+        Falls back to m.login.dummy for Synapse compatibility.
+
         Args:
             username: Matrix username (localpart only, without @domain)
             password: Password for the new user
@@ -149,34 +152,84 @@ class MatrixUserManager:
             True if user created successfully or already exists, False otherwise
         """
         try:
-            # Use standard Matrix registration API (works with both Synapse and Tuwunel)
             url = f"{self.homeserver_url}/_matrix/client/v3/register"
+            headers = {"Content-Type": "application/json"}
 
-            headers = {
-                "Content-Type": "application/json"
-            }
-
-            data = {
+            # Step 1: Initiate registration to get session and available flows
+            initial_data = {
                 "username": username,
-                "password": password,
-                "auth": {"type": "m.login.dummy"}
+                "password": password
             }
 
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
+                async with session.post(url, headers=headers, json=initial_data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
+                        # Registration succeeded without auth (unlikely but handle it)
                         logger.info(f"Created Matrix user: @{username}:matrix.oculair.ca")
-
-                        # Set display name after registration
                         result = await response.json()
                         user_token = result.get("access_token")
                         if user_token:
                             await self.set_user_display_name(f"@{username}:matrix.oculair.ca", display_name, user_token)
-
                         return True
+
+                    elif response.status == 401:
+                        # Expected: need to complete auth flow
+                        auth_response = await response.json()
+                        session_id = auth_response.get("session")
+                        flows = auth_response.get("flows", [])
+
+                        if not session_id:
+                            logger.error(f"No session returned for user {username}")
+                            return False
+
+                        # Check what auth types are required
+                        required_stages = []
+                        for flow in flows:
+                            required_stages.extend(flow.get("stages", []))
+
+                        # Step 2: Complete registration with appropriate auth type
+                        if "m.login.registration_token" in required_stages:
+                            # Tuwunel requires registration token
+                            registration_token = os.getenv("MATRIX_REGISTRATION_TOKEN")
+                            if not registration_token:
+                                logger.error(f"MATRIX_REGISTRATION_TOKEN not set, cannot create user {username}")
+                                return False
+
+                            complete_data = {
+                                "username": username,
+                                "password": password,
+                                "auth": {
+                                    "type": "m.login.registration_token",
+                                    "token": registration_token,
+                                    "session": session_id
+                                }
+                            }
+                        else:
+                            # Fallback to dummy auth (Synapse)
+                            complete_data = {
+                                "username": username,
+                                "password": password,
+                                "auth": {
+                                    "type": "m.login.dummy",
+                                    "session": session_id
+                                }
+                            }
+
+                        async with session.post(url, headers=headers, json=complete_data, timeout=DEFAULT_TIMEOUT) as complete_response:
+                            if complete_response.status == 200:
+                                logger.info(f"Created Matrix user: @{username}:matrix.oculair.ca")
+                                result = await complete_response.json()
+                                user_token = result.get("access_token")
+                                if user_token:
+                                    await self.set_user_display_name(f"@{username}:matrix.oculair.ca", display_name, user_token)
+                                return True
+                            else:
+                                error_text = await complete_response.text()
+                                logger.error(f"Failed to complete registration for {username}: {complete_response.status} - {error_text}")
+                                return False
+
                     elif response.status == 400:
                         error_data = await response.json()
-                        # User already exists
                         if error_data.get("errcode") == "M_USER_IN_USE":
                             logger.info(f"Matrix user already exists: @{username}:matrix.oculair.ca")
                             return True
