@@ -1,18 +1,41 @@
 #!/usr/bin/env python3
-"""Provision Matrix rooms for all Letta agents missing them"""
+"""
+Provision Matrix rooms for all Letta agents missing them.
+
+This script:
+1. Queries Letta for all agents
+2. Compares with existing room mappings
+3. Creates Matrix users and rooms for any missing agents
+4. Updates BOTH the JSON file AND the database
+
+Run from inside the matrix-client container or with access to the database.
+"""
 
 import asyncio
 import aiohttp
 import json
 import os
+import sys
 
-MATRIX_HOMESERVER_URL = "http://127.0.0.1:6167"
-LETTA_API_URL = "http://192.168.50.90:8289"
-LETTA_TOKEN = "lettaSecurePass123"
-MATRIX_ADMIN_USERNAME = "admin"
-MATRIX_ADMIN_PASSWORD = "m6kvcVMWiSYzi6v"
-MATRIX_REGISTRATION_TOKEN = "matrix_mcp_secret_token_2024"
-AGENT_USER_MAPPINGS_PATH = "/opt/stacks/matrix-synapse-deployment/matrix_client_data/agent_user_mappings.json"
+# Add parent directory to path for imports when running standalone
+sys.path.insert(0, '/opt/stacks/matrix-synapse-deployment')
+
+MATRIX_HOMESERVER_URL = os.getenv("MATRIX_HOMESERVER_URL", "http://127.0.0.1:6167")
+LETTA_API_URL = os.getenv("LETTA_API_URL", "http://192.168.50.90:8289")
+LETTA_TOKEN = os.getenv("LETTA_TOKEN", "lettaSecurePass123")
+MATRIX_ADMIN_USERNAME = os.getenv("MATRIX_ADMIN_USERNAME", "admin")
+MATRIX_ADMIN_PASSWORD = os.getenv("MATRIX_ADMIN_PASSWORD", "m6kvcVMWiSYzi6v")
+MATRIX_REGISTRATION_TOKEN = os.getenv("MATRIX_REGISTRATION_TOKEN", "matrix_mcp_secret_token_2024")
+AGENT_USER_MAPPINGS_PATH = os.getenv("AGENT_USER_MAPPINGS_PATH", "/opt/stacks/matrix-synapse-deployment/matrix_client_data/agent_user_mappings.json")
+
+# Try to import database module (may not be available when running standalone)
+HAS_DB = False
+try:
+    from src.models.agent_mapping import AgentMappingDB
+    HAS_DB = True
+except ImportError:
+    print("Warning: Database module not available, will only update JSON file")
+
 
 async def get_admin_token():
     async with aiohttp.ClientSession() as session:
@@ -27,6 +50,7 @@ async def get_admin_token():
             data = await resp.json()
             return data.get("access_token")
 
+
 async def get_letta_agents():
     async with aiohttp.ClientSession() as session:
         async with session.get(
@@ -35,15 +59,52 @@ async def get_letta_agents():
         ) as resp:
             return await resp.json()
 
+
 def load_mappings():
     if os.path.exists(AGENT_USER_MAPPINGS_PATH):
         with open(AGENT_USER_MAPPINGS_PATH, 'r') as f:
             return json.load(f)
     return {}
 
+
 def save_mappings(mappings):
     with open(AGENT_USER_MAPPINGS_PATH, 'w') as f:
         json.dump(mappings, f, indent=2)
+
+
+def update_database(agent_id, user_id, password, room_id, agent_name):
+    """Update the database with the new mapping"""
+    if not HAS_DB:
+        return False
+    
+    try:
+        from src.models.agent_mapping import AgentMappingDB as DB
+        db = DB()
+        existing = db.get_by_agent_id(agent_id)
+        
+        if existing:
+            # Update existing record
+            db.update(
+                agent_id,
+                room_id=room_id,
+                room_created=True,
+                matrix_password=password
+            )
+        else:
+            # Create new record
+            db.upsert(
+                agent_id=agent_id,
+                agent_name=agent_name,
+                matrix_user_id=user_id,
+                matrix_password=password,
+                room_id=room_id,
+                room_created=True
+            )
+        return True
+    except Exception as e:
+        print(f"  Warning: Database update failed: {e}")
+        return False
+
 
 async def register_user(localpart, password):
     """Register a new Matrix user with registration token flow"""
@@ -94,6 +155,7 @@ async def register_user(localpart, password):
                 print(f"    Registration failed: {error[:100]}")
                 return None, None
 
+
 async def create_user_and_room(admin_token, agent_id, agent_name):
     """Create Matrix user and room for an agent"""
     
@@ -106,7 +168,7 @@ async def create_user_and_room(admin_token, agent_id, agent_name):
     
     if not access_token:
         print(f"  ERROR: Could not get access token")
-        return None, None
+        return None, None, None
     
     print(f"  User: {user_id}")
     
@@ -121,7 +183,7 @@ async def create_user_and_room(admin_token, agent_id, agent_name):
                 rooms = data.get("joined_rooms", [])
                 if rooms:
                     print(f"  Already in room: {rooms[0]}")
-                    return user_id, rooms[0]
+                    return user_id, rooms[0], password
     
     # Create room
     async with aiohttp.ClientSession() as session:
@@ -157,10 +219,11 @@ async def create_user_and_room(admin_token, agent_id, agent_name):
                 )
                 print(f"  Admin joined")
                 
-                return user_id, room_id
+                return user_id, room_id, password
             else:
                 print(f"  Failed to create room: {await resp.text()}")
-                return user_id, None
+                return user_id, None, password
+
 
 async def main():
     print("=== Provisioning Missing Agent Rooms ===\n")
@@ -199,24 +262,33 @@ async def main():
     
     # Create rooms for missing agents
     created = 0
+    db_updated = 0
     for agent in missing:
         print(f"Processing: {agent['name']} ({agent['id']})")
         
-        user_id, room_id = await create_user_and_room(admin_token, agent['id'], agent['name'])
+        user_id, room_id, password = await create_user_and_room(admin_token, agent['id'], agent['name'])
         
         if room_id:
+            # Update JSON mappings
             mappings[agent['id']] = {
                 "agent_id": agent['id'],
                 "agent_name": agent['name'],
                 "matrix_user_id": user_id,
-                "matrix_room_id": room_id
+                "matrix_room_id": room_id,
+                "matrix_password": password
             }
             created += 1
+            
+            # Update database
+            if update_database(agent['id'], user_id, password, room_id, agent['name']):
+                db_updated += 1
+                print(f"  Database updated")
         print()
     
-    # Save updated mappings
+    # Save updated mappings to JSON
     save_mappings(mappings)
-    print(f"\n=== Done. Created {created} rooms. ===")
+    print(f"\n=== Done. Created {created} rooms. Database updated: {db_updated} ===")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
