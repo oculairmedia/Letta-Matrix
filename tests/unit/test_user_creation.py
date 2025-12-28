@@ -280,87 +280,126 @@ class TestUserCreation:
 
     @pytest.mark.asyncio
     async def test_update_display_name_success(self, user_manager):
-        """Test successfully updating display name with admin privileges"""
-        # Mock get_admin_token
-        with patch.object(user_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
-            mock_token.return_value = "admin_token_123"
+        """Test successfully updating display name by logging in as user"""
+        # Mock successful login response
+        mock_login_response = MagicMock()
+        mock_login_response.status = 200
+        mock_login_response.json = AsyncMock(return_value={"access_token": "user_token_123"})
+        mock_login_response.__aenter__ = AsyncMock(return_value=mock_login_response)
+        mock_login_response.__aexit__ = AsyncMock(return_value=None)
 
-            # Mock successful HTTP PUT response
-            mock_response = MagicMock()
-            mock_response.status = 200
-            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-            mock_response.__aexit__ = AsyncMock(return_value=None)
+        # Mock successful profile update response
+        mock_profile_response = MagicMock()
+        mock_profile_response.status = 200
+        mock_profile_response.__aenter__ = AsyncMock(return_value=mock_profile_response)
+        mock_profile_response.__aexit__ = AsyncMock(return_value=None)
 
-            mock_put = MagicMock(return_value=mock_response)
-            mock_session = MagicMock()
-            mock_session.put = mock_put
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=None)
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_login_response)
+        mock_session.put = MagicMock(return_value=mock_profile_response)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
 
-            with patch('aiohttp.ClientSession', return_value=mock_session):
-                result = await user_manager.update_display_name(
-                    "@testuser:test.com",
-                    "New Display Name"
-                )
-
-                assert result is True
-                mock_put.assert_called_once()
-                # Verify the correct URL was called
-                call_args = mock_put.call_args
-                assert "/_matrix/client/r0/profile/" in call_args[0][0]
-                assert "@testuser:test.com" in call_args[0][0]
-
-    @pytest.mark.asyncio
-    async def test_update_display_name_no_admin_token(self, user_manager):
-        """Test update_display_name fails when admin token unavailable"""
-        # Mock get_admin_token to return None
-        with patch.object(user_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
-            mock_token.return_value = None
-
+        with patch('aiohttp.ClientSession', return_value=mock_session):
             result = await user_manager.update_display_name(
                 "@testuser:test.com",
-                "New Name"
+                "New Display Name",
+                "user_password"
+            )
+
+            assert result is True
+            mock_session.post.assert_called_once()  # Login call
+            mock_session.put.assert_called_once()   # Profile update call
+            # Verify the correct profile URL was called
+            call_args = mock_session.put.call_args
+            assert "/_matrix/client/v3/profile/" in call_args[0][0]
+            assert "@testuser:test.com" in call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_update_display_name_no_password(self, user_manager):
+        """Test update_display_name fails when no password provided"""
+        result = await user_manager.update_display_name(
+            "@testuser:test.com",
+            "New Name"
+        )
+
+        assert result is False
+
+        # Also test with None explicitly
+        result = await user_manager.update_display_name(
+            "@testuser:test.com",
+            "New Name",
+            None
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_display_name_login_failure(self, user_manager):
+        """Test update_display_name handles login failures"""
+        # Mock failed login response
+        mock_login_response = MagicMock()
+        mock_login_response.status = 403
+        mock_login_response.text = AsyncMock(return_value="Forbidden")
+        mock_login_response.__aenter__ = AsyncMock(return_value=mock_login_response)
+        mock_login_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_login_response)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            result = await user_manager.update_display_name(
+                "@testuser:test.com",
+                "New Name",
+                "wrong_password"
             )
 
             assert result is False
 
     @pytest.mark.asyncio
-    async def test_update_display_name_http_failure(self, user_manager):
-        """Test update_display_name handles HTTP failures"""
-        # Mock get_admin_token
-        with patch.object(user_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
-            mock_token.return_value = "admin_token"
+    async def test_update_display_name_profile_update_failure(self, user_manager):
+        """Test update_display_name handles profile update failures"""
+        # Mock successful login response
+        mock_login_response = MagicMock()
+        mock_login_response.status = 200
+        mock_login_response.json = AsyncMock(return_value={"access_token": "user_token_123"})
+        mock_login_response.__aenter__ = AsyncMock(return_value=mock_login_response)
+        mock_login_response.__aexit__ = AsyncMock(return_value=None)
 
-            # Mock failed HTTP response
-            mock_response = MagicMock()
-            mock_response.status = 403
-            mock_response.text = AsyncMock(return_value="Forbidden")
-            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-            mock_response.__aexit__ = AsyncMock(return_value=None)
+        # Mock failed profile update response
+        mock_profile_response = MagicMock()
+        mock_profile_response.status = 403
+        mock_profile_response.text = AsyncMock(return_value="Forbidden")
+        mock_profile_response.__aenter__ = AsyncMock(return_value=mock_profile_response)
+        mock_profile_response.__aexit__ = AsyncMock(return_value=None)
 
-            mock_put = MagicMock(return_value=mock_response)
-            mock_session = MagicMock()
-            mock_session.put = mock_put
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=None)
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_login_response)
+        mock_session.put = MagicMock(return_value=mock_profile_response)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
 
-            with patch('aiohttp.ClientSession', return_value=mock_session):
-                result = await user_manager.update_display_name(
-                    "@testuser:test.com",
-                    "New Name"
-                )
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            result = await user_manager.update_display_name(
+                "@testuser:test.com",
+                "New Name",
+                "password"
+            )
 
-                assert result is False
+            assert result is False
 
     @pytest.mark.asyncio
     async def test_update_display_name_exception_handling(self, user_manager):
         """Test update_display_name handles exceptions gracefully"""
-        with patch.object(user_manager, 'get_admin_token', new_callable=AsyncMock) as mock_token:
-            mock_token.side_effect = Exception("Network error")
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session_class.side_effect = Exception("Network error")
 
             result = await user_manager.update_display_name(
                 "@testuser:test.com",
-                "New Name"
+                "New Name",
+                "password"
             )
 
             assert result is False

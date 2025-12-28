@@ -395,9 +395,11 @@ class AgentUserManager:
                                 logger.warning(f"Failed to update room name for {mapping.room_id}")
 
                         # Update display name for the Matrix user
-                        if mapping.matrix_user_id:
+                        if mapping.matrix_user_id and mapping.matrix_password:
                             logger.info(f"Updating display name for {mapping.matrix_user_id}")
-                            display_success = await self.update_display_name(mapping.matrix_user_id, agent['name'])
+                            display_success = await self.update_display_name(
+                                mapping.matrix_user_id, agent['name'], mapping.matrix_password
+                            )
                             if display_success:
                                 logger.debug(f"Successfully updated display name for {mapping.matrix_user_id}")
                             else:
@@ -556,8 +558,8 @@ class AgentUserManager:
             password = self.generate_password()
             logger.info(f"Generated new password for agent {agent_name}")
 
-        # Create the Matrix user
-        success = await self.create_matrix_user(username, password, f"Letta Agent: {agent_name}")
+        # Create the Matrix user with the agent name as display name
+        success = await self.create_matrix_user(username, password, agent_name)
 
         # Update or create the mapping
         if agent_id in self.mappings:
@@ -578,13 +580,8 @@ class AgentUserManager:
 
         if success:
             logger.info(f"Successfully created Matrix user {matrix_user_id} for agent {agent_name}")
-
-            # Set the display name to the agent name
-            display_success = await self.update_display_name(matrix_user_id, agent_name)
-            if display_success:
-                logger.info(f"Successfully set display name to '{agent_name}' for {matrix_user_id}")
-            else:
-                logger.warning(f"Failed to set display name for {matrix_user_id}")
+            # Display name is set during user creation via set_user_display_name
+            # No need to call update_display_name here
 
             # Now create/update the room for this agent
             await self.create_or_update_agent_room(agent_id)
@@ -636,9 +633,9 @@ class AgentUserManager:
         """Update the name of an existing room - delegates to room_manager"""
         return await self.room_manager.update_room_name(room_id, new_name)
 
-    async def update_display_name(self, user_id: str, display_name: str) -> bool:
+    async def update_display_name(self, user_id: str, display_name: str, password: Optional[str] = None) -> bool:
         """Update the display name of a Matrix user - delegates to user_manager"""
-        return await self.user_manager.update_display_name(user_id, display_name)
+        return await self.user_manager.update_display_name(user_id, display_name, password)
 
     async def find_existing_agent_room(self, agent_name: str) -> Optional[str]:
         """Find an existing room for an agent by searching room names - delegates to room_manager"""

@@ -30,45 +30,51 @@ class TestUpdateDisplayName:
 
     @pytest.mark.asyncio
     async def test_update_display_name_success(self, mock_config, mock_aiohttp_session):
-        """Test successfully updating display name"""
+        """Test successfully updating display name by logging in as user"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                # Patch at user_manager level since get_admin_token is delegated
-                with patch.object(manager.user_manager, 'get_admin_token', return_value="admin_token"):
-                    mock_response = AsyncMock()
-                    mock_response.status = 200
-                    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-                    mock_response.__aexit__ = AsyncMock(return_value=None)
+                # Mock successful login response
+                mock_login_response = AsyncMock()
+                mock_login_response.status = 200
+                mock_login_response.json = AsyncMock(return_value={"access_token": "user_token_123"})
+                mock_login_response.__aenter__ = AsyncMock(return_value=mock_login_response)
+                mock_login_response.__aexit__ = AsyncMock(return_value=None)
 
-                    mock_aiohttp_session.put = Mock(return_value=mock_response)
-                    mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-                    mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+                # Mock successful profile update response
+                mock_profile_response = AsyncMock()
+                mock_profile_response.status = 200
+                mock_profile_response.__aenter__ = AsyncMock(return_value=mock_profile_response)
+                mock_profile_response.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('src.core.user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
-                        success = await manager.update_display_name(
-                            "@agent_123:matrix.oculair.ca",
-                            "New Agent Name"
-                        )
+                mock_aiohttp_session.post = Mock(return_value=mock_login_response)
+                mock_aiohttp_session.put = Mock(return_value=mock_profile_response)
+                mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+                mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                        assert success is True
-
-    @pytest.mark.asyncio
-    async def test_update_display_name_no_admin_token(self, mock_config):
-        """Test display name update when admin token unavailable"""
-        with patch('src.core.agent_user_manager.logging.getLogger'):
-            with patch('src.core.agent_user_manager.os.makedirs'):
-                manager = AgentUserManager(config=mock_config)
-
-                # Patch at user_manager level since get_admin_token is delegated
-                with patch.object(manager.user_manager, 'get_admin_token', return_value=None):
+                with patch('src.core.user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     success = await manager.update_display_name(
                         "@agent_123:matrix.oculair.ca",
-                        "New Name"
+                        "New Agent Name",
+                        "agent_password"
                     )
 
-                    assert success is False
+                    assert success is True
+
+    @pytest.mark.asyncio
+    async def test_update_display_name_no_password(self, mock_config):
+        """Test display name update fails when no password provided"""
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
+                manager = AgentUserManager(config=mock_config)
+
+                success = await manager.update_display_name(
+                    "@agent_123:matrix.oculair.ca",
+                    "New Name"
+                )
+
+                assert success is False
 
 
 @pytest.mark.unit
@@ -102,27 +108,28 @@ class TestUpdateDisplayNameFailure:
     """Test display name update error handling"""
 
     @pytest.mark.asyncio
-    async def test_update_display_name_api_failure(self, mock_config, mock_aiohttp_session):
-        """Test display name update when API fails"""
+    async def test_update_display_name_login_failure(self, mock_config, mock_aiohttp_session):
+        """Test display name update when login fails"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                with patch.object(manager, 'get_admin_token', return_value="admin_token"):
-                    mock_response = AsyncMock()
-                    mock_response.status = 500
-                    mock_response.text = AsyncMock(return_value="Server Error")
-                    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-                    mock_response.__aexit__ = AsyncMock(return_value=None)
+                # Mock failed login response
+                mock_login_response = AsyncMock()
+                mock_login_response.status = 403
+                mock_login_response.text = AsyncMock(return_value="Wrong password")
+                mock_login_response.__aenter__ = AsyncMock(return_value=mock_login_response)
+                mock_login_response.__aexit__ = AsyncMock(return_value=None)
 
-                    mock_aiohttp_session.put = Mock(return_value=mock_response)
-                    mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-                    mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
+                mock_aiohttp_session.post = Mock(return_value=mock_login_response)
+                mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
+                mock_aiohttp_session.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
-                        success = await manager.update_display_name(
-                            "@agent_123:matrix.oculair.ca",
-                            "New Name"
-                        )
+                with patch('src.core.user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
+                    success = await manager.update_display_name(
+                        "@agent_123:matrix.oculair.ca",
+                        "New Name",
+                        "wrong_password"
+                    )
 
-                        assert success is False
+                    assert success is False

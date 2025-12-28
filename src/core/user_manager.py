@@ -277,36 +277,54 @@ class MatrixUserManager:
             logger.error(f"Error setting display name: {e}")
             return False
 
-    async def update_display_name(self, user_id: str, display_name: str) -> bool:
-        """Update the display name of a Matrix user using admin privileges
+    async def update_display_name(self, user_id: str, display_name: str, password: Optional[str] = None) -> bool:
+        """Update the display name of a Matrix user by logging in as them
+
+        Matrix doesn't allow admins to change other users' display names,
+        so we must login as the user and use their token.
 
         Args:
             user_id: Full Matrix user ID (@user:domain)
             display_name: New display name
+            password: User's password (required for login)
 
         Returns:
             True if successful, False otherwise
         """
+        if not password:
+            logger.warning(f"Cannot update display name for {user_id}: no password provided")
+            return False
+
         try:
-            # Get admin token
-            admin_token = await self.get_admin_token()
-            if not admin_token:
-                logger.warning("Failed to get admin token, cannot update display name")
-                return False
-
-            # Use the profile API to update display name
-            url = f"{self.homeserver_url}/_matrix/client/r0/profile/{user_id}/displayname"
-            headers = {
-                "Authorization": f"Bearer {admin_token}",
-                "Content-Type": "application/json"
-            }
-
-            display_name_data = {
-                "displayname": display_name
-            }
-
             async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json=display_name_data, timeout=DEFAULT_TIMEOUT) as response:
+                # Login as the user to get their token
+                login_url = f"{self.homeserver_url}/_matrix/client/v3/login"
+                login_data = {
+                    "type": "m.login.password",
+                    "identifier": {"type": "m.id.user", "user": user_id},
+                    "password": password
+                }
+
+                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as login_response:
+                    if login_response.status != 200:
+                        error_text = await login_response.text()
+                        logger.error(f"Failed to login as {user_id}: {login_response.status} - {error_text}")
+                        return False
+
+                    login_result = await login_response.json()
+                    user_token = login_result.get("access_token")
+                    if not user_token:
+                        logger.error(f"No access token returned for {user_id}")
+                        return False
+
+                # Set display name using user's own token
+                profile_url = f"{self.homeserver_url}/_matrix/client/v3/profile/{user_id}/displayname"
+                headers = {
+                    "Authorization": f"Bearer {user_token}",
+                    "Content-Type": "application/json"
+                }
+
+                async with session.put(profile_url, headers=headers, json={"displayname": display_name}, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         logger.info(f"Successfully updated display name for {user_id} to '{display_name}'")
                         return True
