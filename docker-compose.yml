@@ -176,6 +176,7 @@ services:
       - AGENT_MAPPINGS_PATH=/app/data/agent_user_mappings.json
     volumes:
       - ./matrix_client_data:/app/data
+      - ./opencode-bridge/dist:/app/dist:ro  # Mount local builds for development
     depends_on:
       tuwunel:
         condition: service_healthy

@@ -266,12 +266,21 @@ async function discoverAllOpenCodeInstances(): Promise<void> {
       }
 
       // Always ensure identity mappings point to the correct (latest) registration
-      // This handles the case where identity mappings were deleted during stale cleanup
+      // This handles the case where:
+      // 1. Identity mappings were deleted during stale cleanup
+      // 2. A stale registration exists with wrong port (prefer newer registration)
+      // 3. Multiple registrations exist for same directory (prefer most recently seen)
       const matrixIdentities = deriveMatrixIdentities(directory);
       for (const identity of matrixIdentities) {
         const currentMapping = identityToRegistration.get(identity);
-        // Update mapping if it doesn't exist or points to a different/stale registration
-        if (!currentMapping || currentMapping.directory === directory) {
+        // Update mapping if:
+        // - No mapping exists, OR
+        // - Current mapping's directory matches (update to latest port), OR
+        // - Current mapping is older than this registration (prefer newer)
+        const shouldUpdate = !currentMapping || 
+          currentMapping.directory === directory ||
+          currentMapping.lastSeen < registration.lastSeen;
+        if (shouldUpdate) {
           identityToRegistration.set(identity, registration);
         }
       }
@@ -889,25 +898,23 @@ async function main(): Promise<void> {
   // Initialize Matrix client
   await initMatrix();
 
-  // Start periodic cleanup of stale registrations
-  const STALE_TIMEOUT = 300000; // 5 minutes
+  // Start periodic discovery to keep registrations up to date
+  // This runs every 30 seconds to discover new OpenCode instances
+  // and update identity mappings with correct ports
   console.log(
-    "[Bridge] Starting registration cleanup (stale after 5 minutes)...",
+    "[Bridge] Starting periodic discovery (every 30 seconds)...",
   );
   discoveryInterval = setInterval(async () => {
-    const now = Date.now();
-    for (const [id, reg] of registrations.entries()) {
-      if (now - reg.lastSeen > STALE_TIMEOUT) {
-        console.log(`[Bridge] Removing stale registration: ${id}`);
-        registrations.delete(id);
-        // Also remove from identity map
-        const matrixIdentities = deriveMatrixIdentities(reg.directory);
-        for (const identity of matrixIdentities) {
-          identityToRegistration.delete(identity);
-        }
-      }
+    try {
+      await discoverAllOpenCodeInstances();
+    } catch (error) {
+      console.error("[Bridge] Periodic discovery failed:", error);
     }
-  }, 60000); // Clean up every 60 seconds
+  }, 30000); // Discover every 30 seconds
+  
+  // Run initial discovery
+  console.log("[Bridge] Running initial discovery...");
+  await discoverAllOpenCodeInstances();
 
   console.log("[Bridge] OpenCode Matrix Bridge ready!");
   console.log("[Bridge] Endpoints:");
