@@ -156,6 +156,121 @@ class MatrixRoomManager:
             logger.error(f"Error checking membership for {user_id} in room {room_id}: {e}")
             return False
 
+    # Required members that should be in every agent room
+    REQUIRED_ROOM_MEMBERS = [
+        "@admin:matrix.oculair.ca",  # Admin user for oversight
+        "@letta:matrix.oculair.ca",  # Main Letta bridge bot
+        "@agent_mail_bridge:matrix.oculair.ca",  # Agent Mail bridge for inter-agent coordination
+    ]
+
+    async def get_room_members(self, room_id: str) -> List[str]:
+        """Get list of all members in a room"""
+        try:
+            admin_token = await self.get_admin_token()
+            if not admin_token:
+                logger.warning("Failed to get admin token, cannot get room members")
+                return []
+
+            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/joined_members"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json"
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return list(data.get("joined", {}).keys())
+                    else:
+                        logger.warning(f"Failed to get room members: {response.status}")
+                        return []
+
+        except Exception as e:
+            logger.error(f"Error getting room members for {room_id}: {e}")
+            return []
+
+    async def ensure_required_members(self, room_id: str, agent_id: str) -> Dict[str, str]:
+        """
+        Ensure all required members are in the room.
+        Returns dict of {user_id: status} where status is 'already_member', 'invited', 'joined', or 'failed'
+        """
+        results = {}
+        
+        try:
+            # Get current room members
+            current_members = await self.get_room_members(room_id)
+            
+            # Get agent credentials from database for inviting
+            from src.models.agent_mapping import AgentMappingDB
+            db = AgentMappingDB()
+            mapping = db.get_by_agent_id(agent_id)
+            
+            if not mapping:
+                logger.warning(f"Cannot ensure members for room {room_id} - no agent mapping found for {agent_id}")
+                return {user: "failed" for user in self.REQUIRED_ROOM_MEMBERS}
+            
+            agent_username = mapping.matrix_user_id.split(':')[0].replace('@', '')
+            agent_password = mapping.matrix_password
+            
+            for required_user in self.REQUIRED_ROOM_MEMBERS:
+                if required_user in current_members:
+                    results[required_user] = "already_member"
+                    logger.debug(f"{required_user} already in room {room_id}")
+                    continue
+                
+                # Need to invite and join this user
+                logger.info(f"Ensuring {required_user} is in room {room_id}")
+                
+                # First, login as the agent to send invite
+                async with aiohttp.ClientSession() as session:
+                    # Login as agent
+                    login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
+                    login_data = {
+                        "type": "m.login.password",
+                        "user": agent_username,
+                        "password": agent_password
+                    }
+                    
+                    async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                        if response.status != 200:
+                            logger.error(f"Failed to login as agent {agent_username}")
+                            results[required_user] = "failed"
+                            continue
+                        
+                        auth_data = await response.json()
+                        agent_token = auth_data.get("access_token")
+                    
+                    # Send invite
+                    invite_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/invite"
+                    headers = {
+                        "Authorization": f"Bearer {agent_token}",
+                        "Content-Type": "application/json"
+                    }
+                    invite_data = {"user_id": required_user}
+                    
+                    async with session.post(invite_url, headers=headers, json=invite_data, timeout=DEFAULT_TIMEOUT) as response:
+                        if response.status == 200:
+                            logger.info(f"Invited {required_user} to room {room_id}")
+                            results[required_user] = "invited"
+                        elif response.status == 403:
+                            error_text = await response.text()
+                            if "already in the room" in error_text.lower():
+                                results[required_user] = "already_member"
+                            else:
+                                logger.warning(f"Failed to invite {required_user}: {error_text}")
+                                results[required_user] = "failed"
+                        else:
+                            error_text = await response.text()
+                            logger.warning(f"Failed to invite {required_user}: {response.status} - {error_text}")
+                            results[required_user] = "failed"
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error ensuring required members for room {room_id}: {e}")
+            return {user: "failed" for user in self.REQUIRED_ROOM_MEMBERS}
+
     async def invite_admin_to_room(self, room_id: str, agent_name: str) -> bool:
         """Invite admin user to a room using the agent's credentials"""
         try:

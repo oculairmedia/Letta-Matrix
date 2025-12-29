@@ -443,15 +443,13 @@ class AgentUserManager:
                             logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
                             await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
                             
-                            # Check if admin is in the room, invite if not
-                            admin_in_room = await self.room_manager.check_admin_in_room(mapping.room_id)
-                            if not admin_in_room:
-                                logger.warning(f"🔔 Admin not in room for {agent['name']}, attempting to invite...")
-                                invite_success = await self.room_manager.invite_admin_to_room(mapping.room_id, agent['name'])
-                                if invite_success:
-                                    logger.info(f"✅ Successfully invited admin to {agent['name']}'s room")
-                                else:
-                                    logger.warning(f"⚠️  Failed to invite admin to {agent['name']}'s room {mapping.room_id}")
+                            # Ensure all required members are in the room (admin, letta, agent_mail_bridge)
+                            member_results = await self.room_manager.ensure_required_members(mapping.room_id, agent['id'])
+                            for user_id, status in member_results.items():
+                                if status == "invited":
+                                    logger.info(f"✅ Invited {user_id} to {agent['name']}'s room")
+                                elif status == "failed":
+                                    logger.warning(f"⚠️  Failed to ensure {user_id} in {agent['name']}'s room")
         # TODO: Optionally handle removed agents (deactivate users?)
         removed_agents = existing_agent_ids - current_agent_ids
         if removed_agents:
