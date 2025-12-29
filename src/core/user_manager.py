@@ -6,6 +6,8 @@ Extracted from agent_user_manager.py as part of Sprint 3 refactoring
 import logging
 import os
 import re
+import secrets
+import string
 import aiohttp
 from typing import Optional
 
@@ -368,20 +370,60 @@ class MatrixUserManager:
 
         return username
 
-    def generate_password(self) -> str:
+    def generate_password(self, length: int = 16) -> str:
         """Generate a secure password for a Matrix user
 
+        Args:
+            length: Password length (default 16)
+            
         Returns:
-            Generated password (16 characters, alphanumeric)
+            Generated password (alphanumeric)
         """
         # Development override - use simple password if DEV_MODE is set
         if os.getenv("DEV_MODE", "").lower() in ["true", "1", "yes"]:
             return "password"
 
-        import secrets
-        import string
         alphabet = string.ascii_letters + string.digits
-        return ''.join(secrets.choice(alphabet) for _ in range(16))
+        return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+    def generate_agent_password(self, agent_id: str) -> str:
+        """Generate a password for an agent user.
+        
+        Uses a deterministic prefix based on agent_id for easier debugging,
+        combined with random characters for security.
+        
+        Args:
+            agent_id: The agent's ID (e.g., "agent-b417b8da-84d2-40dd-97ad-3a35454934f7")
+            
+        Returns:
+            Generated password in format "AgentPass_{short_id}_{random}!"
+        """
+        if os.getenv("DEV_MODE", "").lower() in ["true", "1", "yes"]:
+            return "password"
+        
+        # Extract short ID from agent_id
+        short_id = agent_id.replace("agent-", "")[:8]
+        
+        # Generate random suffix
+        random_suffix = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+        
+        return f"AgentPass_{short_id}_{random_suffix}!"
+
+    def generate_service_password(self, service_name: str) -> str:
+        """Generate a password for a service user (bridge bots, etc).
+        
+        Args:
+            service_name: Name of the service (e.g., "agent_mail_bridge")
+            
+        Returns:
+            Generated password
+        """
+        if os.getenv("DEV_MODE", "").lower() in ["true", "1", "yes"]:
+            return "password"
+        
+        # Generate secure random password with special chars for services
+        random_part = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+        return f"{service_name}_{random_part}!"
 
     async def ensure_core_users_exist(self, core_users: list):
         """Ensure required core Matrix users exist (idempotent bootstrap)

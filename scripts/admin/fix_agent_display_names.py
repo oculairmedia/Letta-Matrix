@@ -15,6 +15,8 @@ other users' display names via the client API.
 import asyncio
 import aiohttp
 import asyncpg
+import secrets
+import string
 import sys
 import time
 from typing import Optional, Tuple
@@ -25,7 +27,13 @@ DATABASE_URL = "postgresql://letta:letta@192.168.50.90:5432/matrix_letta"
 ADMIN_USER = "@admin:matrix.oculair.ca"
 ADMIN_PASSWORD = "m6kvcVMWiSYzi6v"
 ADMIN_ROOM = "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca"
-AGENT_PASSWORD = "password"  # Standard password for all agents
+
+
+def generate_agent_password(agent_id: str) -> str:
+    """Generate a password for an agent user."""
+    short_id = agent_id.replace("agent-", "")[:8]
+    random_suffix = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+    return f"AgentPass_{short_id}_{random_suffix}!"
 
 
 async def get_admin_token(session: aiohttp.ClientSession) -> Optional[str]:
@@ -140,8 +148,10 @@ async def set_display_name(session: aiohttp.ClientSession, user_id: str, display
 async def fix_single_agent(
     session: aiohttp.ClientSession, 
     admin_token: str,
+    agent_id: str,
     agent_name: str, 
     matrix_user_id: str,
+    stored_password: str,
     dry_run: bool
 ) -> Tuple[str, str]:
     """Fix display name for a single agent. Returns (status, message)"""
@@ -154,18 +164,19 @@ async def fix_single_agent(
     if dry_run:
         return ("would_fix", f"'{current_name}' -> '{agent_name}'")
     
-    # Try to login with standard password
-    token = await login_user(session, matrix_user_id, AGENT_PASSWORD)
+    # Try to login with stored password first
+    token = await login_user(session, matrix_user_id, stored_password)
     
     if not token:
-        # Reset password via admin command
-        success = await reset_password(session, admin_token, matrix_user_id, AGENT_PASSWORD)
+        # Generate a new password and reset via admin command
+        new_password = generate_agent_password(agent_id)
+        success = await reset_password(session, admin_token, matrix_user_id, new_password)
         if not success:
             return ("failed", "could not reset password")
         
         # Try login again
         await asyncio.sleep(0.2)
-        token = await login_user(session, matrix_user_id, AGENT_PASSWORD)
+        token = await login_user(session, matrix_user_id, new_password)
         if not token:
             return ("failed", "login failed after password reset")
     
@@ -189,7 +200,7 @@ async def fix_display_names(dry_run: bool = True):
     try:
         # Get all agents with matrix users
         agents = await conn.fetch("""
-            SELECT agent_id, agent_name, matrix_user_id 
+            SELECT agent_id, agent_name, matrix_user_id, matrix_password 
             FROM agent_mappings 
             WHERE matrix_user_id IS NOT NULL
             ORDER BY agent_name
@@ -209,11 +220,13 @@ async def fix_display_names(dry_run: bool = True):
                 admin_token = ""  # Placeholder for dry run
             
             for agent in agents:
+                agent_id = agent["agent_id"]
                 agent_name = agent["agent_name"]
                 matrix_user_id = agent["matrix_user_id"]
+                stored_password = agent["matrix_password"] or "password"
                 
                 status, message = await fix_single_agent(
-                    session, admin_token, agent_name, matrix_user_id, dry_run
+                    session, admin_token, agent_id, agent_name, matrix_user_id, stored_password, dry_run
                 )
                 
                 stats[status] += 1

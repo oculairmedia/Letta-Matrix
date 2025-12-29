@@ -14,6 +14,8 @@ import asyncio
 import aiohttp
 import argparse
 import os
+import secrets
+import string
 import sys
 import time
 import psycopg2
@@ -38,10 +40,18 @@ REQUIRED_MEMBERS = [
     "@agent_mail_bridge:matrix.oculair.ca",
 ]
 
-# Known passwords for required users (will be reset via admin if needed)
-USER_PASSWORDS = {
-    "@agent_mail_bridge:matrix.oculair.ca": "MailBridge2024!",
-}
+
+def generate_service_password(service_name: str) -> str:
+    """Generate a password for a service user."""
+    random_part = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+    return f"{service_name}_{random_part}!"
+
+
+def generate_agent_password(agent_id: str) -> str:
+    """Generate a password for an agent user."""
+    short_id = agent_id.replace("agent-", "")[:8]
+    random_suffix = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+    return f"AgentPass_{short_id}_{random_suffix}!"
 
 
 async def get_admin_token(session: aiohttp.ClientSession) -> Optional[str]:
@@ -98,28 +108,38 @@ async def get_room_members(session: aiohttp.ClientSession, admin_token: str, roo
 async def get_user_token(session: aiohttp.ClientSession, admin_token: str, user_id: str) -> Optional[str]:
     """Get or create access token for a user"""
     username = user_id.split(":")[0].replace("@", "")
-    password = USER_PASSWORDS.get(user_id, f"TempPass_{username}!")
     
-    # Try login
+    # Generate a new password for service users
+    password = generate_service_password(username)
+    
+    # Try login first with a few common password patterns
     login_url = f"{HOMESERVER_URL}/_matrix/client/v3/login"
-    login_data = {
-        "type": "m.login.password",
-        "user": username,
-        "password": password
-    }
     
-    async with session.post(login_url, json=login_data) as response:
-        if response.status == 200:
-            data = await response.json()
-            return data.get("access_token")
+    # Try the generated password pattern first (in case we set it before)
+    for try_password in [password, f"{username}_password!", "password"]:
+        login_data = {
+            "type": "m.login.password",
+            "user": username,
+            "password": try_password
+        }
+        
+        async with session.post(login_url, json=login_data) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data.get("access_token")
     
-    # Reset password via admin command
+    # Reset password via admin command with new generated password
     print(f"    Resetting password for {username}...")
     result = await send_admin_command(session, admin_token, f"!admin users reset-password {username} {password}")
     if result and "Successfully" in result:
         await asyncio.sleep(0.3)
-        # Try login again
-        async with session.post(login_url, json=login_data) as response:
+        # Try login again with the new password
+        new_login_data = {
+            "type": "m.login.password",
+            "user": username,
+            "password": password
+        }
+        async with session.post(login_url, json=new_login_data) as response:
             if response.status == 200:
                 data = await response.json()
                 return data.get("access_token")
@@ -260,9 +280,9 @@ async def fix_room_membership(dry_run: bool = False):
             
             async with session.post(login_url, json=login_data) as response:
                 if response.status != 200:
-                    # Try to reset password
+                    # Try to reset password with auto-generated one
                     print(f"  Resetting agent password...")
-                    new_password = f"AgentPass_{agent_username[:8]}!"
+                    new_password = generate_agent_password(agent["agent_id"])
                     result = await send_admin_command(
                         session, admin_token, 
                         f"!admin users reset-password {agent_username} {new_password}"
