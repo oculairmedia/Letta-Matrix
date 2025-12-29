@@ -274,7 +274,8 @@ async def main():
                 "agent_id": agent['id'],
                 "agent_name": agent['name'],
                 "matrix_user_id": user_id,
-                "matrix_room_id": room_id,
+                "room_id": room_id,
+                "room_created": True,
                 "matrix_password": password
             }
             created += 1

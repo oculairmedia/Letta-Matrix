@@ -724,72 +724,84 @@
     "agent_id": "agent-b417b8da-84d2-40dd-97ad-3a35454934f7",
     "agent_name": "Huly - Huly-Vibe Sync Service",
     "matrix_user_id": "@agent_b417b8da_84d2_40dd_97ad_3a35454934f7:matrix.oculair.ca",
-    "matrix_room_id": "!IIfZzpIGl9BNTHrG8T:matrix.oculair.ca"
+    "room_id": "!IIfZzpIGl9BNTHrG8T:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-22273237-8bf9-4a53-8001-fa62aa2469ce": {
     "agent_id": "agent-22273237-8bf9-4a53-8001-fa62aa2469ce",
     "agent_name": "Test Archival Agent",
     "matrix_user_id": "@agent_22273237_8bf9_4a53_8001_fa62aa2469ce:matrix.oculair.ca",
-    "matrix_room_id": "!ncGas0Y2dV7elN16tZ:matrix.oculair.ca"
+    "room_id": "!ncGas0Y2dV7elN16tZ:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-36347120-f59c-42fb-bd9a-269b2375f7f2": {
     "agent_id": "agent-36347120-f59c-42fb-bd9a-269b2375f7f2",
     "agent_name": "Test Archival Agent",
     "matrix_user_id": "@agent_36347120_f59c_42fb_bd9a_269b2375f7f2:matrix.oculair.ca",
-    "matrix_room_id": "!CCVqFKfJooTzlmQDka:matrix.oculair.ca"
+    "room_id": "!CCVqFKfJooTzlmQDka:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-86ec6e54-8fee-4489-abfb-72ba0a3716f4": {
     "agent_id": "agent-86ec6e54-8fee-4489-abfb-72ba0a3716f4",
     "agent_name": "Test Archival Agent",
     "matrix_user_id": "@agent_86ec6e54_8fee_4489_abfb_72ba0a3716f4:matrix.oculair.ca",
-    "matrix_room_id": "!hErL8iMKewgUDS5D1M:matrix.oculair.ca"
+    "room_id": "!hErL8iMKewgUDS5D1M:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-2e3bad24-a040-46ab-af3a-d85496accaca": {
     "agent_id": "agent-2e3bad24-a040-46ab-af3a-d85496accaca",
     "agent_name": "Test Archival Agent",
     "matrix_user_id": "@agent_2e3bad24_a040_46ab_af3a_d85496accaca:matrix.oculair.ca",
-    "matrix_room_id": "!JGtoi4m7ur9wEpNuCE:matrix.oculair.ca"
+    "room_id": "!JGtoi4m7ur9wEpNuCE:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-22a0d0ec-f156-4738-831b-13bf1cac8bd0": {
     "agent_id": "agent-22a0d0ec-f156-4738-831b-13bf1cac8bd0",
     "agent_name": "letta-code-agent",
     "matrix_user_id": "@agent_22a0d0ec_f156_4738_831b_13bf1cac8bd0:matrix.oculair.ca",
-    "matrix_room_id": "!KzzZG5zx90loP0Cyaz:matrix.oculair.ca"
+    "room_id": "!KzzZG5zx90loP0Cyaz:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-64499416-dda3-44a2-8bd8-17193adcc1dc": {
     "agent_id": "agent-64499416-dda3-44a2-8bd8-17193adcc1dc",
     "agent_name": "letta-cli-agent",
     "matrix_user_id": "@agent_64499416_dda3_44a2_8bd8_17193adcc1dc:matrix.oculair.ca",
-    "matrix_room_id": "!1q3b58YcxbwyXrNGjl:matrix.oculair.ca"
+    "room_id": "!1q3b58YcxbwyXrNGjl:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-06a1cd79-f223-4b38-920a-4f156550123e": {
     "agent_id": "agent-06a1cd79-f223-4b38-920a-4f156550123e",
     "agent_name": "letta-code-agent",
     "matrix_user_id": "@agent_06a1cd79_f223_4b38_920a_4f156550123e:matrix.oculair.ca",
-    "matrix_room_id": "!uiwyc5slEET4C0A5qg:matrix.oculair.ca"
+    "room_id": "!uiwyc5slEET4C0A5qg:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-2ee4df6c-59ca-489b-8620-dc53096208ac": {
     "agent_id": "agent-2ee4df6c-59ca-489b-8620-dc53096208ac",
     "agent_name": "Meridian-sleeptime",
     "matrix_user_id": "@agent_2ee4df6c_59ca_489b_8620_dc53096208ac:matrix.oculair.ca",
-    "matrix_room_id": "!4wxQyuhwmApEq4FQS5:matrix.oculair.ca"
+    "room_id": "!4wxQyuhwmApEq4FQS5:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-7b751941-abc2-4e23-a0fe-e1e6acd87949": {
     "agent_id": "agent-7b751941-abc2-4e23-a0fe-e1e6acd87949",
     "agent_name": "letta-cli-agent",
     "matrix_user_id": "@agent_7b751941_abc2_4e23_a0fe_e1e6acd87949:matrix.oculair.ca",
-    "matrix_room_id": "!IyANbXjIdswgZbFnDV:matrix.oculair.ca"
+    "room_id": "!IyANbXjIdswgZbFnDV:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-ec6b15ef-2f4b-4bae-9ee2-4cea0b22cffd": {
     "agent_id": "agent-ec6b15ef-2f4b-4bae-9ee2-4cea0b22cffd",
     "agent_name": "Huly - Matrix Messaging MCP",
     "matrix_user_id": "@agent_ec6b15ef_2f4b_4bae_9ee2_4cea0b22cffd:matrix.oculair.ca",
-    "matrix_room_id": "!vH3ba7RHS895W6uKX4:matrix.oculair.ca"
+    "room_id": "!vH3ba7RHS895W6uKX4:matrix.oculair.ca",
+    "room_created": true
   },
   "agent-5a678a36-64fc-452d-8e7c-d810f21fb15f": {
     "agent_id": "agent-5a678a36-64fc-452d-8e7c-d810f21fb15f",
     "agent_name": "letta-cli-agent",
     "matrix_user_id": "@agent_5a678a36_64fc_452d_8e7c_d810f21fb15f:matrix.oculair.ca",
-    "matrix_room_id": "!C5MTTl9lbypDpvF2aR:matrix.oculair.ca"
+    "room_id": "!C5MTTl9lbypDpvF2aR:matrix.oculair.ca",
+    "room_created": true
   }
 }

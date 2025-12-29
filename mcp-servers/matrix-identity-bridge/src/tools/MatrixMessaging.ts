@@ -674,8 +674,10 @@ TIPS
           if (fs.existsSync(mappingsPath)) {
             const mappings = JSON.parse(fs.readFileSync(mappingsPath, 'utf-8'));
             const agentMapping = mappings[agent_id];
-            if (agentMapping?.room_id) {
-              roomId = agentMapping.room_id;
+            // Support both field names for backwards compatibility
+            const foundRoomId = agentMapping?.room_id || agentMapping?.matrix_room_id;
+            if (foundRoomId) {
+              roomId = foundRoomId;
               console.log(`[MatrixMessaging] Using room ${roomId} for ${agent_name}`);
             }
           }
