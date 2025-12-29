@@ -190,10 +190,69 @@ class MatrixRoomManager:
             logger.error(f"Error getting room members for {room_id}: {e}")
             return []
 
+    # Known service user passwords - these are reset via admin commands if login fails
+    SERVICE_USER_PASSWORDS: Dict[str, str] = {}
+    
+    async def _get_service_user_token(self, session: aiohttp.ClientSession, user_id: str) -> Optional[str]:
+        """Get access token for a service user, resetting password if needed."""
+        import secrets
+        import string
+        
+        username = user_id.split(':')[0].replace('@', '')
+        
+        # Try cached password first
+        password = self.SERVICE_USER_PASSWORDS.get(user_id)
+        if password:
+            login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
+            login_data = {"type": "m.login.password", "user": username, "password": password}
+            async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("access_token")
+        
+        # Generate new password and reset via admin
+        new_password = f"{username}_" + ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12)) + "!"
+        
+        # Get admin token
+        admin_token = await self.get_admin_token()
+        if not admin_token:
+            logger.warning(f"Cannot reset password for {username} - no admin token")
+            return None
+        
+        # Reset password via Tuwunel admin command
+        import time
+        admin_room = "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca"
+        txn_id = int(time.time() * 1000)
+        url = f"{self.homeserver_url}/_matrix/client/v3/rooms/{admin_room}/send/m.room.message/{txn_id}"
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        command = f"!admin users reset-password {username} {new_password}"
+        
+        async with session.put(url, headers=headers, json={"msgtype": "m.text", "body": command}, timeout=DEFAULT_TIMEOUT) as response:
+            if response.status != 200:
+                logger.warning(f"Failed to send password reset command for {username}")
+                return None
+        
+        # Wait for command to process
+        await asyncio.sleep(0.5)
+        
+        # Try login with new password
+        login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
+        login_data = {"type": "m.login.password", "user": username, "password": new_password}
+        async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+            if response.status == 200:
+                data = await response.json()
+                # Cache the password for future use
+                self.SERVICE_USER_PASSWORDS[user_id] = new_password
+                return data.get("access_token")
+        
+        logger.warning(f"Failed to login as {username} after password reset")
+        return None
+
     async def ensure_required_members(self, room_id: str, agent_id: str) -> Dict[str, str]:
         """
         Ensure all required members are in the room.
-        Returns dict of {user_id: status} where status is 'already_member', 'invited', 'joined', or 'failed'
+        This invites missing members AND has them join the room.
+        Returns dict of {user_id: status} where status is 'already_member', 'joined', or 'failed'
         """
         results = {}
         
@@ -213,35 +272,32 @@ class MatrixRoomManager:
             agent_username = mapping.matrix_user_id.split(':')[0].replace('@', '')
             agent_password = mapping.matrix_password
             
-            for required_user in self.REQUIRED_ROOM_MEMBERS:
-                if required_user in current_members:
-                    results[required_user] = "already_member"
-                    logger.debug(f"{required_user} already in room {room_id}")
-                    continue
+            async with aiohttp.ClientSession() as session:
+                # Login as agent once for all invites
+                login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
+                login_data = {
+                    "type": "m.login.password",
+                    "user": agent_username,
+                    "password": agent_password
+                }
                 
-                # Need to invite and join this user
-                logger.info(f"Ensuring {required_user} is in room {room_id}")
+                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to login as agent {agent_username}")
+                        return {user: "failed" for user in self.REQUIRED_ROOM_MEMBERS}
+                    
+                    auth_data = await response.json()
+                    agent_token = auth_data.get("access_token")
                 
-                # First, login as the agent to send invite
-                async with aiohttp.ClientSession() as session:
-                    # Login as agent
-                    login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
-                    login_data = {
-                        "type": "m.login.password",
-                        "user": agent_username,
-                        "password": agent_password
-                    }
+                for required_user in self.REQUIRED_ROOM_MEMBERS:
+                    if required_user in current_members:
+                        results[required_user] = "already_member"
+                        logger.debug(f"{required_user} already in room {room_id}")
+                        continue
                     
-                    async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
-                        if response.status != 200:
-                            logger.error(f"Failed to login as agent {agent_username}")
-                            results[required_user] = "failed"
-                            continue
-                        
-                        auth_data = await response.json()
-                        agent_token = auth_data.get("access_token")
+                    logger.info(f"Ensuring {required_user} is in room {room_id}")
                     
-                    # Send invite
+                    # Step 1: Send invite from agent
                     invite_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/invite"
                     headers = {
                         "Authorization": f"Bearer {agent_token}",
@@ -252,17 +308,42 @@ class MatrixRoomManager:
                     async with session.post(invite_url, headers=headers, json=invite_data, timeout=DEFAULT_TIMEOUT) as response:
                         if response.status == 200:
                             logger.info(f"Invited {required_user} to room {room_id}")
-                            results[required_user] = "invited"
                         elif response.status == 403:
                             error_text = await response.text()
                             if "already in the room" in error_text.lower():
                                 results[required_user] = "already_member"
+                                continue
+                            # User might already be invited, continue to join attempt
+                        # Continue regardless - user might already be invited
+                    
+                    # Step 2: Login as the required user and join
+                    user_token = await self._get_service_user_token(session, required_user)
+                    if not user_token:
+                        logger.warning(f"Could not get token for {required_user}")
+                        results[required_user] = "failed"
+                        continue
+                    
+                    # Join the room
+                    join_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/join"
+                    join_headers = {
+                        "Authorization": f"Bearer {user_token}",
+                        "Content-Type": "application/json"
+                    }
+                    
+                    async with session.post(join_url, headers=join_headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
+                        if response.status == 200:
+                            logger.info(f"{required_user} joined room {room_id}")
+                            results[required_user] = "joined"
+                        elif response.status == 403:
+                            error_text = await response.text()
+                            if "already" in error_text.lower():
+                                results[required_user] = "already_member"
                             else:
-                                logger.warning(f"Failed to invite {required_user}: {error_text}")
+                                logger.warning(f"{required_user} failed to join: {error_text}")
                                 results[required_user] = "failed"
                         else:
                             error_text = await response.text()
-                            logger.warning(f"Failed to invite {required_user}: {response.status} - {error_text}")
+                            logger.warning(f"{required_user} failed to join: {response.status} - {error_text}")
                             results[required_user] = "failed"
             
             return results
@@ -544,6 +625,15 @@ class MatrixRoomManager:
 
                         # Now auto-accept the invitations for admin and letta users
                         await self.auto_accept_invitations_with_tracking(room_id, mapping)
+                        
+                        # Ensure all required members have joined (not just invited)
+                        # This handles agent_mail_bridge which needs to accept its invite
+                        member_results = await self.ensure_required_members(room_id, agent_id)
+                        for user_id, status in member_results.items():
+                            if status == "invited":
+                                logger.info(f"✅ Invited {user_id} to new room {room_id}")
+                            elif status == "failed":
+                                logger.warning(f"⚠️  Failed to add {user_id} to new room {room_id}")
 
                         # Import recent conversation history for UI continuity
                         logger.info(f"Importing recent history for agent {mapping.agent_name}")

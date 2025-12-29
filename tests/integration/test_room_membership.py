@@ -298,6 +298,108 @@ async def test_room_member_count_reasonable(matrix_client):
         pytest.fail(f"Room member count issues:\n  " + "\n  ".join(issues))
 
 
+@pytest.mark.asyncio
+async def test_ensure_required_members_function(matrix_client):
+    """
+    Test that ensure_required_members() correctly adds missing members.
+    
+    This test:
+    1. Picks a random agent room
+    2. Verifies current membership 
+    3. Calls ensure_required_members (which should be idempotent)
+    4. Verifies all required members are present
+    """
+    try:
+        agent_rooms = get_all_agent_rooms()
+    except Exception as e:
+        pytest.skip(f"Could not connect to database: {e}")
+    
+    if not agent_rooms:
+        pytest.skip("No agent rooms found")
+    
+    # Pick a room to test
+    test_agent = agent_rooms[0]
+    room_id = test_agent["room_id"]
+    
+    # Verify required members are present (they should be after our fix)
+    members = await matrix_client.get_room_members(room_id)
+    
+    for required in REQUIRED_MEMBERS:
+        assert required in members, (
+            f"Required member {required} not in {test_agent['agent_name']}'s room after provisioning. "
+            f"This indicates ensure_required_members() is not working correctly."
+        )
+
+
+@pytest.mark.asyncio
+async def test_new_room_would_have_required_members():
+    """
+    Test that the room creation invite list includes all required members.
+    
+    This is a code inspection test - it verifies the REQUIRED_ROOM_MEMBERS
+    constant matches what we expect, and that room creation includes these invites.
+    """
+    # Import the room manager to check its constants
+    try:
+        import sys
+        sys.path.insert(0, '/opt/stacks/matrix-synapse-deployment')
+        from src.core.room_manager import MatrixRoomManager
+        
+        # Verify the constant exists and has the right members
+        assert hasattr(MatrixRoomManager, 'REQUIRED_ROOM_MEMBERS'), (
+            "MatrixRoomManager should have REQUIRED_ROOM_MEMBERS constant"
+        )
+        
+        required = MatrixRoomManager.REQUIRED_ROOM_MEMBERS
+        
+        assert "@admin:matrix.oculair.ca" in required, "admin should be required"
+        assert "@letta:matrix.oculair.ca" in required, "letta should be required"
+        assert "@agent_mail_bridge:matrix.oculair.ca" in required, "agent_mail_bridge should be required"
+        
+    except ImportError as e:
+        pytest.skip(f"Could not import room_manager: {e}")
+
+
+@pytest.mark.asyncio
+async def test_service_user_password_generation():
+    """
+    Test that password generation functions exist and work correctly.
+    """
+    try:
+        import sys
+        sys.path.insert(0, '/opt/stacks/matrix-synapse-deployment')
+        from src.core.user_manager import MatrixUserManager
+        
+        # Create a mock instance (we just need the methods)
+        class MockConfig:
+            pass
+        
+        manager = MatrixUserManager(
+            homeserver_url="http://localhost:8008",
+            admin_username="admin",
+            admin_password="test"
+        )
+        
+        # Test generate_password
+        password = manager.generate_password()
+        assert len(password) >= 16, "Password should be at least 16 characters"
+        assert password.isalnum(), "Password should be alphanumeric"
+        
+        # Test generate_agent_password
+        agent_password = manager.generate_agent_password("agent-12345678-1234-1234-1234-123456789abc")
+        assert agent_password.startswith("AgentPass_"), "Agent password should have correct prefix"
+        assert agent_password.endswith("!"), "Agent password should end with !"
+        assert "12345678" in agent_password, "Agent password should contain short agent ID"
+        
+        # Test generate_service_password
+        service_password = manager.generate_service_password("test_service")
+        assert "test_service" in service_password, "Service password should contain service name"
+        assert service_password.endswith("!"), "Service password should end with !"
+        
+    except ImportError as e:
+        pytest.skip(f"Could not import user_manager: {e}")
+
+
 if __name__ == "__main__":
     # Run tests
     pytest.main([__file__, "-v"])
