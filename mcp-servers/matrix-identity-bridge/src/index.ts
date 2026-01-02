@@ -23,6 +23,7 @@ import { setToolContext } from './core/tool-context.js';
 import { getConversationTracker } from './core/conversation-tracker.js';
 import { initializeResponseMonitor } from './core/response-monitor.js';
 import { createWebhookServer } from './core/webhook-server.js';
+import { initializeLettaWebhookHandler } from './core/letta-webhook-handler.js';
 import { HttpAgentProxy } from './core/http-proxy.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -115,6 +116,15 @@ async function main() {
       port: config.webhookPort,
       host: '0.0.0.0'
     });
+    
+    initializeLettaWebhookHandler(clientPool, storage, {
+      matrixApiUrl: process.env.MATRIX_API_URL,
+      webhookSecret: process.env.LETTA_WEBHOOK_SECRET,
+      skipVerification: process.env.LETTA_WEBHOOK_SKIP_VERIFICATION === 'true',
+      auditNonMatrixConversations: process.env.AUDIT_NON_MATRIX !== 'false'
+    });
+    console.log('[MatrixMCP] Letta webhook handler initialized');
+    
     await webhookServer.start();
     console.log('[MatrixMCP] Webhook server started on port', config.webhookPort);
   } else {

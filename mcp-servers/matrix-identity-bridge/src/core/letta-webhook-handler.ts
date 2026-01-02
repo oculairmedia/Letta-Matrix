@@ -281,12 +281,7 @@ export class LettaWebhookHandler {
     try {
       await this.postToMatrix(agent_id, roomId, assistantContent, conversation?.matrix_event_id);
 
-      // Phase 3: Mark webhook received and cancel any active polling
       if (conversation) {
-        // Mark webhook as received (before canceling monitor, so monitor knows)
-        tracker.markWebhookReceived(conversation.matrix_event_id);
-        
-        // Cancel any active polling for this conversation
         const monitor = getResponseMonitor();
         if (monitor) {
           monitor.cancelMonitoring(conversation.matrix_event_id);
