@@ -196,7 +196,7 @@ export class LettaWebhookHandler {
       };
     }
 
-    // Extract assistant message content from the messages array
+    const userContent = this.extractUserContent(messages);
     const assistantContent = this.extractAssistantContent(messages);
     if (!assistantContent) {
       console.log(`[LettaWebhook] No assistant message content in webhook for agent ${agent_id}`);
@@ -242,10 +242,10 @@ export class LettaWebhookHandler {
       // Post silent audit message if enabled
       if (this.config.auditNonMatrixConversations) {
         const source = conversation ? 'matrix-direct' : 'external';
-        console.log(`[LettaWebhook] Posting silent audit for ${agent_id} (source: ${source}, content length: ${assistantContent.length}, preview: "${assistantContent.substring(0, 100)}...")`);
+        console.log(`[LettaWebhook] Posting silent audit for ${agent_id} (source: ${source}, request: ${userContent?.length || 0} chars, response: ${assistantContent.length} chars)`);
         
         try {
-          await this.postSilentAudit(agent_id, roomId, assistantContent, source, run_id);
+          await this.postSilentAudit(agent_id, roomId, assistantContent, source, run_id, userContent);
           return {
             success: true,
             responsePosted: true,
@@ -349,6 +349,23 @@ export class LettaWebhookHandler {
     return undefined;
   }
 
+  private extractUserContent(messages?: LettaMessage[]): string | undefined {
+    if (!messages || messages.length === 0) {
+      return undefined;
+    }
+
+    for (const msg of messages) {
+      if (msg.message_type === 'user_message') {
+        const extracted = this.extractContentText(msg.content);
+        if (extracted) {
+          return extracted;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
   private extractAssistantContent(
     messages?: LettaMessage[]
   ): string | undefined {
@@ -356,20 +373,22 @@ export class LettaWebhookHandler {
       return undefined;
     }
 
-    let longestContent: string | undefined;
-    let longestLength = 0;
+    const allParts: string[] = [];
 
     for (const msg of messages) {
       if (msg.message_type === 'assistant_message') {
         const extracted = this.extractContentText(msg.content) || msg.assistant_message;
-        if (extracted && extracted.length > longestLength) {
-          longestContent = extracted;
-          longestLength = extracted.length;
+        if (extracted) {
+          allParts.push(extracted);
         }
       }
     }
 
-    return longestContent;
+    if (allParts.length === 0) {
+      return undefined;
+    }
+
+    return allParts.join('');
   }
 
   private extractContentText(content: LettaMessage['content']): string | undefined {
@@ -425,7 +444,8 @@ export class LettaWebhookHandler {
     roomId: string,
     content: string,
     source: 'external' | 'matrix-direct',
-    runId?: string
+    runId?: string,
+    userRequest?: string
   ): Promise<void> {
     // Get a Matrix client for this agent
     const agentIdentityId = `letta_${agentId}`;
@@ -454,26 +474,32 @@ export class LettaWebhookHandler {
       throw new Error(`No Matrix client available for room ${roomId}`);
     }
 
-    // Truncate content for audit (keep it concise)
-    const maxLength = 500;
-    const truncatedContent = content.length > maxLength 
-      ? content.substring(0, maxLength) + '...' 
+    const maxRequestLen = 200;
+    const maxResponseLen = 500;
+    
+    const truncatedRequest = userRequest 
+      ? (userRequest.length > maxRequestLen ? userRequest.substring(0, maxRequestLen) + '...' : userRequest)
+      : undefined;
+    const truncatedResponse = content.length > maxResponseLen 
+      ? content.substring(0, maxResponseLen) + '...' 
       : content;
 
-    // Format audit message with source indicator
     const sourceEmoji = source === 'external' ? '🖥️' : '💬';
     const sourceLabel = source === 'external' ? 'CLI/API' : 'Direct';
     
-    // Build audit message - concise format
-    const auditMessage = `${sourceEmoji} **[${sourceLabel}]** ${truncatedContent}`;
+    const requestPart = truncatedRequest ? `\n**Q:** ${truncatedRequest}\n**A:** ` : '';
+    const auditMessage = `${sourceEmoji} **[${sourceLabel}]**${requestPart}${truncatedResponse}`;
 
-    // Post as m.notice (silent, no notification in most clients)
+    const htmlRequestPart = truncatedRequest 
+      ? `<br/><strong>Q:</strong> ${this.escapeHtml(truncatedRequest)}<br/><strong>A:</strong> ` 
+      : '';
+    const formattedBody = `<em>${sourceEmoji} <strong>[${sourceLabel}]</strong></em>${htmlRequestPart}${this.escapeHtml(truncatedResponse)}`;
+
     await client.sendMessage(roomId, {
-      msgtype: 'm.notice',  // Notice type = typically no notification
+      msgtype: 'm.notice',
       body: auditMessage,
       format: 'org.matrix.custom.html',
-      formatted_body: `<em>${sourceEmoji} <strong>[${sourceLabel}]</strong></em> ${this.escapeHtml(truncatedContent)}`,
-      // Additional hint to suppress notifications
+      formatted_body: formattedBody,
       'org.matrix.msc1767.message': [{
         body: auditMessage,
         mimetype: 'text/plain'
