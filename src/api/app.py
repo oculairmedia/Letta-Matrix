@@ -31,6 +31,26 @@ except ImportError as e:
     logger.warning(f"Agent sync not available: {e}")
     AGENT_SYNC_AVAILABLE = False
 
+# Import Letta webhook functionality
+try:
+    from ..letta.webhook_handler import (
+        LettaWebhookPayload,
+        LettaWebhookHandler,
+        WebhookConfig,
+        initialize_webhook_handler,
+        get_webhook_handler,
+    )
+    from ..bridges.letta_matrix_bridge import (
+        LettaMatrixBridge,
+        BridgeConfig,
+        initialize_bridge,
+        get_bridge,
+    )
+    LETTA_WEBHOOK_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Letta webhook not available: {e}")
+    LETTA_WEBHOOK_AVAILABLE = False
+
 # Load environment variables
 load_dotenv('.env')
 
@@ -457,6 +477,56 @@ async def new_agent_webhook(notification: NewAgentNotification, background_tasks
             message=f"Error: {str(e)}",
             timestamp=datetime.now().isoformat()
         )
+
+
+@app.post("/webhooks/letta/agent-response")
+async def letta_agent_response_webhook(request: dict, background_tasks: BackgroundTasks):
+    """
+    Webhook endpoint for Letta agent.run.completed events.
+    
+    This receives webhooks from Letta when an agent completes a run,
+    and posts the response to the agent's Matrix room as an audit message.
+    """
+    if not LETTA_WEBHOOK_AVAILABLE:
+        return JSONResponse(
+            status_code=503,
+            content={"success": False, "error": "Letta webhook functionality not available"}
+        )
+    
+    try:
+        payload = LettaWebhookPayload(**request)
+        
+        if payload.event_type != "agent.run.completed":
+            logger.info(f"Ignoring non-run-completed webhook: {payload.event_type}")
+            return {"success": True, "message": "Event type ignored", "event_type": payload.event_type}
+        
+        handler = get_webhook_handler()
+        if not handler:
+            handler = initialize_webhook_handler()
+            bridge = initialize_bridge()
+            handler.set_bridge(bridge)
+        
+        async def process_webhook():
+            try:
+                result = await handler.handle_run_completed(payload)
+                if result.success:
+                    logger.info(f"Webhook processed for agent {result.agent_id}: posted={result.response_posted}")
+                else:
+                    logger.warning(f"Webhook processing failed for agent {result.agent_id}: {result.error}")
+            except Exception as e:
+                logger.exception(f"Error processing Letta webhook: {e}")
+        
+        background_tasks.add_task(process_webhook)
+        
+        return {"success": True, "message": "Webhook received", "agent_id": payload.agent_id}
+        
+    except Exception as e:
+        logger.exception(f"Error parsing Letta webhook: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": str(e)}
+        )
+
 
 @app.get("/agents/mappings")
 async def get_agent_mappings():

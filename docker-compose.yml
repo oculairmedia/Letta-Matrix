@@ -103,6 +103,7 @@ services:
       - MATRIX_HOMESERVER_URL=http://tuwunel:6167
     volumes:
       - ./matrix_client_data:/app/data
+      - ./src:/app/src:ro
     ports:
       - 8004:8000
     networks:
