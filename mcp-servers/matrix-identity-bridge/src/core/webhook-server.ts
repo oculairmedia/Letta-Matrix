@@ -8,6 +8,7 @@
 import http from 'http';
 import { getConversationTracker, type WebhookPayload } from './conversation-tracker.js';
 import { getResponseMonitor } from './response-monitor.js';
+import { getLettaWebhookHandler, type LettaRunCompletedPayload } from './letta-webhook-handler.js';
 
 export interface WebhookServerConfig {
   port: number;
@@ -85,6 +86,13 @@ export class WebhookServer {
       // Tool selector webhook endpoint
       if (url.pathname === '/webhook/tool-selector' && req.method === 'POST') {
         await this.handleToolSelectorWebhook(req, res);
+        return;
+      }
+
+      // Letta agent.run.completed webhook endpoint
+      if ((url.pathname === '/webhooks/letta/agent-response' || 
+           url.pathname === '/webhook/letta/agent-response') && req.method === 'POST') {
+        await this.handleLettaAgentResponseWebhook(req, res);
         return;
       }
 
@@ -229,6 +237,110 @@ export class WebhookServer {
     }));
   }
 
+  /**
+   * Handle Letta agent.run.completed webhook
+   * 
+   * This replaces polling-based response detection with push notifications.
+   * When Letta completes an agent run, it sends this webhook with the messages.
+   */
+  private async handleLettaAgentResponseWebhook(
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ): Promise<void> {
+    const handler = getLettaWebhookHandler();
+    
+    if (!handler) {
+      console.error('[WebhookServer] LettaWebhookHandler not initialized');
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'error',
+        message: 'Letta webhook handler not initialized'
+      }));
+      return;
+    }
+
+    // Read request body
+    const body = await this.readRequestBody(req);
+    
+    // Verify signature
+    const signature = req.headers['x-letta-signature'] as string | undefined;
+    if (!handler.verifySignature(body, signature)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'error',
+        message: 'Invalid webhook signature'
+      }));
+      return;
+    }
+
+    let payload: LettaRunCompletedPayload;
+    try {
+      payload = JSON.parse(body);
+      const msgCount = payload.data?.messages?.length ?? 0;
+      const assistantMsgs = payload.data?.messages?.filter(m => m.message_type === 'assistant_message') ?? [];
+      const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
+      
+      let contentPreview = 'none';
+      let contentType = 'undefined';
+      if (lastAssistant?.content) {
+        contentType = Array.isArray(lastAssistant.content) ? 'array' : typeof lastAssistant.content;
+        if (typeof lastAssistant.content === 'string') {
+          contentPreview = lastAssistant.content.substring(0, 100);
+        } else if (Array.isArray(lastAssistant.content)) {
+          const textParts = lastAssistant.content
+            .filter((p: unknown) => p && typeof p === 'object' && (p as Record<string, unknown>).type === 'text')
+            .map((p: unknown) => (p as Record<string, unknown>).text as string)
+            .filter(Boolean);
+          contentPreview = textParts.length > 0 
+            ? textParts.join(' ').substring(0, 100) 
+            : `[${lastAssistant.content.length} parts, no text]`;
+        } else {
+          contentPreview = JSON.stringify(lastAssistant.content).substring(0, 100);
+        }
+      }
+      console.log(`[WebhookServer] Parsed: ${msgCount} msgs, ${assistantMsgs.length} assistant, type=${contentType}, content="${contentPreview}..."`);
+    } catch (error) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'error',
+        message: 'Invalid JSON payload'
+      }));
+      return;
+    }
+
+    console.log('[WebhookServer] Received Letta webhook:', JSON.stringify({
+      event_type: payload.event_type,
+      agent_id: payload.agent_id,
+      run_id: payload.data?.run_id,
+      message_count: payload.data?.messages?.length || 0
+    }));
+
+    // Validate event type
+    if (payload.event_type !== 'agent.run.completed') {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'error',
+        message: 'Unsupported event type',
+        received: payload.event_type,
+        supported: ['agent.run.completed']
+      }));
+      return;
+    }
+
+    // Handle the webhook
+    const result = await handler.handleRunCompleted(payload);
+
+    // Return result
+    res.writeHead(result.success ? 200 : 500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: result.success ? 'ok' : 'error',
+      response_posted: result.responsePosted,
+      agent_id: result.agentId,
+      room_id: result.roomId,
+      error: result.error
+    }));
+  }
+
   private readRequestBody(req: http.IncomingMessage): Promise<string> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
@@ -249,8 +361,11 @@ export class WebhookServer {
     return new Promise((resolve) => {
       this.server.listen(this.config.port, this.config.host, () => {
         console.log(`[WebhookServer] Listening on http://${this.config.host}:${this.config.port}`);
-        console.log(`[WebhookServer] Webhook endpoint: http://${this.config.host}:${this.config.port}/webhook/tool-selector`);
-        console.log(`[WebhookServer] Conversations: http://${this.config.host}:${this.config.port}/conversations`);
+        console.log(`[WebhookServer] Endpoints:`);
+        console.log(`  - Tool Selector: POST /webhook/tool-selector`);
+        console.log(`  - Letta Agent Response: POST /webhooks/letta/agent-response`);
+        console.log(`  - Conversations: GET /conversations`);
+        console.log(`  - Health: GET /health`);
         resolve();
       });
     });
