@@ -280,6 +280,15 @@ export class WebhookServer {
       const assistantMsgs = payload.data?.messages?.filter(m => m.message_type === 'assistant_message') ?? [];
       const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
       
+      if (lastAssistant && assistantMsgs.length > 0) {
+        const allContents = assistantMsgs.map((m, i) => {
+          const c = m.content;
+          const preview = typeof c === 'string' ? c.substring(0, 30) : JSON.stringify(c).substring(0, 30);
+          return `[${i}]: ${preview}`;
+        });
+        console.log(`[WebhookServer] All ${assistantMsgs.length} assistant contents: ${allContents.join(' | ')}`);
+      }
+      
       let contentPreview = 'none';
       let contentType = 'undefined';
       if (lastAssistant?.content) {

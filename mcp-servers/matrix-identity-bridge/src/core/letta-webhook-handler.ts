@@ -356,20 +356,20 @@ export class LettaWebhookHandler {
       return undefined;
     }
 
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
+    let longestContent: string | undefined;
+    let longestLength = 0;
+
+    for (const msg of messages) {
       if (msg.message_type === 'assistant_message') {
-        const extracted = this.extractContentText(msg.content);
-        if (extracted) {
-          return extracted;
-        }
-        if (msg.assistant_message) {
-          return msg.assistant_message;
+        const extracted = this.extractContentText(msg.content) || msg.assistant_message;
+        if (extracted && extracted.length > longestLength) {
+          longestContent = extracted;
+          longestLength = extracted.length;
         }
       }
     }
 
-    return undefined;
+    return longestContent;
   }
 
   private extractContentText(content: LettaMessage['content']): string | undefined {
