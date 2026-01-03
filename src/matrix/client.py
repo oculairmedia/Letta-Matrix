@@ -21,8 +21,11 @@ from src.matrix.file_handler import LettaFileHandler, FileUploadError
 from src.core.agent_user_manager import run_agent_sync
 from src.matrix.event_dedupe import is_duplicate_event
 
-# Cross-run tracking webhook URL
+# Cross-run tracking webhook URL (TypeScript MCP - deprecated)
 CONVERSATION_TRACKER_URL = os.getenv("CONVERSATION_TRACKER_URL", "http://192.168.50.90:3101")
+
+# Python Matrix API for conversation registration
+MATRIX_API_URL = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
 
 # Agent Mail MCP server URL for reverse bridge
 AGENT_MAIL_URL = os.getenv("AGENT_MAIL_URL", "http://192.168.50.90:8766/mcp/")
@@ -39,34 +42,44 @@ async def register_conversation_for_tracking(
     This enables the system to link responses from subsequent Letta runs
     back to the original Matrix message.
     """
-    if not CONVERSATION_TRACKER_URL:
-        return False
+    registered = False
     
+    # Register with Python matrix-api (primary - prevents duplicate audit)
     try:
         async with aiohttp.ClientSession() as session:
-            payload = {
-                "operation": "start_conversation",
-                "matrix_event_id": matrix_event_id,
-                "matrix_room_id": matrix_room_id,
-                "agent_id": agent_id,
-                "original_query": original_query[:500] if original_query else ""
-            }
-            
             async with session.post(
-                f"{CONVERSATION_TRACKER_URL}/conversations/start",
-                json=payload,
+                f"{MATRIX_API_URL}/conversations/register",
+                json={"agent_id": agent_id, "matrix_event_id": matrix_event_id, "matrix_room_id": matrix_room_id},
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as resp:
                 if resp.status == 200:
-                    result = await resp.json()
-                    logger.info(f"[CROSS-RUN] Registered conversation {matrix_event_id} for tracking")
-                    return True
-                else:
-                    logger.warning(f"[CROSS-RUN] Failed to register conversation: {resp.status}")
-                    return False
+                    logger.info(f"[CROSS-RUN] Registered conversation with matrix-api for agent {agent_id}")
+                    registered = True
     except Exception as e:
-        logger.warning(f"[CROSS-RUN] Error registering conversation: {e}")
-        return False
+        logger.debug(f"[CROSS-RUN] Could not register with matrix-api: {e}")
+    
+    # Also register with TypeScript tracker (for cross-run tool handling - legacy)
+    if CONVERSATION_TRACKER_URL:
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "operation": "start_conversation",
+                    "matrix_event_id": matrix_event_id,
+                    "matrix_room_id": matrix_room_id,
+                    "agent_id": agent_id,
+                    "original_query": original_query[:500] if original_query else ""
+                }
+                async with session.post(
+                    f"{CONVERSATION_TRACKER_URL}/conversations/start",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status == 200:
+                        logger.debug(f"[CROSS-RUN] Also registered with TypeScript tracker")
+        except Exception as e:
+            logger.debug(f"[CROSS-RUN] TypeScript tracker unavailable: {e}")
+    
+    return registered
 
 
 async def forward_to_agent_mail(

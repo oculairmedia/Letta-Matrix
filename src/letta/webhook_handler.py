@@ -27,11 +27,41 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Set, Union
 
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+# Track active Matrix conversations to avoid duplicate audit messages
+# When matrix-client sends a message to Letta, it registers the agent_id here
+# When webhook arrives, we check if agent has active Matrix conversation
+_active_matrix_conversations: Dict[str, datetime] = {}
+CONVERSATION_TTL_SECONDS = 300
+
+
+def register_matrix_conversation(agent_id: str) -> None:
+    """Called by matrix-client before sending to Letta to mark as Matrix-originated."""
+    _active_matrix_conversations[agent_id] = datetime.now()
+    logger.debug(f"[Webhook] Registered Matrix conversation for agent {agent_id}")
+
+
+def is_matrix_conversation(agent_id: str) -> bool:
+    """Check if agent has an active Matrix conversation (to skip audit)."""
+    if agent_id not in _active_matrix_conversations:
+        return False
+    registered_at = _active_matrix_conversations[agent_id]
+    age = (datetime.now() - registered_at).total_seconds()
+    if age > CONVERSATION_TTL_SECONDS:
+        del _active_matrix_conversations[agent_id]
+        return False
+    return True
+
+
+def clear_matrix_conversation(agent_id: str) -> None:
+    """Clear conversation tracking after response is handled."""
+    _active_matrix_conversations.pop(agent_id, None)
 
 
 # ============================================================================
@@ -407,7 +437,20 @@ class LettaWebhookHandler:
                 agent_id=agent_id
             )
         
-        # Delegate to bridge for Matrix posting
+        # Skip audit for Matrix-originated conversations (already handled by matrix-client)
+        if is_matrix_conversation(agent_id):
+            clear_matrix_conversation(agent_id)
+            logger.info(
+                f"[Webhook] Skipping audit for Matrix conversation agent {agent_id}"
+            )
+            return WebhookResult(
+                success=True,
+                response_posted=False,
+                error="matrix_conversation",
+                agent_id=agent_id
+            )
+        
+        # Post audit for CLI/API conversations
         if self._bridge is None:
             logger.error("[Webhook] No bridge configured for Matrix posting")
             return WebhookResult(

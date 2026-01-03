@@ -247,6 +247,17 @@ export class WebhookServer {
     req: http.IncomingMessage,
     res: http.ServerResponse
   ): Promise<void> {
+    // DEPRECATED: Webhook handling moved to Python matrix-api
+    // Letta should send webhooks to http://matrix-api:8000/webhooks/letta/agent-response
+    console.log('[WebhookServer] DEPRECATED: Letta webhook received at MCP server. Use matrix-api:8000 instead.');
+    res.writeHead(410, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'deprecated',
+      message: 'Webhook handling moved to matrix-api. Update Letta webhook URL to http://matrix-api:8000/webhooks/letta/agent-response'
+    }));
+    return;
+
+    // OLD CODE - kept for reference during transition
     const handler = getLettaWebhookHandler();
     
     if (!handler) {

@@ -528,6 +528,24 @@ async def letta_agent_response_webhook(request: dict, background_tasks: Backgrou
         )
 
 
+class ConversationRegistration(BaseModel):
+    agent_id: str
+    matrix_event_id: Optional[str] = None
+    matrix_room_id: Optional[str] = None
+
+
+@app.post("/conversations/register")
+async def register_matrix_conversation_endpoint(registration: ConversationRegistration):
+    """Register a Matrix conversation to prevent duplicate webhook audit messages."""
+    if not LETTA_WEBHOOK_AVAILABLE:
+        return JSONResponse(status_code=503, content={"success": False, "error": "Webhook module not available"})
+    
+    from src.letta.webhook_handler import register_matrix_conversation
+    register_matrix_conversation(registration.agent_id)
+    logger.info(f"Registered Matrix conversation for agent {registration.agent_id}")
+    return {"success": True, "agent_id": registration.agent_id}
+
+
 @app.get("/agents/mappings")
 async def get_agent_mappings():
     """Get all agent-to-room mappings."""
