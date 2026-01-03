@@ -69,6 +69,7 @@ services:
       - MATRIX_HOMESERVER_URL=http://tuwunel:6167
       - DATABASE_URL=postgresql://letta:letta@192.168.50.90:5432/matrix_letta
       - CONVERSATION_TRACKER_URL=http://192.168.50.90:3101
+      - MATRIX_API_URL=http://matrix-api:8000
     volumes:
       - ./matrix_store:/app/matrix_store
       - ./matrix_client_data:/app/data
