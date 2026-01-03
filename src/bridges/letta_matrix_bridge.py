@@ -40,6 +40,12 @@ class BridgeConfig:
         default_factory=lambda: os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
     )
     room_cache_ttl_seconds: int = 60
+    use_identity_posting: bool = field(
+        default_factory=lambda: os.getenv("USE_IDENTITY_POSTING", "true").lower() == "true"
+    )
+    identity_posting_strict: bool = field(
+        default_factory=lambda: os.getenv("IDENTITY_POSTING_STRICT", "false").lower() == "true"
+    )
 
 
 class LettaMatrixBridge:
@@ -164,6 +170,11 @@ class LettaMatrixBridge:
         room_id: str,
         content: str
     ) -> Optional[str]:
+        if not self.config.use_identity_posting:
+            logger.debug(f"[Bridge] Identity posting disabled, using admin account")
+            await self._send_matrix_message(room_id=room_id, body=content, msgtype="m.text")
+            return None
+        
         identity_service = get_identity_service()
         identity = identity_service.get_by_agent_id(agent_id)
         
@@ -175,8 +186,14 @@ class LettaMatrixBridge:
                 logger.info(f"[Bridge] Agent {agent_id} posted via identity to {room_id}")
                 return event_id
             else:
+                if self.config.identity_posting_strict:
+                    logger.error(f"[Bridge] STRICT: Failed to post via identity for {agent_id}, NOT falling back")
+                    raise RuntimeError(f"Identity posting failed for agent {agent_id}")
                 logger.warning(f"[Bridge] Failed to post via agent identity, falling back to admin")
         else:
+            if self.config.identity_posting_strict:
+                logger.error(f"[Bridge] STRICT: No identity for agent {agent_id}, NOT falling back")
+                raise RuntimeError(f"No identity found for agent {agent_id}")
             logger.info(f"[Bridge] No identity for agent {agent_id}, using admin account")
         
         await self._send_matrix_message(room_id=room_id, body=content, msgtype="m.text")

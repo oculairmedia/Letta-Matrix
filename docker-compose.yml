@@ -96,13 +96,18 @@ services:
       retries: 3
       start_period: 40s
   matrix-api:
-    image: ghcr.io/oculairmedia/letta-matrix-api:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.matrix-api
+    image: letta-matrix-api:local
     restart: unless-stopped
     env_file:
       - .env
     environment:
       - MATRIX_HOMESERVER_URL=http://tuwunel:6167
       - DATABASE_URL=postgresql://letta:letta@192.168.50.90:5432/matrix_letta
+      - USE_IDENTITY_POSTING=true
+      - IDENTITY_POSTING_STRICT=true
     volumes:
       - ./matrix_client_data:/app/data
       - ./src:/app/src:ro
