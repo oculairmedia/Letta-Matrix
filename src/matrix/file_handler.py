@@ -305,7 +305,6 @@ class LettaFileHandler:
             
             # Build message text based on whether user provided a caption/question
             if metadata.caption:
-                # User provided a caption/question - include it as the main prompt
                 message_text = (
                     f"[Image Upload: {metadata.file_name}]\n\n"
                     f"The user shared an image and asked: \"{metadata.caption}\"\n\n"
@@ -313,11 +312,27 @@ class LettaFileHandler:
                 )
                 logger.info(f"Including user caption in image message: {metadata.caption[:50]}...")
             else:
-                # No caption - use default prompt
                 message_text = (
                     f"[Image Upload: {metadata.file_name}]\n\n"
                     f"The user has shared an image with you. Please analyze the image and describe what you see."
                 )
+            
+            # Add OpenCode routing instruction if sender is an OpenCode identity
+            if metadata.sender and metadata.sender.startswith("@oc_"):
+                opencode_mxid = metadata.sender
+                message_text = f"""[MESSAGE FROM OPENCODE USER]
+
+{message_text}
+
+---
+RESPONSE INSTRUCTION (OPENCODE BRIDGE):
+This message is from an OpenCode user: {opencode_mxid}
+When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
+in your response so the OpenCode bridge can route your reply to them.
+
+Example: "{opencode_mxid} Here is my response..."
+"""
+                logger.info(f"[OPENCODE-IMAGE] Injected @mention instruction for image upload")
             
             # Send multimodal message to agent using SDK
             # Format: content array with text and image parts
