@@ -1434,10 +1434,12 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
         if hasattr(event, 'source') and isinstance(event.source, dict):
             content = event.source.get("content", {})
             if content.get("m.letta_historical"):
-                logger.debug("Ignoring historical message imported from Letta", extra={
-                    "sender": event.sender,
-                    "message": event.body[:50]
-                })
+                logger.debug(f"Ignoring historical message from {event.sender}")
+                return
+            
+            # Ignore messages posted by the webhook bridge (prevent CLI→webhook→Matrix→Letta loop)
+            if content.get("m.bridge_originated"):
+                logger.debug(f"Ignoring bridge-originated message from {event.sender}")
                 return
         
         # Only process messages in rooms that have a dedicated agent mapping

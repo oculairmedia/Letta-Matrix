@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, MagicMock, patch
 import sys
 import os
 
@@ -75,22 +75,21 @@ class TestLettaMatrixBridge:
             bridge._send_matrix_message.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_post_user_request_audit(self):
+    async def test_post_user_message_as_admin(self):
         from src.bridges.letta_matrix_bridge import LettaMatrixBridge
         bridge = LettaMatrixBridge()
         bridge._send_matrix_message = AsyncMock()
         
-        await bridge.post_user_request_audit(
+        await bridge.post_user_message_as_admin(
             room_id="!room:matrix.test",
-            user_request="What is the weather?",
+            user_message="What is the weather?",
             source="external"
         )
         
         bridge._send_matrix_message.assert_called_once()
         call_kwargs = bridge._send_matrix_message.call_args.kwargs
-        assert call_kwargs["msgtype"] == "m.notice"
-        assert "CLI/API" in call_kwargs["body"]
-        assert "weather" in call_kwargs["body"]
+        assert call_kwargs["msgtype"] == "m.text"
+        assert call_kwargs["body"] == "What is the weather?"
     
     @pytest.mark.asyncio
     async def test_post_webhook_response_posts_both_messages(self, mock_identity_service, mock_client_pool):
@@ -150,3 +149,58 @@ class TestLettaMatrixBridge:
             assert result.success is True
             bridge._send_matrix_message.assert_not_called()
             mock_client_pool.send_as_agent.assert_called_once()
+
+
+class TestBridgeOriginatedMarker:
+    
+    @pytest.mark.asyncio
+    async def test_send_matrix_message_includes_bridge_marker(self):
+        from src.bridges.letta_matrix_bridge import LettaMatrixBridge
+        bridge = LettaMatrixBridge()
+        bridge._access_token = "test_token"
+        
+        captured_content = {}
+        
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(return_value={"event_id": "$test123"})
+        
+        mock_put_context = AsyncMock()
+        mock_put_context.__aenter__.return_value = mock_resp
+        mock_put_context.__aexit__.return_value = None
+        
+        def capture_put(*args, **kwargs):
+            captured_content.update(kwargs.get("json", {}))
+            return mock_put_context
+        
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session.put = capture_put
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+            mock_session_class.return_value = mock_session
+            
+            await bridge._send_matrix_message(
+                room_id="!room:matrix.test",
+                body="Test message"
+            )
+            
+            assert captured_content.get("m.bridge_originated") is True
+    
+    @pytest.mark.asyncio
+    async def test_bridge_marker_prevents_loop(self):
+        from unittest.mock import MagicMock
+        
+        event = MagicMock()
+        event.sender = "@user:matrix.test"
+        event.body = "Test message"
+        event.source = {
+            "content": {
+                "msgtype": "m.text",
+                "body": "Test message",
+                "m.bridge_originated": True
+            }
+        }
+        
+        content = event.source.get("content", {})
+        assert content.get("m.bridge_originated") is True

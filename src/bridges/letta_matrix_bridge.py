@@ -141,28 +141,18 @@ class LettaMatrixBridge:
         logger.warning(f"[Bridge] No room mapping found for agent {agent_id}")
         return None
     
-    async def post_user_request_audit(
+    async def post_user_message_as_admin(
         self,
         room_id: str,
-        user_request: str,
+        user_message: str,
         source: str = "external"
     ) -> None:
-        max_len = 300
-        truncated = user_request[:max_len] + "..." if len(user_request) > max_len else user_request
-        
-        source_emoji = "🖥️" if source == "external" else "💬"
-        source_label = "CLI/API" if source == "external" else "Direct"
-        
-        plain_body = f"{source_emoji} [{source_label}] {truncated}"
-        html_body = f"<em>{source_emoji} [{source_label}]</em> {html.escape(truncated)}"
-        
         await self._send_matrix_message(
             room_id=room_id,
-            body=plain_body,
-            formatted_body=html_body,
-            msgtype="m.notice"
+            body=user_message,
+            msgtype="m.text"
         )
-        logger.info(f"[Bridge] Posted user request audit to {room_id}")
+        logger.info(f"[Bridge] Posted user message as admin to {room_id} (source: {source})")
     
     async def post_agent_response_as_identity(
         self,
@@ -314,7 +304,8 @@ class LettaMatrixBridge:
         
         message_content: Dict[str, Any] = {
             "msgtype": msgtype,
-            "body": body
+            "body": body,
+            "m.bridge_originated": True
         }
         
         if formatted_body:
@@ -362,7 +353,7 @@ class LettaMatrixBridge:
         
         try:
             if user_content:
-                await self.post_user_request_audit(room_id, user_content, source="external")
+                await self.post_user_message_as_admin(room_id, user_content, source="external")
             
             await self.post_agent_response_as_identity(agent_id, room_id, assistant_content)
             
