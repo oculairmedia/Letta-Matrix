@@ -545,18 +545,18 @@ class ConversationRegistration(BaseModel):
     agent_id: str
     matrix_event_id: Optional[str] = None
     matrix_room_id: Optional[str] = None
+    opencode_sender: Optional[str] = None
 
 
 @app.post("/conversations/register")
 async def register_matrix_conversation_endpoint(registration: ConversationRegistration):
-    """Register a Matrix conversation to prevent duplicate webhook audit messages."""
     if not LETTA_WEBHOOK_AVAILABLE:
         return JSONResponse(status_code=503, content={"success": False, "error": "Webhook module not available"})
     
     from src.letta.webhook_handler import register_matrix_conversation
-    register_matrix_conversation(registration.agent_id)
-    logger.info(f"Registered Matrix conversation for agent {registration.agent_id}")
-    return {"success": True, "agent_id": registration.agent_id}
+    register_matrix_conversation(registration.agent_id, registration.opencode_sender)
+    logger.info(f"Registered Matrix conversation for agent {registration.agent_id}, opencode_sender={registration.opencode_sender}")
+    return {"success": True, "agent_id": registration.agent_id, "opencode_sender": registration.opencode_sender}
 
 
 @app.get("/agents/mappings")
@@ -578,6 +578,21 @@ async def get_agent_mappings():
             "message": f"Error: {str(e)}",
             "mappings": {}
         }
+
+@app.post("/agents/matrix-memory/sync")
+async def sync_matrix_memory():
+    """Sync matrix_capabilities block to all agents with Matrix rooms."""
+    try:
+        from src.letta.matrix_memory import sync_matrix_block_to_agents
+        from src.core.mapping_service import get_all_mappings
+        mappings = get_all_mappings()
+        agent_ids = list(mappings.keys())
+        result = await sync_matrix_block_to_agents(agent_ids)
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"Matrix memory sync failed: {e}")
+        return {"success": False, "error": str(e)}
+
 
 @app.get("/agents/{agent_id}/room")
 async def get_agent_room(agent_id: str):

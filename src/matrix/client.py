@@ -1633,10 +1633,8 @@ collaborate with you.
                 logger.info(f"[INTER-AGENT CONTEXT] Sender: {from_agent_name} ({from_agent_id})")
                 logger.info(f"[INTER-AGENT CONTEXT] Full enhanced message:\n{message_to_send}")
 
-            # Check if sender is an OpenCode identity (@oc_*)
-            # If so, inject @mention instruction so agent knows how to respond
             is_opencode_sender = event.sender.startswith("@oc_")
-            opencode_mxid: Optional[str] = None  # Track OpenCode sender for response post-processing
+            opencode_mxid: Optional[str] = None
             if is_opencode_sender and not is_inter_agent_message:
                 opencode_mxid = event.sender
                 message_to_send = f"""[MESSAGE FROM OPENCODE USER]
@@ -1653,6 +1651,10 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
 """
                 logger.info(f"[OPENCODE] Detected message from OpenCode identity: {opencode_mxid}")
                 logger.info(f"[OPENCODE] Injected @mention instruction for response routing")
+            elif not is_inter_agent_message:
+                room_display = room.display_name or room.room_id
+                message_to_send = f"[Matrix: {event.sender} in {room_display}]\n\n{event.body}"
+                logger.debug(f"[MATRIX-CONTEXT] Added context for sender {event.sender}")
 
             # Register this conversation for cross-run tracking
             # This allows the webhook server to link responses from subsequent runs

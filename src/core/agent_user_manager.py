@@ -471,6 +471,15 @@ class AgentUserManager:
         sync_duration = time.time() - sync_start
         logger.info(f"Sync complete. Total mappings: {len(self.mappings)}, Duration: {sync_duration:.2f}s")
         logger.info(f"Sync metrics - Cache hits: {sync_metrics['cache_hits']}, API checks: {sync_metrics['api_checks']}, Login attempts: {sync_metrics['login_attempts']}, Rooms: {sync_metrics['rooms_processed']}")
+        
+        try:
+            from src.letta.matrix_memory import sync_matrix_block_to_agents
+            agent_ids = list(self.mappings.keys())
+            if agent_ids:
+                result = await sync_matrix_block_to_agents(agent_ids)
+                logger.info(f"[MatrixMemory] Block sync: {result.get('synced', 0)} agents updated")
+        except Exception as e:
+            logger.warning(f"[MatrixMemory] Block sync failed (non-critical): {e}")
 
     async def create_user_for_agent(self, agent: dict):
         """Create a Matrix user for a specific agent"""
