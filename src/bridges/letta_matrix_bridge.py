@@ -352,9 +352,6 @@ class LettaMatrixBridge:
             )
         
         try:
-            if user_content:
-                await self.post_user_message_as_admin(room_id, user_content, source="external")
-            
             await self.post_agent_response_as_identity(agent_id, room_id, assistant_content)
             
             return WebhookResult(
