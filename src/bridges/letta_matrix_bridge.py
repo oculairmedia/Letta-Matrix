@@ -25,18 +25,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BridgeConfig:
-    """Configuration for the Letta-Matrix bridge."""
-    
     matrix_homeserver: str = field(
-        default_factory=lambda: os.getenv("MATRIX_HOMESERVER_URL", "http://synapse:8008")
+        default_factory=lambda: os.getenv("MATRIX_HOMESERVER_URL", "http://tuwunel:6167")
     )
-    matrix_access_token: Optional[str] = field(
-        default_factory=lambda: os.getenv("MATRIX_ACCESS_TOKEN")
+    matrix_admin_username: str = field(
+        default_factory=lambda: os.getenv("MATRIX_ADMIN_USERNAME", "@admin:matrix.oculair.ca")
+    )
+    matrix_admin_password: str = field(
+        default_factory=lambda: os.getenv("MATRIX_ADMIN_PASSWORD", "")
     )
     matrix_api_url: str = field(
         default_factory=lambda: os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
     )
-    # Cache agent-room mappings
     room_cache_ttl_seconds: int = 60
 
 
@@ -51,16 +51,37 @@ class LettaMatrixBridge:
     """
     
     def __init__(self, config: Optional[BridgeConfig] = None):
-        """
-        Initialize the bridge.
-        
-        Args:
-            config: Bridge configuration
-        """
         self.config = config or BridgeConfig()
-        
-        # Room cache: agent_id -> (room_id, cached_at)
         self._room_cache: Dict[str, tuple[str, datetime]] = {}
+        self._access_token: Optional[str] = None
+    
+    async def _ensure_logged_in(self) -> str:
+        """Login to Matrix and return access token."""
+        if self._access_token:
+            return self._access_token
+        
+        if not self.config.matrix_admin_password:
+            raise ValueError("MATRIX_ADMIN_PASSWORD not configured")
+        
+        login_url = f"{self.config.matrix_homeserver}/_matrix/client/v3/login"
+        login_data = {
+            "type": "m.login.password",
+            "identifier": {"type": "m.id.user", "user": self.config.matrix_admin_username},
+            "password": self.config.matrix_admin_password,
+            "initial_device_display_name": "LettaMatrixBridge"
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(login_url, json=login_data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise RuntimeError(f"Matrix login failed: {resp.status} {error_text}")
+                result = await resp.json()
+                self._access_token = result.get("access_token")
+                if not self._access_token:
+                    raise RuntimeError("Login succeeded but no access_token returned")
+                logger.info(f"[Bridge] Logged in as {self.config.matrix_admin_username}")
+                return self._access_token
     
     async def find_matrix_room_for_agent(self, agent_id: str) -> Optional[str]:
         """
@@ -233,12 +254,10 @@ class LettaMatrixBridge:
         Returns:
             Event ID of sent message
         """
-        if not self.config.matrix_access_token:
-            raise ValueError("MATRIX_ACCESS_TOKEN not configured")
-        
         import time
-        txn_id = f"bridge_{int(time.time() * 1000)}"
         
+        access_token = await self._ensure_logged_in()
+        txn_id = f"bridge_{int(time.time() * 1000)}"
         url = f"{self.config.matrix_homeserver}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}"
         
         message_content: Dict[str, Any] = {
@@ -255,7 +274,7 @@ class LettaMatrixBridge:
         
         async with aiohttp.ClientSession() as session:
             headers = {
-                "Authorization": f"Bearer {self.config.matrix_access_token}",
+                "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json"
             }
             
