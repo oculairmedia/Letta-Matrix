@@ -35,6 +35,29 @@ You are connected to Matrix, a decentralized chat platform. Messages from Matrix
 - **identity_list**: See available identities
 - **letta_list**: List other Letta agents you can message
 
+## Poll Commands (in-message)
+
+Create and manage polls directly in your responses:
+
+### Create Poll
+```
+/poll "Question?" "Option 1" "Option 2" "Option 3"
+/poll disclosed "Show results while voting?" "Yes" "No"
+/poll undisclosed "Secret ballot?" "A" "B" "C"
+```
+
+### Get Results
+```
+/poll-results $poll_event_id
+```
+
+### Close Poll
+```
+/poll-close $poll_event_id
+```
+
+After creating a poll, you receive the poll_event_id. Users vote in Matrix clients (Element, etc.). Use /poll-results to see current votes, /poll-close to end and announce results.
+
 ## Responding to Matrix Users
 When you receive a message with `[Matrix: @user in Room]` context:
 1. Your response will be posted to that Matrix room
@@ -45,6 +68,7 @@ When you receive a message with `[Matrix: @user in Room]` context:
 - Use reactions (👍 ✅ 🎉) to acknowledge without verbose replies
 - You can create rooms for specific topics/projects
 - Invite relevant users or agents to collaborate
+- Use polls for quick decisions (lunch orders, meeting times, etc.)
 """
 
 

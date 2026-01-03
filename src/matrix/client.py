@@ -20,6 +20,7 @@ from src.matrix.file_handler import LettaFileHandler, FileUploadError
 # Import agent user manager
 from src.core.agent_user_manager import run_agent_sync
 from src.matrix.event_dedupe import is_duplicate_event
+from src.matrix.poll_handler import process_agent_response, is_poll_command
 
 # Cross-run tracking webhook URL (TypeScript MCP - deprecated)
 CONVERSATION_TRACKER_URL = os.getenv("CONVERSATION_TRACKER_URL", "http://192.168.50.90:3101")
@@ -796,7 +797,6 @@ async def send_to_letta_api_streaming(
         return event_id or ""
     
     async def send_final_message(rid: str, content: str) -> str:
-        """Send a final response message with rich reply context"""
         final_content = content
         
         logger.debug(f"[OPENCODE] send_final_message: opencode_sender={opencode_sender}, content_len={len(content) if content else 0}")
@@ -807,6 +807,21 @@ async def send_to_letta_api_streaming(
                 final_content = f"{opencode_sender} {content}"
             else:
                 logger.debug(f"[OPENCODE] Agent response already contains @mention")
+        
+        poll_handled, remaining_text, poll_event_id = await process_agent_response(
+            room_id=rid,
+            response_text=final_content,
+            config=config,
+            logger_instance=logger,
+            reply_to_event_id=reply_to_event_id,
+            reply_to_sender=reply_to_sender
+        )
+        
+        if poll_handled:
+            logger.info(f"[POLL] Poll command handled in streaming, event_id: {poll_event_id}")
+            if not remaining_text:
+                return poll_event_id or ""
+            final_content = remaining_text
         
         event_id = await send_as_agent_with_event_id(
             rid, final_content, config, logger,
@@ -1724,16 +1739,35 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
                     logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_mxid}")
                     letta_response = f"{opencode_mxid} {letta_response}"
                 
-                # Try to send as the agent user first - use rich reply to the original message
                 original_event_id = getattr(event, 'event_id', None)
-                sent_as_agent = await send_as_agent(
-                    room.room_id, 
-                    letta_response, 
-                    config, 
-                    logger,
+                sent_as_agent = False
+                
+                poll_handled, remaining_text, poll_event_id = await process_agent_response(
+                    room_id=room.room_id,
+                    response_text=letta_response,
+                    config=config,
+                    logger_instance=logger,
                     reply_to_event_id=original_event_id,
                     reply_to_sender=event.sender
                 )
+                
+                if poll_handled:
+                    logger.info(f"[POLL] Poll command handled, event_id: {poll_event_id}")
+                    if remaining_text:
+                        letta_response = remaining_text
+                    else:
+                        sent_as_agent = True
+                        letta_response = ""
+                
+                if not poll_handled or remaining_text:
+                    sent_as_agent = await send_as_agent(
+                        room.room_id, 
+                        letta_response, 
+                        config, 
+                        logger,
+                        reply_to_event_id=original_event_id,
+                        reply_to_sender=event.sender
+                    )
                 
                 if not sent_as_agent:
                     # Fallback to sending as the main letta client if agent send fails
