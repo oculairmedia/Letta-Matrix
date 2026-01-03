@@ -234,6 +234,10 @@ services:
       - CONVERSATION_TIMEOUT_SECONDS=${CONVERSATION_TIMEOUT_SECONDS:-300}
       - MAX_RESPONSE_WAIT=${MAX_RESPONSE_WAIT:-60}
       - RESPONSE_POLL_INTERVAL=${RESPONSE_POLL_INTERVAL:-2}
+      # Python Identity API Integration
+      - USE_IDENTITY_API=true
+      - MATRIX_API_URL=http://matrix-api:8000
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-matrix-identity-internal-key}
     volumes:
       - ./mcp-servers/matrix-identity-bridge/data:/app/data
       - ./mcp-servers/matrix-identity-bridge/dist:/app/dist:ro

@@ -1,5 +1,8 @@
 /**
  * Storage Layer - JSON-based persistence for identities, DM mappings, and metadata
+ * 
+ * Identity operations can optionally use the Python REST API instead of local JSON.
+ * Set USE_IDENTITY_API=true to enable API-backed identity storage.
  */
 
 import fs from 'fs/promises';
@@ -10,6 +13,7 @@ import type {
   StorageData,
   StorageMetadata
 } from '../types/index.js';
+import { IdentityApiClient } from './identity-api-client.js';
 
 export class Storage {
   private dataDir: string;
@@ -25,12 +29,20 @@ export class Storage {
   };
   
   private initialized = false;
+  private useIdentityApi: boolean;
+  private identityApiClient: IdentityApiClient | null = null;
 
   constructor(dataDir: string = './data') {
     this.dataDir = dataDir;
     this.identitiesFile = path.join(dataDir, 'identities.json');
     this.dmRoomsFile = path.join(dataDir, 'dm_rooms.json');
     this.metadataFile = path.join(dataDir, 'metadata.json');
+    this.useIdentityApi = process.env.USE_IDENTITY_API === 'true';
+    
+    if (this.useIdentityApi) {
+      this.identityApiClient = new IdentityApiClient();
+      console.log('[Storage] Using Python Identity API for identity operations');
+    }
   }
 
   /**
@@ -142,40 +154,69 @@ export class Storage {
     );
   }
 
-  /**
-   * Get identity by ID
-   */
   getIdentity(id: string): MatrixIdentity | undefined {
+    if (this.useIdentityApi && this.identityApiClient) {
+      console.warn('[Storage] Sync getIdentity called with API mode - use getIdentityAsync');
+      return undefined;
+    }
     return this.identities.get(id);
   }
 
-  /**
-   * Get identity by MXID
-   */
+  async getIdentityAsync(id: string): Promise<MatrixIdentity | undefined> {
+    if (this.useIdentityApi && this.identityApiClient) {
+      return await this.identityApiClient.getIdentity(id);
+    }
+    return this.identities.get(id);
+  }
+
   getIdentityByMXID(mxid: string): MatrixIdentity | undefined {
+    if (this.useIdentityApi && this.identityApiClient) {
+      console.warn('[Storage] Sync getIdentityByMXID called with API mode - use getIdentityByMXIDAsync');
+      return undefined;
+    }
     return Array.from(this.identities.values()).find(i => i.mxid === mxid);
   }
 
-  /**
-   * Get all identities
-   */
+  async getIdentityByMXIDAsync(mxid: string): Promise<MatrixIdentity | undefined> {
+    if (this.useIdentityApi && this.identityApiClient) {
+      return await this.identityApiClient.getIdentityByMXID(mxid);
+    }
+    return Array.from(this.identities.values()).find(i => i.mxid === mxid);
+  }
+
   getAllIdentities(): MatrixIdentity[] {
+    if (this.useIdentityApi && this.identityApiClient) {
+      console.warn('[Storage] Sync getAllIdentities called with API mode - use getAllIdentitiesAsync');
+      return [];
+    }
     return Array.from(this.identities.values());
   }
 
-  /**
-   * Save or update identity
-   */
+  async getAllIdentitiesAsync(type?: string): Promise<MatrixIdentity[]> {
+    if (this.useIdentityApi && this.identityApiClient) {
+      return await this.identityApiClient.getAllIdentities(type);
+    }
+    const all = Array.from(this.identities.values());
+    return type ? all.filter(i => i.type === type) : all;
+  }
+
   async saveIdentity(identity: MatrixIdentity): Promise<void> {
+    if (this.useIdentityApi && this.identityApiClient) {
+      await this.identityApiClient.saveIdentity(identity);
+      console.log('[Storage] Saved identity via API:', identity.id);
+      return;
+    }
     this.identities.set(identity.id, identity);
     await this.saveIdentities();
     console.log('[Storage] Saved identity:', identity.id, '->', identity.mxid);
   }
 
-  /**
-   * Delete identity
-   */
   async deleteIdentity(id: string): Promise<boolean> {
+    if (this.useIdentityApi && this.identityApiClient) {
+      const result = await this.identityApiClient.deleteIdentity(id);
+      if (result) console.log('[Storage] Deleted identity via API:', id);
+      return result;
+    }
     const deleted = this.identities.delete(id);
     if (deleted) {
       await this.saveIdentities();

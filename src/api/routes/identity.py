@@ -8,6 +8,8 @@ from src.api.schemas.identity import (
     IdentityUpdate,
     IdentityResponse,
     IdentityListResponse,
+    FullIdentityResponse,
+    FullIdentityListResponse,
     DMRoomCreate,
     DMRoomResponse,
     DMRoomListResponse,
@@ -273,3 +275,60 @@ async def delete_dm_room(mxid1: str, mxid2: str):
     if not success:
         raise HTTPException(status_code=404, detail="DM room not found")
     return None
+
+
+import os
+from fastapi import Header
+
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "matrix-identity-internal-key")
+
+internal_router = APIRouter(prefix="/api/v1/internal", tags=["internal"])
+
+
+def verify_internal_key(x_internal_key: str = Header(...)):
+    if x_internal_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid internal API key")
+
+
+@internal_router.get("/identities/{identity_id}", response_model=FullIdentityResponse)
+async def get_full_identity(identity_id: str, x_internal_key: str = Header(...)):
+    verify_internal_key(x_internal_key)
+    service = get_identity_service()
+    identity = service.get(identity_id)
+    if not identity:
+        raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
+    return FullIdentityResponse.from_identity(identity)
+
+
+@internal_router.get("/identities/by-mxid/{mxid:path}", response_model=FullIdentityResponse)
+async def get_full_identity_by_mxid(mxid: str, x_internal_key: str = Header(...)):
+    verify_internal_key(x_internal_key)
+    decoded_mxid = unquote(mxid)
+    service = get_identity_service()
+    identity = service.get_by_mxid(decoded_mxid)
+    if not identity:
+        raise HTTPException(status_code=404, detail=f"Identity with MXID {decoded_mxid} not found")
+    return FullIdentityResponse.from_identity(identity)
+
+
+@internal_router.get("/identities", response_model=FullIdentityListResponse)
+async def list_full_identities(
+    x_internal_key: str = Header(...),
+    identity_type: Optional[str] = None,
+    active_only: bool = True
+):
+    verify_internal_key(x_internal_key)
+    service = get_identity_service()
+    
+    if identity_type:
+        identities = service.get_by_type(identity_type)
+        if active_only:
+            identities = [i for i in identities if i.is_active]
+    else:
+        identities = service.get_all(active_only=active_only)
+    
+    return FullIdentityListResponse(
+        success=True,
+        count=len(identities),
+        identities=[FullIdentityResponse.from_identity(i) for i in identities]
+    )

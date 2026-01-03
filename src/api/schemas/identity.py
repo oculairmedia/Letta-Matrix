@@ -52,6 +52,49 @@ class IdentityResponse(BaseModel):
         )
 
 
+class FullIdentityResponse(BaseModel):
+    """Internal response that includes access_token - only for trusted services"""
+    id: str
+    identity_type: str
+    mxid: str
+    display_name: Optional[str]
+    avatar_url: Optional[str]
+    access_token: str
+    password_hash: Optional[str]
+    device_id: Optional[str]
+    created_at: Optional[int] = Field(None, description="Unix timestamp ms")
+    updated_at: Optional[int] = Field(None, description="Unix timestamp ms")
+    last_used_at: Optional[int] = Field(None, description="Unix timestamp ms")
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+    @classmethod
+    def from_identity(cls, identity) -> "FullIdentityResponse":
+        return cls(
+            id=identity.id,
+            identity_type=identity.identity_type,
+            mxid=identity.mxid,
+            display_name=identity.display_name,
+            avatar_url=identity.avatar_url,
+            access_token=identity.access_token,
+            password_hash=identity.password_hash,
+            device_id=identity.device_id,
+            created_at=int(identity.created_at.timestamp() * 1000) if identity.created_at else None,
+            updated_at=int(identity.updated_at.timestamp() * 1000) if identity.updated_at else None,
+            last_used_at=int(identity.last_used_at.timestamp() * 1000) if identity.last_used_at else None,
+            is_active=identity.is_active
+        )
+
+
+class FullIdentityListResponse(BaseModel):
+    """Internal response with full identities including access tokens"""
+    success: bool
+    count: int
+    identities: List[FullIdentityResponse]
+
+
 class IdentityListResponse(BaseModel):
     success: bool
     count: int

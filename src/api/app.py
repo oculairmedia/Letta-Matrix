@@ -52,7 +52,7 @@ except ImportError as e:
     LETTA_WEBHOOK_AVAILABLE = False
 
 try:
-    from .routes.identity import router as identity_router, dm_router
+    from src.api.routes.identity import router as identity_router, dm_router, internal_router
     IDENTITY_API_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Identity API not available: {e}")
@@ -71,6 +71,7 @@ app = FastAPI(
 if IDENTITY_API_AVAILABLE:
     app.include_router(identity_router)
     app.include_router(dm_router)
+    app.include_router(internal_router)
     logger.info("Identity API routes registered")
 
 # Pydantic models for request/response
