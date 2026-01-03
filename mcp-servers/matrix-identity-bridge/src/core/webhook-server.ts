@@ -270,12 +270,10 @@ export class WebhookServer {
       return;
     }
 
-    // Read request body
     const body = await this.readRequestBody(req);
     
-    // Verify signature
     const signature = req.headers['x-letta-signature'] as string | undefined;
-    if (!handler.verifySignature(body, signature)) {
+    if (!handler!.verifySignature(body, signature)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         status: 'error',
@@ -295,20 +293,24 @@ export class WebhookServer {
       
       let contentPreview = 'none';
       let contentType = 'undefined';
-      if (lastAssistant?.content) {
-        contentType = Array.isArray(lastAssistant.content) ? 'array' : typeof lastAssistant.content;
-        if (typeof lastAssistant.content === 'string') {
-          contentPreview = lastAssistant.content.substring(0, 100);
-        } else if (Array.isArray(lastAssistant.content)) {
-          const textParts = lastAssistant.content
+      if (lastAssistant && lastAssistant.content !== undefined) {
+        const rawContent = lastAssistant.content;
+        if (typeof rawContent === 'string') {
+          contentType = 'string';
+          contentPreview = (rawContent as string).substring(0, 100);
+        } else if (Array.isArray(rawContent)) {
+          contentType = 'array';
+          const arr = rawContent as unknown[];
+          const textParts = arr
             .filter((p: unknown) => p && typeof p === 'object' && (p as Record<string, unknown>).type === 'text')
             .map((p: unknown) => (p as Record<string, unknown>).text as string)
             .filter(Boolean);
           contentPreview = textParts.length > 0 
             ? textParts.join(' ').substring(0, 100) 
-            : `[${lastAssistant.content.length} parts, no text]`;
+            : `[${arr.length} parts, no text]`;
         } else {
-          contentPreview = JSON.stringify(lastAssistant.content).substring(0, 100);
+          contentType = 'object';
+          contentPreview = JSON.stringify(rawContent).substring(0, 100);
         }
       }
       console.log(`[WebhookServer] Parsed: ${msgCount} msgs, ${assistantMsgs.length} assistant, type=${contentType}, content="${contentPreview}..."`);
@@ -340,8 +342,7 @@ export class WebhookServer {
       return;
     }
 
-    // Handle the webhook
-    const result = await handler.handleRunCompleted(payload);
+    const result = await handler!.handleRunCompleted(payload);
 
     // Return result
     res.writeHead(result.success ? 200 : 500, { 'Content-Type': 'application/json' });

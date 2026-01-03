@@ -231,6 +231,7 @@ services:
       - RESPONSE_POLL_INTERVAL=${RESPONSE_POLL_INTERVAL:-2}
     volumes:
       - ./mcp-servers/matrix-identity-bridge/data:/app/data
+      - ./mcp-servers/matrix-identity-bridge/dist:/app/dist:ro
     networks:
       - matrix-internal
     depends_on:

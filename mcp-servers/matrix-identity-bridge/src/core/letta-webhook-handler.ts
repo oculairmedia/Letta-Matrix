@@ -239,9 +239,24 @@ export class LettaWebhookHandler {
     // If no active tracked conversation OR not a cross-run scenario,
     // post a SILENT audit message instead of a regular response
     if (!isCrossRunScenario) {
-      // Post silent audit message if enabled
+      // Determine the source
+      const source = conversation ? 'matrix-direct' : 'external';
+      
+      // SKIP audit for matrix-direct - the response was already posted by matrix-client
+      // Only post audit for external sources (CLI, API, etc.) that don't have Matrix delivery
+      if (source === 'matrix-direct') {
+        console.log(`[LettaWebhook] Skipping audit for Matrix-direct conversation ${agent_id} (already handled by matrix-client)`);
+        return {
+          success: true,
+          responsePosted: false,
+          error: 'matrix_direct_skip',
+          agentId: agent_id,
+          roomId
+        };
+      }
+      
+      // Post silent audit message for external sources if enabled
       if (this.config.auditNonMatrixConversations) {
-        const source = conversation ? 'matrix-direct' : 'external';
         console.log(`[LettaWebhook] Posting silent audit for ${agent_id} (source: ${source}, request: ${userContent?.length || 0} chars, response: ${assistantContent.length} chars)`);
         
         try {
