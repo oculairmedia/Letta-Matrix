@@ -577,12 +577,30 @@ async def handle_letta_code_command(
         if not project_dir:
             await send_as_agent(room.room_id, "No filesystem session found. Run /fs-link first.", config, logger)
             return True
+        
+        fs_run_prompt = prompt_text
+        if event.sender.startswith("@oc_"):
+            opencode_mxid = event.sender
+            fs_run_prompt = f"""[MESSAGE FROM OPENCODE USER]
+
+{prompt_text}
+
+---
+RESPONSE INSTRUCTION (OPENCODE BRIDGE):
+This message is from an OpenCode user: {opencode_mxid}
+When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
+in your response so the OpenCode bridge can route your reply to them.
+
+Example: "{opencode_mxid} Here is my response..."
+"""
+            logger.info(f"[OPENCODE-FS-RUN] Injected @mention instruction for /fs-run command")
+        
         await run_letta_code_task(
             room_id=room.room_id,
             agent_id=agent_id,
             agent_name=agent_name,
             project_dir=project_dir,
-            prompt=prompt_text,
+            prompt=fs_run_prompt,
             config=config,
             logger=logger,
             wrap_response=True,
@@ -781,11 +799,14 @@ async def send_to_letta_api_streaming(
         """Send a final response message with rich reply context"""
         final_content = content
         
-        # If this is a response to an OpenCode user, ensure @mention is included
-        # This is a fallback in case the agent didn't follow the metaprompt instruction
-        if opencode_sender and opencode_sender not in content:
-            logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_sender}")
-            final_content = f"{opencode_sender} {content}"
+        logger.debug(f"[OPENCODE] send_final_message: opencode_sender={opencode_sender}, content_len={len(content) if content else 0}")
+        
+        if opencode_sender:
+            if opencode_sender not in content:
+                logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_sender}")
+                final_content = f"{opencode_sender} {content}"
+            else:
+                logger.debug(f"[OPENCODE] Agent response already contains @mention")
         
         event_id = await send_as_agent_with_event_id(
             rid, final_content, config, logger,
@@ -1499,12 +1520,32 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                 if not project_dir:
                     await send_as_agent(room.room_id, "Filesystem mode enabled but no project linked. Run /fs-link.", config, logger)
                     return
+            
+            # Check if sender is an OpenCode identity (@oc_*) and inject metaprompt
+            fs_prompt = event.body
+            if event.sender.startswith("@oc_"):
+                opencode_mxid = event.sender
+                fs_prompt = f"""[MESSAGE FROM OPENCODE USER]
+
+{event.body}
+
+---
+RESPONSE INSTRUCTION (OPENCODE BRIDGE):
+This message is from an OpenCode user: {opencode_mxid}
+When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
+in your response so the OpenCode bridge can route your reply to them.
+
+Example: "{opencode_mxid} Here is my response..."
+"""
+                logger.info(f"[OPENCODE-FS] Detected message from OpenCode identity: {opencode_mxid}")
+                logger.info(f"[OPENCODE-FS] Injected @mention instruction for filesystem mode")
+            
             await run_letta_code_task(
                 room_id=room.room_id,
                 agent_id=agent_id,
                 agent_name=agent_name,
                 project_dir=project_dir,
-                prompt=event.body,
+                prompt=fs_prompt,
                 config=config,
                 logger=logger,
                 wrap_response=False,
