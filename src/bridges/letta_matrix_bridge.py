@@ -19,6 +19,8 @@ from typing import Any, Dict, Optional
 import aiohttp
 
 from src.letta.webhook_handler import WebhookResult
+from src.core.identity_storage import get_identity_service
+from src.matrix.identity_client_pool import get_identity_client_pool
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +135,53 @@ class LettaMatrixBridge:
         logger.warning(f"[Bridge] No room mapping found for agent {agent_id}")
         return None
     
+    async def post_user_request_audit(
+        self,
+        room_id: str,
+        user_request: str,
+        source: str = "external"
+    ) -> None:
+        max_len = 300
+        truncated = user_request[:max_len] + "..." if len(user_request) > max_len else user_request
+        
+        source_emoji = "🖥️" if source == "external" else "💬"
+        source_label = "CLI/API" if source == "external" else "Direct"
+        
+        plain_body = f"{source_emoji} [{source_label}] {truncated}"
+        html_body = f"<em>{source_emoji} [{source_label}]</em> {html.escape(truncated)}"
+        
+        await self._send_matrix_message(
+            room_id=room_id,
+            body=plain_body,
+            formatted_body=html_body,
+            msgtype="m.notice"
+        )
+        logger.info(f"[Bridge] Posted user request audit to {room_id}")
+    
+    async def post_agent_response_as_identity(
+        self,
+        agent_id: str,
+        room_id: str,
+        content: str
+    ) -> Optional[str]:
+        identity_service = get_identity_service()
+        identity = identity_service.get_by_agent_id(agent_id)
+        
+        if identity and identity.is_active:
+            pool = get_identity_client_pool()
+            event_id = await pool.send_as_agent(agent_id, room_id, content)
+            if event_id:
+                identity_service.mark_used(f"letta_{agent_id}")
+                logger.info(f"[Bridge] Agent {agent_id} posted via identity to {room_id}")
+                return event_id
+            else:
+                logger.warning(f"[Bridge] Failed to post via agent identity, falling back to admin")
+        else:
+            logger.info(f"[Bridge] No identity for agent {agent_id}, using admin account")
+        
+        await self._send_matrix_message(room_id=room_id, body=content, msgtype="m.text")
+        return None
+    
     async def post_silent_audit(
         self,
         room_id: str,
@@ -141,18 +190,6 @@ class LettaMatrixBridge:
         user_request: Optional[str] = None,
         run_id: Optional[str] = None
     ) -> None:
-        """
-        Post a silent audit message to Matrix (m.notice, no notification).
-        
-        Used for non-Matrix conversations (CLI, API) to maintain audit trail.
-        
-        Args:
-            room_id: Matrix room ID
-            assistant_content: The agent's response
-            source: Source of the conversation ("external" or "matrix-direct")
-            user_request: Optional user request that triggered this response
-            run_id: Optional Letta run ID
-        """
         max_request_len = 200
         max_response_len = 500
         
@@ -170,7 +207,6 @@ class LettaMatrixBridge:
             else assistant_content
         )
         
-        # Format message
         source_emoji = "🖥️" if source == "external" else "💬"
         source_label = "CLI/API" if source == "external" else "Direct"
         
@@ -188,12 +224,11 @@ class LettaMatrixBridge:
                 f"{html.escape(truncated_response)}"
             )
         
-        # Send via Matrix client-server API
         await self._send_matrix_message(
             room_id=room_id,
             body=plain_body,
             formatted_body=html_body,
-            msgtype="m.notice"  # Silent, no notification
+            msgtype="m.notice"
         )
         
         logger.info(f"[Bridge] Posted silent audit to {room_id} ({source})")
@@ -298,21 +333,6 @@ class LettaMatrixBridge:
         assistant_content: str,
         run_id: Optional[str] = None
     ) -> WebhookResult:
-        """
-        Post a webhook response to Matrix.
-        
-        This is the main entry point called by the webhook handler.
-        
-        Args:
-            agent_id: Letta agent ID
-            user_content: User's request (if available)
-            assistant_content: Agent's response
-            run_id: Letta run ID
-            
-        Returns:
-            WebhookResult with outcome
-        """
-        # Find the Matrix room for this agent
         room_id = await self.find_matrix_room_for_agent(agent_id)
         if not room_id:
             logger.warning(f"[Bridge] No Matrix room found for agent {agent_id}")
@@ -323,30 +343,25 @@ class LettaMatrixBridge:
                 agent_id=agent_id
             )
         
-        # For now, always post as silent audit (CLI/API conversations)
-        # TODO: Add conversation tracking to determine if this is a cross-run scenario
         try:
-            await self.post_silent_audit(
-                room_id=room_id,
-                assistant_content=assistant_content,
-                source="external",
-                user_request=user_content,
-                run_id=run_id
-            )
+            if user_content:
+                await self.post_user_request_audit(room_id, user_content, source="external")
+            
+            await self.post_agent_response_as_identity(agent_id, room_id, assistant_content)
             
             return WebhookResult(
                 success=True,
                 response_posted=True,
-                response_content=f"[AUDIT] {assistant_content[:100]}...",
+                response_content=assistant_content[:100] + "..." if len(assistant_content) > 100 else assistant_content,
                 agent_id=agent_id,
                 room_id=room_id
             )
         except Exception as e:
-            logger.exception(f"[Bridge] Failed to post audit: {e}")
+            logger.exception(f"[Bridge] Failed to post webhook response: {e}")
             return WebhookResult(
                 success=False,
                 response_posted=False,
-                error="audit_post_failed",
+                error=str(e),
                 agent_id=agent_id,
                 room_id=room_id
             )

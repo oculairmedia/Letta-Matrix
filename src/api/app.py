@@ -51,6 +51,13 @@ except ImportError as e:
     logger.warning(f"Letta webhook not available: {e}")
     LETTA_WEBHOOK_AVAILABLE = False
 
+try:
+    from .routes.identity import router as identity_router, dm_router
+    IDENTITY_API_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Identity API not available: {e}")
+    IDENTITY_API_AVAILABLE = False
+
 # Load environment variables
 load_dotenv('.env')
 
@@ -60,6 +67,11 @@ app = FastAPI(
     description="REST API for Matrix messaging operations",
     version="1.0.0"
 )
+
+if IDENTITY_API_AVAILABLE:
+    app.include_router(identity_router)
+    app.include_router(dm_router)
+    logger.info("Identity API routes registered")
 
 # Pydantic models for request/response
 class LoginRequest(BaseModel):
