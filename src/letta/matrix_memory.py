@@ -6,6 +6,7 @@ import hashlib
 import logging
 from typing import Optional, List
 from letta_client import Letta
+from src.letta.client import get_letta_client as _get_client
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +78,7 @@ def _content_hash(content: str) -> str:
 
 
 def get_letta_client() -> Letta:
-    import os
-    base_url = os.getenv("LETTA_API_URL", "http://192.168.50.90:8289")
-    api_key = os.getenv("LETTA_API_KEY") or os.getenv("LETTA_TOKEN", "")
-    return Letta(base_url=base_url, api_key=api_key) if api_key else Letta(base_url=base_url)
+    return _get_client()
 
 
 async def get_or_create_matrix_block(client: Optional[Letta] = None) -> Optional[str]:
@@ -116,17 +114,21 @@ async def get_or_create_matrix_block(client: Optional[Letta] = None) -> Optional
 
 
 async def ensure_agent_has_block(agent_id: str, block_id: str, client: Optional[Letta] = None) -> bool:
-    """Attach block to agent if not already attached."""
     if client is None:
         client = get_letta_client()
     
     try:
         agent = client.agents.retrieve(agent_id=agent_id)
-        attached_ids = [b.id for b in (agent.blocks or [])]
         
-        if block_id in attached_ids:
-            logger.debug(f"[MatrixMemory] Agent {agent_id} already has block")
-            return True
+        for block in (agent.blocks or []):
+            if block.label == MATRIX_BLOCK_LABEL:
+                if block.id == block_id:
+                    logger.debug(f"[MatrixMemory] Agent {agent_id} already has current block")
+                    return True
+                if block.id:
+                    client.agents.blocks.detach(agent_id=agent_id, block_id=block.id)
+                    logger.info(f"[MatrixMemory] Detached old block {block.id} from {agent_id}")
+                break
         
         client.agents.blocks.attach(agent_id=agent_id, block_id=block_id)
         logger.info(f"[MatrixMemory] Attached block to agent {agent_id}")
@@ -152,14 +154,24 @@ async def sync_matrix_block_to_agents(agent_ids: List[str]) -> dict:
     for agent_id in agent_ids:
         try:
             agent = client.agents.retrieve(agent_id=agent_id)
-            attached_ids = [b.id for b in (agent.blocks or [])]
             
-            if block_id in attached_ids:
-                skipped += 1
-            else:
-                client.agents.blocks.attach(agent_id=agent_id, block_id=block_id)
-                synced += 1
-                logger.info(f"[MatrixMemory] Attached to {agent_id}")
+            existing_block = None
+            for block in (agent.blocks or []):
+                if block.label == MATRIX_BLOCK_LABEL:
+                    existing_block = block
+                    break
+            
+            if existing_block:
+                if existing_block.id == block_id:
+                    skipped += 1
+                    continue
+                if existing_block.id:
+                    client.agents.blocks.detach(agent_id=agent_id, block_id=existing_block.id)
+                    logger.debug(f"[MatrixMemory] Detached old block from {agent_id}")
+            
+            client.agents.blocks.attach(agent_id=agent_id, block_id=block_id)
+            synced += 1
+            logger.info(f"[MatrixMemory] Attached to {agent_id}")
         except Exception as e:
             failed += 1
             logger.warning(f"[MatrixMemory] Failed for {agent_id}: {e}")

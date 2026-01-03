@@ -98,6 +98,7 @@ class TestEnsureAgentHasBlock:
         mock_agent = MagicMock()
         mock_existing_block = MagicMock()
         mock_existing_block.id = "block-123"
+        mock_existing_block.label = MATRIX_BLOCK_LABEL
         mock_agent.blocks = [mock_existing_block]
         mock_client.agents.retrieve.return_value = mock_agent
         
@@ -119,6 +120,28 @@ class TestEnsureAgentHasBlock:
         mock_client.agents.blocks.attach.assert_called_once_with(
             agent_id="agent-abc",
             block_id="block-123"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_replaces_old_block_with_same_label(self):
+        mock_client = MagicMock()
+        mock_agent = MagicMock()
+        mock_old_block = MagicMock()
+        mock_old_block.id = "block-old"
+        mock_old_block.label = MATRIX_BLOCK_LABEL
+        mock_agent.blocks = [mock_old_block]
+        mock_client.agents.retrieve.return_value = mock_agent
+        
+        result = await ensure_agent_has_block("agent-abc", "block-new", mock_client)
+        
+        assert result is True
+        mock_client.agents.blocks.detach.assert_called_once_with(
+            agent_id="agent-abc",
+            block_id="block-old"
+        )
+        mock_client.agents.blocks.attach.assert_called_once_with(
+            agent_id="agent-abc",
+            block_id="block-new"
         )
 
 
@@ -146,6 +169,7 @@ class TestSyncMatrixBlockToAgents:
         
         attached_block = MagicMock()
         attached_block.id = "block-shared"
+        attached_block.label = MATRIX_BLOCK_LABEL
         mock_agent.blocks = [attached_block]
         
         with patch('src.letta.matrix_memory.get_letta_client', return_value=mock_client):
@@ -167,6 +191,7 @@ class TestSyncMatrixBlockToAgents:
         
         attached_block = MagicMock()
         attached_block.id = "block-shared"
+        attached_block.label = MATRIX_BLOCK_LABEL
         
         def mock_retrieve(agent_id):
             agent = MagicMock()
