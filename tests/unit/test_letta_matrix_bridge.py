@@ -174,7 +174,7 @@ class TestBridgeOriginatedMarker:
             mock_session_instance.put.assert_called_once()
             call_args = mock_session_instance.put.call_args
             json_data = call_args.kwargs.get('json', {})
-            assert json_data.get('com.letta.bridge_originated') is True
+            assert json_data.get('m.bridge_originated') is True
 
 
 class TestFindMatrixRoom:
