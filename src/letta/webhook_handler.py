@@ -36,31 +36,37 @@ logger = logging.getLogger(__name__)
 
 # Track active Matrix conversations to avoid duplicate audit messages
 # When matrix-client sends a message to Letta, it registers the agent_id here
-# When webhook arrives, we check if agent has active Matrix conversation
-_active_matrix_conversations: Dict[str, datetime] = {}
+_active_matrix_conversations: Dict[str, Dict[str, Any]] = {}
 CONVERSATION_TTL_SECONDS = 300
 
 
-def register_matrix_conversation(agent_id: str) -> None:
-    """Called by matrix-client before sending to Letta to mark as Matrix-originated."""
-    _active_matrix_conversations[agent_id] = datetime.now()
-    logger.debug(f"[Webhook] Registered Matrix conversation for agent {agent_id}")
+def register_matrix_conversation(agent_id: str, opencode_sender: Optional[str] = None) -> None:
+    _active_matrix_conversations[agent_id] = {
+        "registered_at": datetime.now(),
+        "opencode_sender": opencode_sender
+    }
+    logger.debug(f"[Webhook] Registered Matrix conversation for agent {agent_id}, opencode_sender={opencode_sender}")
 
 
 def is_matrix_conversation(agent_id: str) -> bool:
-    """Check if agent has an active Matrix conversation (to skip audit)."""
     if agent_id not in _active_matrix_conversations:
         return False
-    registered_at = _active_matrix_conversations[agent_id]
-    age = (datetime.now() - registered_at).total_seconds()
+    conv = _active_matrix_conversations[agent_id]
+    age = (datetime.now() - conv["registered_at"]).total_seconds()
     if age > CONVERSATION_TTL_SECONDS:
         del _active_matrix_conversations[agent_id]
         return False
     return True
 
 
+def get_opencode_sender(agent_id: str) -> Optional[str]:
+    conv = _active_matrix_conversations.get(agent_id)
+    if conv:
+        return conv.get("opencode_sender")
+    return None
+
+
 def clear_matrix_conversation(agent_id: str) -> None:
-    """Clear conversation tracking after response is handled."""
     _active_matrix_conversations.pop(agent_id, None)
 
 

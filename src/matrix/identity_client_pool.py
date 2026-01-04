@@ -59,22 +59,27 @@ class IdentityClientPool:
     
     async def _create_client(self, identity: Identity) -> Optional[AsyncClient]:
         try:
-            store_path = os.path.join(self._store_dir, identity.id)
+            identity_id = str(identity.id)
+            mxid = str(identity.mxid)
+            access_token = str(identity.access_token)
+            device_id = str(identity.device_id) if identity.device_id is not None else None
+            
+            store_path = os.path.join(self._store_dir, identity_id)
             os.makedirs(store_path, exist_ok=True)
             
             client = AsyncClient(
                 homeserver=self._homeserver,
-                user=identity.mxid,
+                user=mxid,
                 store_path=store_path
             )
             
-            client.access_token = identity.access_token
-            client.user_id = identity.mxid
+            client.access_token = access_token
+            client.user_id = mxid
             
-            if identity.device_id:
-                client.device_id = identity.device_id
+            if device_id:
+                client.device_id = device_id
             
-            logger.info(f"Created client for identity: {identity.id} -> {identity.mxid}")
+            logger.info(f"Created client for identity: {identity_id} -> {mxid}")
             return client
             
         except Exception as e:
@@ -178,3 +183,20 @@ async def send_as_identity(identity_id: str, room_id: str, message: str) -> Opti
 async def send_as_agent(agent_id: str, room_id: str, message: str) -> Optional[str]:
     pool = get_identity_client_pool()
     return await pool.send_as_agent(agent_id, room_id, message)
+
+
+async def send_as_user(user_mxid: str, room_id: str, message: str) -> Optional[str]:
+    identity_service = get_identity_service()
+    identity = identity_service.get_by_mxid(user_mxid)
+    if identity is None:
+        logger.debug(f"No identity found for user {user_mxid}")
+        return None
+    if not bool(identity.is_active):
+        logger.debug(f"Identity for {user_mxid} is not active")
+        return None
+    identity_id = str(identity.id)
+    pool = get_identity_client_pool()
+    event_id = await pool.send_message(identity_id, room_id, message)
+    if event_id:
+        identity_service.mark_used(identity_id)
+    return event_id

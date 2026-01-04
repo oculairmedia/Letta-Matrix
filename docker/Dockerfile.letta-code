@@ -1,0 +1,27 @@
+FROM node:20-alpine
+
+# Install required dependencies
+RUN apk add --no-cache \
+    git \
+    bash \
+    curl \
+    python3 \
+    py3-pip \
+    make \
+    g++ \
+    docker-cli
+
+# Install bun for potential future use
+RUN curl -fsSL https://bun.sh/install | bash
+
+# Install Letta Code globally
+RUN npm install -g @letta-ai/letta-code
+
+# Create working directory
+WORKDIR /workspace
+
+# Create letta config directories
+RUN mkdir -p /root/.letta
+
+# Entry point keeps container alive
+CMD ["tail", "-f", "/dev/null"]

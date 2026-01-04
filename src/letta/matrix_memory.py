@@ -4,6 +4,8 @@ Matrix Memory Block Manager - maintains shared matrix_capabilities block for Let
 
 import hashlib
 import logging
+import os
+import json
 from typing import Optional, List
 from letta_client import Letta
 from src.letta.client import get_letta_client as _get_client
@@ -82,23 +84,20 @@ def get_letta_client() -> Letta:
 
 
 async def get_or_create_matrix_block(client: Optional[Letta] = None) -> Optional[str]:
-    """Get existing matrix block or create it. Returns block_id."""
     if client is None:
         client = get_letta_client()
     
     target_hash = _content_hash(MATRIX_CAPABILITIES_CONTENT)
     
     try:
-        blocks = client.blocks.list()
-        for block in blocks:
-            if block.label == MATRIX_BLOCK_LABEL:
-                current_hash = _content_hash(block.value or "")
-                if current_hash != target_hash:
-                    client.blocks.update(block_id=block.id, value=MATRIX_CAPABILITIES_CONTENT)
-                    logger.info(f"[MatrixMemory] Updated block {block.id} (hash changed)")
-                else:
-                    logger.debug(f"[MatrixMemory] Block {block.id} content unchanged")
-                return block.id
+        for block in client.blocks.list(label=MATRIX_BLOCK_LABEL):
+            current_hash = _content_hash(block.value or "")
+            if current_hash != target_hash:
+                client.blocks.update(block_id=block.id, value=MATRIX_CAPABILITIES_CONTENT)
+                logger.info(f"[MatrixMemory] Updated block {block.id}")
+            else:
+                logger.debug(f"[MatrixMemory] Block {block.id} unchanged")
+            return block.id
         
         block = client.blocks.create(
             label=MATRIX_BLOCK_LABEL,
@@ -118,16 +117,14 @@ async def ensure_agent_has_block(agent_id: str, block_id: str, client: Optional[
         client = get_letta_client()
     
     try:
-        agent = client.agents.retrieve(agent_id=agent_id)
-        
-        for block in (agent.blocks or []):
+        current_blocks = client.agents.blocks.list(agent_id=agent_id)
+        for block in current_blocks:
             if block.label == MATRIX_BLOCK_LABEL:
                 if block.id == block_id:
                     logger.debug(f"[MatrixMemory] Agent {agent_id} already has current block")
                     return True
-                if block.id:
-                    client.agents.blocks.detach(agent_id=agent_id, block_id=block.id)
-                    logger.info(f"[MatrixMemory] Detached old block {block.id} from {agent_id}")
+                client.agents.blocks.detach(agent_id=agent_id, block_id=block.id)
+                logger.info(f"[MatrixMemory] Detached old block {block.id} from {agent_id}")
                 break
         
         client.agents.blocks.attach(agent_id=agent_id, block_id=block_id)
@@ -135,12 +132,11 @@ async def ensure_agent_has_block(agent_id: str, block_id: str, client: Optional[
         return True
         
     except Exception as e:
-        logger.error(f"[MatrixMemory] Failed to attach block to {agent_id}: {e}")
+        logger.error(f"[MatrixMemory] Failed for {agent_id}: {e}")
         return False
 
 
 async def sync_matrix_block_to_agents(agent_ids: List[str]) -> dict:
-    """Sync matrix_capabilities block to all specified agents."""
     client = get_letta_client()
     
     block_id = await get_or_create_matrix_block(client)
@@ -148,40 +144,19 @@ async def sync_matrix_block_to_agents(agent_ids: List[str]) -> dict:
         return {"error": "Failed to get/create block", "synced": 0, "failed": len(agent_ids)}
     
     synced = 0
-    skipped = 0
     failed = 0
     
     for agent_id in agent_ids:
-        try:
-            agent = client.agents.retrieve(agent_id=agent_id)
-            
-            existing_block = None
-            for block in (agent.blocks or []):
-                if block.label == MATRIX_BLOCK_LABEL:
-                    existing_block = block
-                    break
-            
-            if existing_block:
-                if existing_block.id == block_id:
-                    skipped += 1
-                    continue
-                if existing_block.id:
-                    client.agents.blocks.detach(agent_id=agent_id, block_id=existing_block.id)
-                    logger.debug(f"[MatrixMemory] Detached old block from {agent_id}")
-            
-            client.agents.blocks.attach(agent_id=agent_id, block_id=block_id)
+        if await ensure_agent_has_block(agent_id, block_id, client):
             synced += 1
-            logger.info(f"[MatrixMemory] Attached to {agent_id}")
-        except Exception as e:
+        else:
             failed += 1
-            logger.warning(f"[MatrixMemory] Failed for {agent_id}: {e}")
     
-    logger.info(f"[MatrixMemory] Sync: {synced} attached, {skipped} already had, {failed} failed")
-    return {"synced": synced, "skipped": skipped, "failed": failed, "block_id": block_id}
+    logger.info(f"[MatrixMemory] Sync complete: {synced} ok, {failed} failed")
+    return {"synced": synced, "failed": failed, "block_id": block_id}
 
 
 def format_matrix_context(sender: str, room_name: Optional[str] = None) -> str:
-    """Format minimal Matrix context for message prefix."""
     if room_name:
         return f"[Matrix: {sender} in {room_name}]"
     return f"[Matrix: {sender}]"

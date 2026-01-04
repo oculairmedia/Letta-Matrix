@@ -19,8 +19,7 @@ from typing import Any, Dict, Optional
 import aiohttp
 
 from src.letta.webhook_handler import WebhookResult
-from src.core.identity_storage import get_identity_service
-from src.matrix.identity_client_pool import get_identity_client_pool
+from src.matrix.identity_client_pool import send_as_agent, send_as_user
 
 logger = logging.getLogger(__name__)
 
@@ -154,40 +153,28 @@ class LettaMatrixBridge:
         )
         logger.info(f"[Bridge] Posted user message as admin to {room_id} (source: {source})")
     
-    async def post_agent_response_as_identity(
-        self,
-        agent_id: str,
-        room_id: str,
-        content: str
-    ) -> Optional[str]:
+    async def post_as_agent(self, agent_id: str, room_id: str, content: str) -> Optional[str]:
         if not self.config.use_identity_posting:
-            logger.debug(f"[Bridge] Identity posting disabled, using admin account")
             await self._send_matrix_message(room_id=room_id, body=content, msgtype="m.text")
             return None
         
-        identity_service = get_identity_service()
-        identity = identity_service.get_by_agent_id(agent_id)
+        event_id = await send_as_agent(agent_id, room_id, content)
+        if event_id:
+            logger.info(f"[Bridge] Agent {agent_id} posted to {room_id}")
+            return event_id
         
-        if identity and identity.is_active:
-            pool = get_identity_client_pool()
-            event_id = await pool.send_as_agent(agent_id, room_id, content)
-            if event_id:
-                identity_service.mark_used(f"letta_{agent_id}")
-                logger.info(f"[Bridge] Agent {agent_id} posted via identity to {room_id}")
-                return event_id
-            else:
-                if self.config.identity_posting_strict:
-                    logger.error(f"[Bridge] STRICT: Failed to post via identity for {agent_id}, NOT falling back")
-                    raise RuntimeError(f"Identity posting failed for agent {agent_id}")
-                logger.warning(f"[Bridge] Failed to post via agent identity, falling back to admin")
-        else:
-            if self.config.identity_posting_strict:
-                logger.error(f"[Bridge] STRICT: No identity for agent {agent_id}, NOT falling back")
-                raise RuntimeError(f"No identity found for agent {agent_id}")
-            logger.info(f"[Bridge] No identity for agent {agent_id}, using admin account")
+        if self.config.identity_posting_strict:
+            raise RuntimeError(f"Identity posting failed for agent {agent_id}")
         
+        logger.warning(f"[Bridge] Agent identity failed, falling back to admin")
         await self._send_matrix_message(room_id=room_id, body=content, msgtype="m.text")
         return None
+    
+    async def post_as_user(self, user_mxid: str, room_id: str, content: str) -> Optional[str]:
+        event_id = await send_as_user(user_mxid, room_id, content)
+        if event_id:
+            logger.info(f"[Bridge] User {user_mxid} posted to {room_id}")
+        return event_id
     
     async def post_silent_audit(
         self,
@@ -352,7 +339,16 @@ class LettaMatrixBridge:
             )
         
         try:
-            await self.post_agent_response_as_identity(agent_id, room_id, assistant_content)
+            from src.letta.webhook_handler import get_opencode_sender
+            opencode_sender = get_opencode_sender(agent_id) or self.config.matrix_admin_username
+            
+            if user_content:
+                posted = await self.post_as_user(opencode_sender, room_id, user_content)
+                if not posted:
+                    await self._send_matrix_message(room_id=room_id, body=user_content, msgtype="m.text")
+                    logger.info(f"[Bridge] Posted user message as admin to {room_id}")
+            
+            await self.post_as_agent(agent_id, room_id, assistant_content)
             
             return WebhookResult(
                 success=True,

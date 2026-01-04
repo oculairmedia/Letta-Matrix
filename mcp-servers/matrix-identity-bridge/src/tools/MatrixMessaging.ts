@@ -803,8 +803,25 @@ TIPS
           body: message
         });
         
+        const matrixApiUrl = process.env.MATRIX_API_URL || 'http://matrix-api:8000';
+        const opencodeSender = callerIdentity.mxid.startsWith('@oc_') ? callerIdentity.mxid : undefined;
+        try {
+          await fetch(`${matrixApiUrl}/conversations/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              agent_id, 
+              matrix_event_id: eventId, 
+              matrix_room_id: roomId,
+              opencode_sender: opencodeSender
+            })
+          });
+          console.log(`[MatrixMessaging] Registered conversation for ${agent_id}, opencode_sender=${opencodeSender}`);
+        } catch (regError) {
+          console.warn(`[MatrixMessaging] Failed to register conversation: ${regError}`);
+        }
+        
         // Start tracking this conversation for cross-run handling
-        // Import dynamically to avoid circular dependencies
         const { getConversationTracker } = await import('../core/conversation-tracker.js');
         const tracker = getConversationTracker();
         const conv = tracker.startConversation(eventId, roomId, agent_id, message);

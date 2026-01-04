@@ -474,7 +474,7 @@ class AgentUserManager:
         
         try:
             from src.letta.matrix_memory import sync_matrix_block_to_agents
-            agent_ids = list(self.mappings.keys())
+            agent_ids = [aid for aid in self.mappings.keys() if aid not in removed_agents]
             if agent_ids:
                 result = await sync_matrix_block_to_agents(agent_ids)
                 logger.info(f"[MatrixMemory] Block sync: {result.get('synced', 0)} agents updated")
