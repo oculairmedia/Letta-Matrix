@@ -7,7 +7,7 @@ import uuid
 import aiohttp
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
-from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset, RoomMessageMedia
+from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset, RoomMessageMedia, UnknownEvent
 from nio.responses import JoinError
 from nio.exceptions import RemoteProtocolError
 
@@ -20,7 +20,7 @@ from src.matrix.file_handler import LettaFileHandler, FileUploadError
 # Import agent user manager
 from src.core.agent_user_manager import run_agent_sync
 from src.matrix.event_dedupe import is_duplicate_event
-from src.matrix.poll_handler import process_agent_response, is_poll_command
+from src.matrix.poll_handler import process_agent_response, is_poll_command, handle_poll_vote, POLL_RESPONSE_TYPE
 
 # Cross-run tracking webhook URL (TypeScript MCP - deprecated)
 CONVERSATION_TRACKER_URL = os.getenv("CONVERSATION_TRACKER_URL", "http://192.168.50.90:3101")
@@ -1410,6 +1410,49 @@ async def send_as_agent(
     )
     return event_id is not None
 
+
+async def poll_response_callback(room, event, config: Config, logger: logging.Logger):
+    if not hasattr(event, 'source') or not isinstance(event.source, dict):
+        return
+    
+    content = event.source.get('content', {})
+    event_type = event.source.get('type', '')
+    
+    if event_type != POLL_RESPONSE_TYPE:
+        return
+    
+    sender = event.source.get('sender', '')
+    poll_response = content.get('org.matrix.msc3381.poll.response', {})
+    answers = poll_response.get('answers', [])
+    relates_to = content.get('m.relates_to', {})
+    poll_event_id = relates_to.get('event_id')
+    
+    if not poll_event_id or not answers:
+        logger.debug(f"[POLL] Invalid poll response: missing event_id or answers")
+        return
+    
+    logger.info(f"[POLL] Vote received from {sender} for poll {poll_event_id}: {answers}")
+    
+    from src.models.agent_mapping import AgentMappingDB
+    db = AgentMappingDB()
+    mapping = db.get_by_room_id(room.room_id)
+    if not mapping:
+        logger.debug(f"[POLL] No agent mapping for room {room.room_id}, ignoring poll vote")
+        return
+    
+    vote_message = await handle_poll_vote(
+        room_id=room.room_id,
+        sender=sender,
+        poll_event_id=poll_event_id,
+        selected_option_ids=answers,
+        config=config,
+        logger_instance=logger
+    )
+    
+    if vote_message:
+        await send_to_letta_api(vote_message, sender, config, logger, room.room_id)
+
+
 async def file_callback(room, event, config: Config, logger: logging.Logger, file_handler: Optional[LettaFileHandler] = None):
     """Callback function for handling file uploads."""
     if not file_handler:
@@ -1516,7 +1559,11 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             return
 
         fs_state = get_letta_code_room_state(room.room_id)
-        if fs_state.get("enabled"):
+        fs_enabled = fs_state.get("enabled")
+        is_huly_agent = room_agent_name and (room_agent_name.startswith("Huly - ") or room_agent_name == "Huly-PM-Control")
+        use_fs_mode = fs_enabled is True or (fs_enabled is None and is_huly_agent)
+        
+        if use_fs_mode:
             agent_id = room_agent_id
             agent_name = room_agent_name or "Filesystem Agent"
             if not agent_id or not agent_name:
@@ -1532,11 +1579,27 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             project_dir = fs_state.get("projectDir")
             if not project_dir:
                 project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger)
-                if not project_dir:
-                    await send_as_agent(room.room_id, "Filesystem mode enabled but no project linked. Run /fs-link.", config, logger)
-                    return
             
-            # Check if sender is an OpenCode identity (@oc_*) and inject metaprompt
+            if not project_dir and is_huly_agent and agent_name:
+                try:
+                    projects_response = await call_letta_code_api(config, 'GET', '/api/projects')
+                    projects = projects_response.get('projects', [])
+                    search_name = agent_name[7:] if agent_name.startswith("Huly - ") else agent_name
+                    for proj in projects:
+                        if proj.get('name', '').lower() == search_name.lower():
+                            project_dir = proj.get('filesystem_path')
+                            if project_dir:
+                                update_letta_code_room_state(room.room_id, {"projectDir": project_dir})
+                                logger.info(f"[HULY-FS] Auto-linked {agent_name} to {project_dir}")
+                            break
+                except Exception as e:
+                    logger.warning(f"[HULY-FS] Auto-link failed for {agent_name}: {e}")
+            
+            if not project_dir:
+                await send_as_agent(room.room_id, "Filesystem mode enabled but no project linked. Run /fs-link.", config, logger)
+                return
+            
+            # Add Matrix context or OpenCode metaprompt
             fs_prompt = event.body
             if event.sender.startswith("@oc_"):
                 opencode_mxid = event.sender
@@ -1553,7 +1616,13 @@ in your response so the OpenCode bridge can route your reply to them.
 Example: "{opencode_mxid} Here is my response..."
 """
                 logger.info(f"[OPENCODE-FS] Detected message from OpenCode identity: {opencode_mxid}")
-                logger.info(f"[OPENCODE-FS] Injected @mention instruction for filesystem mode")
+            else:
+                room_display = room.display_name or room.room_id
+                fs_prompt = f"[Matrix: {event.sender} in {room_display}]\n\n{event.body}"
+                logger.debug(f"[MATRIX-FS] Added context for sender {event.sender}")
+            
+            from src.letta.webhook_handler import register_matrix_conversation
+            register_matrix_conversation(agent_id)
             
             await run_letta_code_task(
                 room_id=room.room_id,
@@ -2139,8 +2208,16 @@ async def main():
             logger.error(f"Error in file callback: {e}", exc_info=True)
     
     client.add_event_callback(file_callback_wrapper, RoomMessageMedia)
+    
+    async def poll_response_wrapper(room, event):
+        try:
+            await poll_response_callback(room, event, config, logger)
+        except Exception as e:
+            logger.error(f"Error in poll response callback: {e}", exc_info=True)
+    
+    client.add_event_callback(poll_response_wrapper, UnknownEvent)
 
-    logger.info("Starting sync loop to listen for messages and file uploads")
+    logger.info("Starting sync loop to listen for messages, file uploads, and poll votes")
     
     # Do an initial sync with limit=0 to skip historical messages
     initial_sync_filter = {
