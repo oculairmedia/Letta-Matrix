@@ -279,62 +279,54 @@ class TestAgentNameChanges:
     """Test handling of agent name changes during sync"""
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_agent_name_change_updates_display_name_with_password(self, mock_config):
         """Test that when agent name changes, update_display_name is called with password"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
-                manager = AgentUserManager(config=mock_config)
+                with patch('src.letta.matrix_memory.sync_matrix_block_to_agents', new_callable=AsyncMock, return_value={"synced": 0}):
+                    manager = AgentUserManager(config=mock_config)
 
-                # Pre-populate mapping with old name
-                manager.mappings["agent-rename-test"] = AgentUserMapping(
-                    agent_id="agent-rename-test",
-                    agent_name="Old Agent Name",
-                    matrix_user_id="@agent_rename_test:matrix.oculair.ca",
-                    matrix_password="secret_password",
-                    created=True,
-                    room_id="!room123:matrix.oculair.ca",
-                    room_created=True
-                )
+                    manager.mappings["agent-rename-test"] = AgentUserMapping(
+                        agent_id="agent-rename-test",
+                        agent_name="Old Agent Name",
+                        matrix_user_id="@agent_rename_test:matrix.oculair.ca",
+                        matrix_password="secret_password",
+                        created=True,
+                        room_id="!room123:matrix.oculair.ca",
+                        room_created=True
+                    )
 
-                # Track calls to update_display_name
-                update_calls = []
+                    update_calls = []
 
-                async def mock_update_display_name(user_id, display_name, password=None):
-                    update_calls.append({
-                        "user_id": user_id,
-                        "display_name": display_name,
-                        "password": password
-                    })
-                    return True
+                    async def mock_update_display_name(user_id, display_name, password=None):
+                        update_calls.append({
+                            "user_id": user_id,
+                            "display_name": display_name,
+                            "password": password
+                        })
+                        return True
 
-                async def mock_update_room_name(room_id, name):
-                    return True
+                    with patch.object(manager, 'ensure_core_users_exist', new_callable=AsyncMock):
+                        with patch.object(manager, 'load_existing_mappings', new_callable=AsyncMock):
+                            with patch.object(manager, 'update_display_name', side_effect=mock_update_display_name):
+                                with patch.object(manager, 'update_room_name', new_callable=AsyncMock, return_value=True):
+                                    with patch.object(manager.space_manager, 'check_room_exists', new_callable=AsyncMock, return_value=True):
+                                        with patch.object(manager, 'discover_agent_room', new_callable=AsyncMock, return_value="!room123:matrix.oculair.ca"):
+                                            with patch.object(manager, 'auto_accept_invitations_with_tracking', new_callable=AsyncMock):
+                                                with patch.object(manager.room_manager, 'check_admin_in_room', return_value=True):
+                                                    with patch.object(manager, 'get_letta_agents', return_value=[
+                                                        {"id": "agent-rename-test", "name": "New Agent Name"}
+                                                    ]):
+                                                        with patch.object(manager, 'save_mappings', new_callable=AsyncMock):
+                                                            with patch.object(manager.space_manager, 'load_space_config', new_callable=AsyncMock):
+                                                                with patch.object(manager.space_manager, 'get_space_id', return_value="!space:matrix.oculair.ca"):
+                                                                    await manager.sync_agents_to_users()
 
-                async def mock_check_room_exists(room_id):
-                    return True
-
-                async def mock_discover_agent_room(user_id):
-                    return "!room123:matrix.oculair.ca"
-
-                with patch.object(manager, 'update_display_name', side_effect=mock_update_display_name):
-                    with patch.object(manager, 'update_room_name', side_effect=mock_update_room_name):
-                        with patch.object(manager.space_manager, 'check_room_exists', side_effect=mock_check_room_exists):
-                            with patch.object(manager, 'discover_agent_room', side_effect=mock_discover_agent_room):
-                                with patch.object(manager, 'auto_accept_invitations_with_tracking', new_callable=AsyncMock):
-                                    with patch.object(manager.room_manager, 'check_admin_in_room', return_value=True):
-                                        with patch.object(manager, 'get_letta_agents', return_value=[
-                                            {"id": "agent-rename-test", "name": "New Agent Name"}
-                                        ]):
-                                            with patch.object(manager, 'save_mappings', new_callable=AsyncMock):
-                                                with patch.object(manager.space_manager, 'load_space_config', new_callable=AsyncMock):
-                                                    with patch.object(manager.space_manager, 'get_space_id', return_value="!space:matrix.oculair.ca"):
-                                                        await manager.sync_agents_to_users()
-
-                # Verify update_display_name was called with the password
-                assert len(update_calls) == 1
-                assert update_calls[0]["user_id"] == "@agent_rename_test:matrix.oculair.ca"
-                assert update_calls[0]["display_name"] == "New Agent Name"
-                assert update_calls[0]["password"] == "secret_password"
+                    assert len(update_calls) == 1
+                    assert update_calls[0]["user_id"] == "@agent_rename_test:matrix.oculair.ca"
+                    assert update_calls[0]["display_name"] == "New Agent Name"
+                    assert update_calls[0]["password"] == "secret_password"
 
 
 @pytest.mark.unit

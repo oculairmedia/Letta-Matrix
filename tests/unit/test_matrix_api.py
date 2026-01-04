@@ -390,6 +390,7 @@ class TestListRoomsEndpoint:
 class TestWebhookEndpoint:
     """Test webhook endpoint for new agent notifications"""
 
+    @patch('src.api.app.AGENT_SYNC_AVAILABLE', False)
     def test_webhook_new_agent(self, client):
         """Test webhook receives new agent notification"""
         response = client.post("/webhook/new-agent", json={
@@ -397,14 +398,28 @@ class TestWebhookEndpoint:
             "timestamp": "2025-01-01T00:00:00Z"
         })
 
-        # Should accept notification
-        assert response.status_code in [200, 201]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "not available" in data["message"]
+
+    @patch('src.api.app.AGENT_SYNC_AVAILABLE', True)
+    @patch('src.api.app.run_agent_sync', new_callable=AsyncMock)
+    def test_webhook_new_agent_triggers_sync(self, mock_sync, client):
+        """Test webhook triggers agent sync when available"""
+        response = client.post("/webhook/new-agent", json={
+            "agent_id": "agent-123",
+            "timestamp": "2025-01-01T00:00:00Z"
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert "agent-123" in data["message"]
 
     def test_webhook_validation(self, client):
         """Test webhook validation"""
-        response = client.post("/webhook/new-agent", json={
-            # Missing required fields
-        })
+        response = client.post("/webhook/new-agent", json={})
 
         assert response.status_code == 422
 
