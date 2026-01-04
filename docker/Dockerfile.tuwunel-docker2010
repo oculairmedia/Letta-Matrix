@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Tuwunel version to download (GitHub Actions can override via build-args)
-ARG TUWUNEL_VERSION=v1.4.6
+ARG TUWUNEL_VERSION=v1.4.9.1
 
 # Download and extract pre-built Tuwunel binary
 # Use full URL to avoid variable expansion issues
