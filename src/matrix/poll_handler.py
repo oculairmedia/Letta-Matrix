@@ -489,3 +489,27 @@ async def send_poll_end_event(
     except Exception as e:
         logger_instance.error(f"[POLL] Error closing poll: {e}", exc_info=True)
         return None
+
+
+async def handle_poll_vote(
+    room_id: str,
+    sender: str,
+    poll_event_id: str,
+    selected_option_ids: List[str],
+    config: Any,
+    logger_instance: logging.Logger
+) -> Optional[str]:
+    poll_data = _active_polls.get(poll_event_id)
+    if not poll_data:
+        logger_instance.debug(f"[POLL] Vote received for unknown poll {poll_event_id}")
+        return None
+    
+    id_to_text = dict(zip(poll_data.option_ids, poll_data.options))
+    selected_options = [id_to_text.get(opt_id, opt_id) for opt_id in selected_option_ids]
+    
+    option_text = ", ".join(selected_options) if selected_options else "no selection"
+    message = f"[POLL VOTE] {sender} voted for: {option_text}\n(Poll: {poll_data.question})"
+    
+    logger_instance.info(f"[POLL] Vote from {sender} on poll '{poll_data.question}': {option_text}")
+    
+    return message

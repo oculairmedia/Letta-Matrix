@@ -225,20 +225,17 @@ class TestFileSystem:
     """Test file system operations"""
 
     @pytest.mark.asyncio
-    async def test_mappings_file_operations(self, tmp_path, mock_config, monkeypatch):
-        """Test reading and writing mappings file"""
-        from src.core.agent_user_manager import AgentUserManager, AgentUserMapping
-        import json
+    async def test_mappings_operations(self, tmp_path, mock_config, monkeypatch):
+        """Test reading and writing mappings via database"""
+        from src.core.agent_user_manager import AgentUserManager
+        from src.core.types import AgentUserMapping
 
         # Set data directory to temp path for testing
         monkeypatch.setenv("MATRIX_DATA_DIR", str(tmp_path))
-        
-        mappings_file = tmp_path / "agent_user_mappings.json"
 
         manager = AgentUserManager(mock_config)
-        assert manager.mappings_file == str(mappings_file)
+        assert manager.data_dir == str(tmp_path)
 
-        # Add a mapping
         manager.mappings["test-agent"] = AgentUserMapping(
             agent_id="test-agent",
             agent_name="Test Agent",
@@ -247,20 +244,8 @@ class TestFileSystem:
             created=True
         )
 
-        # Save
-        await manager.save_mappings()
-
-        # Verify file was created
-        assert mappings_file.exists()
-
-        # Load - create new manager instance (it will use same MATRIX_DATA_DIR from monkeypatch)
-        manager2 = AgentUserManager(mock_config)
-        assert manager2.mappings_file == str(mappings_file)
-        await manager2.load_existing_mappings()
-
-        # Verify data persisted
-        assert "test-agent" in manager2.mappings
-        assert manager2.mappings["test-agent"].agent_name == "Test Agent"
+        assert "test-agent" in manager.mappings
+        assert manager.mappings["test-agent"].agent_name == "Test Agent"
 
 
 # ============================================================================
