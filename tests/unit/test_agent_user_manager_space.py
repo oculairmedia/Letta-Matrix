@@ -627,6 +627,7 @@ class TestSpaceValidationAndRecreation:
     """Test automatic space validation and recreation during sync"""
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_sync_validates_existing_space(self, mock_config):
         """Test that sync validates existing space"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
@@ -634,17 +635,17 @@ class TestSpaceValidationAndRecreation:
                 manager = AgentUserManager(config=mock_config)
                 manager.space_manager.space_id = "!existing_space:matrix.oculair.ca"
                 
-                # Mock dependencies
                 with patch.object(manager, 'get_letta_agents', return_value=[]):
-                    with patch.object(manager.space_manager, 'check_room_exists', return_value=True) as mock_check:
-                        with patch.object(manager.space_manager, 'load_space_config', return_value=None):
-                            with patch.object(manager, 'save_mappings', return_value=None):
-                                await manager.sync_agents_to_users()
-                                
-                                # Verify check_room_exists was called for the space
-                                mock_check.assert_called_once_with("!existing_space:matrix.oculair.ca")
+                    with patch.object(manager, 'ensure_core_users_exist', return_value=None):
+                        with patch.object(manager, 'load_existing_mappings', return_value=None):
+                            with patch.object(manager.space_manager, 'check_room_exists', return_value=True) as mock_check:
+                                with patch.object(manager.space_manager, 'load_space_config', return_value=None):
+                                    with patch.object(manager, 'save_mappings', return_value=None):
+                                        await manager.sync_agents_to_users()
+                                        mock_check.assert_called_once_with("!existing_space:matrix.oculair.ca")
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_sync_recreates_invalid_space(self, mock_config):
         """Test that sync recreates space when validation fails"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
@@ -652,7 +653,6 @@ class TestSpaceValidationAndRecreation:
                 manager = AgentUserManager(config=mock_config)
                 manager.space_manager.space_id = "!invalid_space:matrix.oculair.ca"
                 
-                # Mock dependencies
                 new_space_id = "!new_space:matrix.oculair.ca"
                 
                 async def mock_create_space():
@@ -661,21 +661,19 @@ class TestSpaceValidationAndRecreation:
                 
                 with patch.object(manager, 'get_letta_agents', return_value=[]):
                     with patch.object(manager, 'ensure_core_users_exist', return_value=None):
-                        # First call validates old space (False), second call validates new space (True)
-                        with patch.object(manager.space_manager, 'check_room_exists', side_effect=[False, True]):
-                            with patch.object(manager.space_manager, 'save_space_config', return_value=None):
-                                with patch.object(manager.space_manager, 'create_letta_agents_space', side_effect=mock_create_space) as mock_create:
-                                    with patch.object(manager.space_manager, 'load_space_config', return_value=None):
-                                        with patch.object(manager, 'save_mappings', return_value=None):
-                                            with patch.object(manager.space_manager, 'migrate_existing_rooms_to_space', return_value=0):
-                                                await manager.sync_agents_to_users()
-                                                
-                                                # Verify new space was created
-                                                mock_create.assert_called_once()
-                                                # Verify space ID was cleared then updated
-                                                assert manager.space_manager.space_id == new_space_id
+                        with patch.object(manager, 'load_existing_mappings', return_value=None):
+                            with patch.object(manager.space_manager, 'check_room_exists', side_effect=[False, True]):
+                                with patch.object(manager.space_manager, 'save_space_config', return_value=None):
+                                    with patch.object(manager.space_manager, 'create_letta_agents_space', side_effect=mock_create_space) as mock_create:
+                                        with patch.object(manager.space_manager, 'load_space_config', return_value=None):
+                                            with patch.object(manager, 'save_mappings', return_value=None):
+                                                with patch.object(manager.space_manager, 'migrate_existing_rooms_to_space', return_value=0):
+                                                    await manager.sync_agents_to_users()
+                                                    mock_create.assert_called_once()
+                                                    assert manager.space_manager.space_id == new_space_id
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_sync_migrates_rooms_after_space_recreation(self, mock_config):
         """Test that rooms are migrated after space recreation"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
@@ -683,7 +681,6 @@ class TestSpaceValidationAndRecreation:
                 manager = AgentUserManager(config=mock_config)
                 manager.space_manager.space_id = "!invalid_space:matrix.oculair.ca"
                 
-                # Create test mappings with rooms
                 test_mappings = {
                     "agent-1": AgentUserMapping(
                         agent_id="agent-1",
@@ -714,19 +711,18 @@ class TestSpaceValidationAndRecreation:
                 
                 with patch.object(manager, 'get_letta_agents', return_value=[]):
                     with patch.object(manager, 'ensure_core_users_exist', return_value=None):
-                        # First call validates old space (False), second call validates new space (True)
-                        with patch.object(manager.space_manager, 'check_room_exists', side_effect=[False, True]):
-                            with patch.object(manager.space_manager, 'save_space_config', return_value=None):
-                                with patch.object(manager.space_manager, 'create_letta_agents_space', side_effect=mock_create_space):
-                                    with patch.object(manager.space_manager, 'load_space_config', return_value=None):
-                                        with patch.object(manager, 'save_mappings', return_value=None):
-                                            with patch.object(manager.space_manager, 'migrate_existing_rooms_to_space', return_value=2) as mock_migrate:
-                                                await manager.sync_agents_to_users()
-                                                
-                                                # Verify migration was called with the mappings
-                                                mock_migrate.assert_called_once_with(test_mappings)
+                        with patch.object(manager, 'load_existing_mappings', return_value=None):
+                            with patch.object(manager.space_manager, 'check_room_exists', side_effect=[False, True]):
+                                with patch.object(manager.space_manager, 'save_space_config', return_value=None):
+                                    with patch.object(manager.space_manager, 'create_letta_agents_space', side_effect=mock_create_space):
+                                        with patch.object(manager.space_manager, 'load_space_config', return_value=None):
+                                            with patch.object(manager, 'save_mappings', return_value=None):
+                                                with patch.object(manager.space_manager, 'migrate_existing_rooms_to_space', return_value=2) as mock_migrate:
+                                                    await manager.sync_agents_to_users()
+                                                    mock_migrate.assert_called_once_with(test_mappings)
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_sync_handles_space_recreation_failure(self, mock_config):
         """Test sync handles gracefully when space recreation fails"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
@@ -735,21 +731,19 @@ class TestSpaceValidationAndRecreation:
                 old_space_id = "!invalid_space:matrix.oculair.ca"
                 manager.space_manager.space_id = old_space_id
                 
-                # Mock dependencies
                 with patch.object(manager, 'get_letta_agents', return_value=[]):
-                    # Only one check_room_exists call since create_letta_agents_space returns None
-                    with patch.object(manager.space_manager, 'check_room_exists', return_value=False):
-                        with patch.object(manager.space_manager, 'save_space_config', return_value=None):
-                            with patch.object(manager.space_manager, 'create_letta_agents_space', return_value=None):
-                                with patch.object(manager.space_manager, 'load_space_config', return_value=None):
-                                    with patch.object(manager, 'save_mappings', return_value=None):
-                                        # Should not raise exception
-                                        await manager.sync_agents_to_users()
-                                        
-                                        # Space ID should be restored to old value to prevent recreation loops
-                                        assert manager.space_manager.space_id == old_space_id
+                    with patch.object(manager, 'ensure_core_users_exist', return_value=None):
+                        with patch.object(manager, 'load_existing_mappings', return_value=None):
+                            with patch.object(manager.space_manager, 'check_room_exists', return_value=False):
+                                with patch.object(manager.space_manager, 'save_space_config', return_value=None):
+                                    with patch.object(manager.space_manager, 'create_letta_agents_space', return_value=None):
+                                        with patch.object(manager.space_manager, 'load_space_config', return_value=None):
+                                            with patch.object(manager, 'save_mappings', return_value=None):
+                                                await manager.sync_agents_to_users()
+                                                assert manager.space_manager.space_id == old_space_id
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_sync_skips_validation_when_no_space(self, mock_config):
         """Test that sync creates space when none exists (no validation needed)"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
@@ -765,19 +759,18 @@ class TestSpaceValidationAndRecreation:
                 
                 with patch.object(manager, 'get_letta_agents', return_value=[]):
                     with patch.object(manager, 'ensure_core_users_exist', return_value=None):
-                        with patch.object(manager.space_manager, 'check_room_exists') as mock_check:
-                            with patch.object(manager.space_manager, 'create_letta_agents_space', side_effect=mock_create_space):
-                                with patch.object(manager.space_manager, 'load_space_config', return_value=None):
-                                    with patch.object(manager, 'save_mappings', return_value=None):
-                                        with patch.object(manager.space_manager, 'migrate_existing_rooms_to_space', return_value=0):
-                                            await manager.sync_agents_to_users()
-                                            
-                                            # Verify check_room_exists was NOT called
-                                            mock_check.assert_not_called()
-                                            # Verify new space was created
-                                            assert manager.space_manager.space_id == new_space_id
+                        with patch.object(manager, 'load_existing_mappings', return_value=None):
+                            with patch.object(manager.space_manager, 'check_room_exists') as mock_check:
+                                with patch.object(manager.space_manager, 'create_letta_agents_space', side_effect=mock_create_space):
+                                    with patch.object(manager.space_manager, 'load_space_config', return_value=None):
+                                        with patch.object(manager, 'save_mappings', return_value=None):
+                                            with patch.object(manager.space_manager, 'migrate_existing_rooms_to_space', return_value=0):
+                                                await manager.sync_agents_to_users()
+                                                mock_check.assert_not_called()
+                                                assert manager.space_manager.space_id == new_space_id
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_sync_preserves_valid_space(self, mock_config):
         """Test that sync preserves space when validation passes"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
@@ -787,16 +780,15 @@ class TestSpaceValidationAndRecreation:
                 manager.space_manager.space_id = original_space_id
                 
                 with patch.object(manager, 'get_letta_agents', return_value=[]):
-                    with patch.object(manager.space_manager, 'check_room_exists', return_value=True):
-                        with patch.object(manager.space_manager, 'create_letta_agents_space') as mock_create:
-                            with patch.object(manager.space_manager, 'load_space_config', return_value=None):
-                                with patch.object(manager, 'save_mappings', return_value=None):
-                                    await manager.sync_agents_to_users()
-                                    
-                                    # Verify create was NOT called
-                                    mock_create.assert_not_called()
-                                    # Verify space ID is unchanged
-                                    assert manager.space_manager.space_id == original_space_id
+                    with patch.object(manager, 'ensure_core_users_exist', return_value=None):
+                        with patch.object(manager, 'load_existing_mappings', return_value=None):
+                            with patch.object(manager.space_manager, 'check_room_exists', return_value=True):
+                                with patch.object(manager.space_manager, 'create_letta_agents_space') as mock_create:
+                                    with patch.object(manager.space_manager, 'load_space_config', return_value=None):
+                                        with patch.object(manager, 'save_mappings', return_value=None):
+                                            await manager.sync_agents_to_users()
+                                            mock_create.assert_not_called()
+                                            assert manager.space_manager.space_id == original_space_id
 
     @pytest.mark.asyncio
     async def test_update_room_name_exception_handling(self, mock_config):
