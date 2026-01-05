@@ -1621,8 +1621,15 @@ Example: "{opencode_mxid} Here is my response..."
                 fs_prompt = f"[Matrix: {event.sender} in {room_display}]\n\n{event.body}"
                 logger.debug(f"[MATRIX-FS] Added context for sender {event.sender}")
             
-            from src.letta.webhook_handler import register_matrix_conversation
-            register_matrix_conversation(agent_id)
+            event_id_str = getattr(event, 'event_id', '') or ''
+            if event_id_str:
+                await register_conversation_for_tracking(
+                    matrix_event_id=event_id_str,
+                    matrix_room_id=room.room_id,
+                    agent_id=agent_id,
+                    original_query=event.body,
+                    logger=logger
+                )
             
             await run_letta_code_task(
                 room_id=room.room_id,
