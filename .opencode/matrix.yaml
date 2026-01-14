@@ -1,5 +1,6 @@
 homeserver: https://matrix.oculair.ca
 defaultRoomId: "!MtuqLUCwvKypRU6gll:matrix.oculair.ca"
+noReply: false
 projectRooms: {}
 filters:
   msgtypes:

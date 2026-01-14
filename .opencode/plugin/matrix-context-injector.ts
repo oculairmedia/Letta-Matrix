@@ -63,9 +63,25 @@ async function getActiveSessionId(client: any): Promise<string | null> {
 async function acquireLock(lockPath: string): Promise<void> {
   if (existsSync(lockPath)) {
     const contents = await readFile(lockPath, "utf-8").catch(() => "");
-    throw new Error(
-      `Matrix injector already running. Remove lock at ${lockPath}. ${contents ? `Details: ${contents}` : ""}`
-    );
+    if (contents) {
+      try {
+        const parsed = JSON.parse(contents) as { pid?: number };
+        if (typeof parsed.pid === "number") {
+          try {
+            process.kill(parsed.pid, 0);
+          } catch {
+            await unlink(lockPath).catch(() => undefined);
+          }
+        }
+      } catch {
+      }
+    }
+
+    if (existsSync(lockPath)) {
+      throw new Error(
+        `Matrix injector already running. Remove lock at ${lockPath}. ${contents ? `Details: ${contents}` : ""}`
+      );
+    }
   }
 
   const payload = JSON.stringify({
@@ -173,7 +189,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
           await client.session.prompt({
             path: { id: sessionId },
             body: {
-              noReply: true,
+              noReply: config.noReply,
               parts: [{ type: "text", text: injection }],
             },
           });
