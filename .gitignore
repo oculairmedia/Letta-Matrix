@@ -43,7 +43,9 @@ tuwunel-data/archive/
 tuwunel-data/media/
 
 # OpenCode state
-.opencode/
+.opencode/node_modules/
+.opencode/matrix-credentials.json
+.opencode/matrix.lock
 
 # npm install artifact
 =*
