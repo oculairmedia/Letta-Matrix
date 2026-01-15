@@ -50,7 +50,8 @@
       "Bash(do)",
       "Bash(echo:*)",
       "Bash(done)",
-      "Bash(python -m pytest:*)"
+      "Bash(python -m pytest:*)",
+      "mcp__matrix__matrix_messaging"
     ],
     "deny": []
   }

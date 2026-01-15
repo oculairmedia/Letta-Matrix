@@ -1,0 +1,526 @@
+{
+  "letta_agent-7659b796-4723-4d61-98b5-737f874ee652": {
+    "id": "letta_agent-7659b796-4723-4d61-98b5-737f874ee652",
+    "mxid": "@agent_7659b796_4723_4d61_98b5_737f874ee652:matrix.oculair.ca",
+    "displayName": "Huly - Personal Site",
+    "accessToken": "cZGh3mrsWVjSgEbncOfE5hnyDEQevzlV",
+    "type": "letta",
+    "createdAt": 1764489579647,
+    "lastUsedAt": 1764489579647
+  },
+  "letta_agent-cc2aaa60-731d-41a8-99f4-de7154131a23": {
+    "id": "letta_agent-cc2aaa60-731d-41a8-99f4-de7154131a23",
+    "mxid": "@agent_cc2aaa60_731d_41a8_99f4_de7154131a23:matrix.oculair.ca",
+    "displayName": "Huly - PhotoPrism MCP Server",
+    "accessToken": "F0wyVDgsS5hfIVdw1NZ9U3lcFX0eWOaF",
+    "type": "letta",
+    "createdAt": 1764489579732,
+    "lastUsedAt": 1764489579732
+  },
+  "letta_agent-cd236f48-d3c5-482b-9225-b68e66335508": {
+    "id": "letta_agent-cd236f48-d3c5-482b-9225-b68e66335508",
+    "mxid": "@agent_cd236f48_d3c5_482b_9225_b68e66335508:matrix.oculair.ca",
+    "displayName": "Huly - TurboMCP Studio",
+    "accessToken": "3Y070c6mm2frLEYSr3PQQ6v5Xs6AyZGF",
+    "type": "letta",
+    "createdAt": 1764489579813,
+    "lastUsedAt": 1764489579813
+  },
+  "letta_agent-9ea700d6-d533-401c-a820-62a415b4ee7a": {
+    "id": "letta_agent-9ea700d6-d533-401c-a820-62a415b4ee7a",
+    "mxid": "@agent_9ea700d6_d533_401c_a820_62a415b4ee7a:matrix.oculair.ca",
+    "displayName": "Huly-PM-Control",
+    "accessToken": "8KQYlu8Y9BZySNEqOUsc1O7GFpiLslDP",
+    "type": "letta",
+    "createdAt": 1764489579896,
+    "lastUsedAt": 1764489579896
+  },
+  "letta_agent-22e8b386-7a9a-4a3f-94a9-7521f1b85315": {
+    "id": "letta_agent-22e8b386-7a9a-4a3f-94a9-7521f1b85315",
+    "mxid": "@agent_22e8b386_7a9a_4a3f_94a9_7521f1b85315:matrix.oculair.ca",
+    "displayName": "Huly - OpenCode OpenAI Codex Auth",
+    "accessToken": "ZZxAJLYUDDNWUn9DL33gVfBdyDj5q7vl",
+    "type": "letta",
+    "createdAt": 1764489579982,
+    "lastUsedAt": 1764489579982
+  },
+  "letta_agent-491d3ba3-ca12-41ca-8921-571b7558eab5": {
+    "id": "letta_agent-491d3ba3-ca12-41ca-8921-571b7558eab5",
+    "mxid": "@agent_491d3ba3_ca12_41ca_8921_571b7558eab5:matrix.oculair.ca",
+    "displayName": "Huly - Test Project",
+    "accessToken": "SirR5lwPdBaltg9sumuLJpzKZ8eJ1els",
+    "type": "letta",
+    "createdAt": 1764489580072,
+    "lastUsedAt": 1764489580072
+  },
+  "letta_agent-9e926617-1e4e-45f6-b1be-427ba434fe87": {
+    "id": "letta_agent-9e926617-1e4e-45f6-b1be-427ba434fe87",
+    "mxid": "@agent_9e926617_1e4e_45f6_b1be_427ba434fe87:matrix.oculair.ca",
+    "displayName": "Huly - SureFinance Rails",
+    "accessToken": "ocwNBq7eupmtr6w56JlMNqZcK69gN2YO",
+    "type": "letta",
+    "createdAt": 1764489580175,
+    "lastUsedAt": 1764489580175
+  },
+  "letta_agent-0d969a5e-d464-4f4b-867d-aa55de76a93f": {
+    "id": "letta_agent-0d969a5e-d464-4f4b-867d-aa55de76a93f",
+    "mxid": "@agent_0d969a5e_d464_4f4b_867d_aa55de76a93f:matrix.oculair.ca",
+    "displayName": "Huly - SureFinance",
+    "accessToken": "uu2Xs7sZcis7iXTULH9JN5ShXW7fo8RH",
+    "type": "letta",
+    "createdAt": 1764489580276,
+    "lastUsedAt": 1764489580276
+  },
+  "letta_agent-6b1d55d2-5102-4ae9-83b2-bed3a1e07e63": {
+    "id": "letta_agent-6b1d55d2-5102-4ae9-83b2-bed3a1e07e63",
+    "mxid": "@agent_6b1d55d2_5102_4ae9_83b2_bed3a1e07e63:matrix.oculair.ca",
+    "displayName": "Huly - Serena",
+    "accessToken": "Vu9WLQWwjsCT172qMXEcoEl4T9HLeFVz",
+    "type": "letta",
+    "createdAt": 1764489580378,
+    "lastUsedAt": 1764489580378
+  },
+  "letta_agent-f4363380-9cce-4fa0-bb63-dfdac0ae10e5": {
+    "id": "letta_agent-f4363380-9cce-4fa0-bb63-dfdac0ae10e5",
+    "mxid": "@agent_f4363380_9cce_4fa0_bb63_dfdac0ae10e5:matrix.oculair.ca",
+    "displayName": "Huly - Rust Sync POC",
+    "accessToken": "1rnOZXeGbujdSXDTQGwLlvxEPIk3PN21",
+    "type": "letta",
+    "createdAt": 1764489580461,
+    "lastUsedAt": 1764489580461
+  },
+  "letta_agent-b6474606-59d6-4430-aa35-7df43d9720b6": {
+    "id": "letta_agent-b6474606-59d6-4430-aa35-7df43d9720b6",
+    "mxid": "@agent_b6474606_59d6_4430_aa35_7df43d9720b6:matrix.oculair.ca",
+    "displayName": "Huly - Radicale",
+    "accessToken": "2dlYv7xlj3mmjubGcMJC3jt8Cw5eO064",
+    "type": "letta",
+    "createdAt": 1764489580549,
+    "lastUsedAt": 1764489580549
+  },
+  "letta_agent-50c0dac2-ae74-4f38-8ad2-80600ded33ab": {
+    "id": "letta_agent-50c0dac2-ae74-4f38-8ad2-80600ded33ab",
+    "mxid": "@agent_50c0dac2_ae74_4f38_8ad2_80600ded33ab:matrix.oculair.ca",
+    "displayName": "Huly - Postiz MCP",
+    "accessToken": "HtzKruMUYuCSKrqiQ3gl3aR31IpKTVy6",
+    "type": "letta",
+    "createdAt": 1764489580626,
+    "lastUsedAt": 1764489580626
+  },
+  "letta_agent-6abced97-c375-4c0b-9a66-c91e6ef9d1a7": {
+    "id": "letta_agent-6abced97-c375-4c0b-9a66-c91e6ef9d1a7",
+    "mxid": "@agent_6abced97_c375_4c0b_9a66_c91e6ef9d1a7:matrix.oculair.ca",
+    "displayName": "Huly - MetaMCP MCP Server",
+    "accessToken": "gpbwR9v6MazWqdD2PSwTLdXMuX6Jkh5K",
+    "type": "letta",
+    "createdAt": 1764489580714,
+    "lastUsedAt": 1764489580714
+  },
+  "letta_agent-5c378827-3beb-4bde-b0c2-2d011bbdd747": {
+    "id": "letta_agent-5c378827-3beb-4bde-b0c2-2d011bbdd747",
+    "mxid": "@agent_5c378827_3beb_4bde_b0c2_2d011bbdd747:matrix.oculair.ca",
+    "displayName": "Huly - Meilisearch",
+    "accessToken": "RhwNTNDuDA1NuKYhHLyfBVQW4s0EfauU",
+    "type": "letta",
+    "createdAt": 1764489580787,
+    "lastUsedAt": 1764489580787
+  },
+  "letta_agent-fc4c89fa-5442-49b4-bb10-a35708ed3328": {
+    "id": "letta_agent-fc4c89fa-5442-49b4-bb10-a35708ed3328",
+    "mxid": "@agent_fc4c89fa_5442_49b4_bb10_a35708ed3328:matrix.oculair.ca",
+    "displayName": "Huly - MCP Playground",
+    "accessToken": "Spll6FK8rw1lXS9XH6ZVMF6B6hqlu3g2",
+    "type": "letta",
+    "createdAt": 1764489580873,
+    "lastUsedAt": 1764489580873
+  },
+  "letta_agent-16579ae3-c4c0-4db5-b068-86fe9736ccdd": {
+    "id": "letta_agent-16579ae3-c4c0-4db5-b068-86fe9736ccdd",
+    "mxid": "@agent_16579ae3_c4c0_4db5_b068_86fe9736ccdd:matrix.oculair.ca",
+    "displayName": "Huly - MCP Inspector",
+    "accessToken": "NoPG8Sxztev1PQIGxXtiVbNML0mosZyZ",
+    "type": "letta",
+    "createdAt": 1764489580957,
+    "lastUsedAt": 1764489580957
+  },
+  "letta_agent-6da1641b-fd6f-4f19-b54b-5c0458d98a82": {
+    "id": "letta_agent-6da1641b-fd6f-4f19-b54b-5c0458d98a82",
+    "mxid": "@agent_6da1641b_fd6f_4f19_b54b_5c0458d98a82:matrix.oculair.ca",
+    "displayName": "Huly - Matrix Widget Toolkit",
+    "accessToken": "v2AIZhLzMk8JUlSxWL7UBHOI0QNM0Fyc",
+    "type": "letta",
+    "createdAt": 1764489581041,
+    "lastUsedAt": 1764489581041
+  },
+  "letta_agent-269fecac-8537-474d-bcbb-b95a7fbb5e04": {
+    "id": "letta_agent-269fecac-8537-474d-bcbb-b95a7fbb5e04",
+    "mxid": "@agent_269fecac_8537_474d_bcbb_b95a7fbb5e04:matrix.oculair.ca",
+    "displayName": "Huly - Matrix Appservice Discord",
+    "accessToken": "PQNce7HK6ROTTiPeyCZf4mVj7CIyonaX",
+    "type": "letta",
+    "createdAt": 1764489581129,
+    "lastUsedAt": 1764489581129
+  },
+  "letta_agent-870d3dfb-319f-4c52-91f1-72ab46d944a7": {
+    "id": "letta_agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
+    "mxid": "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca",
+    "displayName": "Huly - Matrix Synapse Deployment",
+    "accessToken": "7b1DGMZyhd3NRiPJjCLXq7qLMbiawnox",
+    "type": "letta",
+    "createdAt": 1764489581217,
+    "lastUsedAt": 1764489581217
+  },
+  "letta_agent-a202db1e-00c8-4915-8b6e-261ef12d8348": {
+    "id": "letta_agent-a202db1e-00c8-4915-8b6e-261ef12d8348",
+    "mxid": "@agent_a202db1e_00c8_4915_8b6e_261ef12d8348:matrix.oculair.ca",
+    "displayName": "Huly - GPT Researcher",
+    "accessToken": "reqM5mXq1pHzX2Uggn6RBabf2qRu4KLP",
+    "type": "letta",
+    "createdAt": 1764489581310,
+    "lastUsedAt": 1764489581310
+  },
+  "letta_agent-8fb03e45-9469-4058-84fb-e3e64fc31be6": {
+    "id": "letta_agent-8fb03e45-9469-4058-84fb-e3e64fc31be6",
+    "mxid": "@agent_8fb03e45_9469_4058_84fb_e3e64fc31be6:matrix.oculair.ca",
+    "displayName": "Huly - Letta Webhook Receiver",
+    "accessToken": "Mag6Lq8wu3I1k4vEtctQV2uPLZttMHad",
+    "type": "letta",
+    "createdAt": 1764489581417,
+    "lastUsedAt": 1764489581417
+  },
+  "letta_agent-f2fdf2aa-5b83-4c2d-a926-2e86e6793551": {
+    "id": "letta_agent-f2fdf2aa-5b83-4c2d-a926-2e86e6793551",
+    "mxid": "@agent_f2fdf2aa_5b83_4c2d_a926_2e86e6793551:matrix.oculair.ca",
+    "displayName": "BMO",
+    "accessToken": "exnzQGZu3BaHTHmXSbzNhCTUze84RDZh",
+    "type": "letta",
+    "createdAt": 1764489581550,
+    "lastUsedAt": 1764489581550
+  },
+  "letta_agent-79bebc40-d8e5-432c-898e-0f14715a0162": {
+    "id": "letta_agent-79bebc40-d8e5-432c-898e-0f14715a0162",
+    "mxid": "@agent_79bebc40_d8e5_432c_898e_0f14715a0162:matrix.oculair.ca",
+    "displayName": "Huly - Mautrix Manager",
+    "accessToken": "6UPUFOIT4Pdg0OBhbA93jIqd8NTDN8so",
+    "type": "letta",
+    "createdAt": 1764489581635,
+    "lastUsedAt": 1764489581635
+  },
+  "letta_agent-48d25d1f-1238-46d7-94a8-8b77afcf6a96": {
+    "id": "letta_agent-48d25d1f-1238-46d7-94a8-8b77afcf6a96",
+    "mxid": "@agent_48d25d1f_1238_46d7_94a8_8b77afcf6a96:matrix.oculair.ca",
+    "displayName": "Huly - MetaMCP",
+    "accessToken": "7IxhQaqPnc3NgvG7zpIZnhHI1lj0qI2x",
+    "type": "letta",
+    "createdAt": 1764489581722,
+    "lastUsedAt": 1764489581722
+  },
+  "letta_agent-8b0dcbc4-0945-4668-a1d1-893346c57b34": {
+    "id": "letta_agent-8b0dcbc4-0945-4668-a1d1-893346c57b34",
+    "mxid": "@agent_8b0dcbc4_0945_4668_a1d1_893346c57b34:matrix.oculair.ca",
+    "displayName": "Huly - Context7",
+    "accessToken": "3XHw8c5vuuPPqqMTXwWhJFS5bzuNGf39",
+    "type": "letta",
+    "createdAt": 1764489581807,
+    "lastUsedAt": 1764489581807
+  },
+  "letta_agent-5a8ec754-6816-4972-b3a1-74c1cb36a6b9": {
+    "id": "letta_agent-5a8ec754-6816-4972-b3a1-74c1cb36a6b9",
+    "mxid": "@agent_5a8ec754_6816_4972_b3a1_74c1cb36a6b9:matrix.oculair.ca",
+    "displayName": "Huly - Augment MCP Tool",
+    "accessToken": "JFbmbhWCBuz94ntsayNulrZ5PWzdTzVE",
+    "type": "letta",
+    "createdAt": 1764489581893,
+    "lastUsedAt": 1764489581893
+  },
+  "letta_agent-b602a275-3ae1-401b-a31d-b2f1282a37c0": {
+    "id": "letta_agent-b602a275-3ae1-401b-a31d-b2f1282a37c0",
+    "mxid": "@agent_b602a275_3ae1_401b_a31d_b2f1282a37c0:matrix.oculair.ca",
+    "displayName": "Huly - TurboMCP",
+    "accessToken": "C5YkKs27o4E5vcrY8JHmbkbnq90HsQ7l",
+    "type": "letta",
+    "createdAt": 1764489581979,
+    "lastUsedAt": 1764489581979
+  },
+  "letta_agent-a2b149bb-ba81-46de-b627-39b135e2670f": {
+    "id": "letta_agent-a2b149bb-ba81-46de-b627-39b135e2670f",
+    "mxid": "@agent_a2b149bb_ba81_46de_b627_39b135e2670f:matrix.oculair.ca",
+    "displayName": "Huly - Claude Code MCP",
+    "accessToken": "dAqgeaaWAJ6lOfYaKRyNsaaSUmzzCoFd",
+    "type": "letta",
+    "createdAt": 1764489582064,
+    "lastUsedAt": 1764489582064
+  },
+  "letta_agent-264173af-e5dd-4efa-9ac0-d6517285e01c": {
+    "id": "letta_agent-264173af-e5dd-4efa-9ac0-d6517285e01c",
+    "mxid": "@agent_264173af_e5dd_4efa_9ac0_d6517285e01c:matrix.oculair.ca",
+    "displayName": "Huly - Claude Code UI",
+    "accessToken": "1MI5gmsirEMgNBAuikQaPSXBBihkvjqm",
+    "type": "letta",
+    "createdAt": 1764489582148,
+    "lastUsedAt": 1764489582148
+  },
+  "letta_agent-a73a455c-80b3-4bbc-b6de-5bcc737aa911": {
+    "id": "letta_agent-a73a455c-80b3-4bbc-b6de-5bcc737aa911",
+    "mxid": "@agent_a73a455c_80b3_4bbc_b6de_5bcc737aa911:matrix.oculair.ca",
+    "displayName": "Huly - Claude Graphiti Hook",
+    "accessToken": "5IR6Esjm0Ya4f0z6F5528AJCUD7tmKi6",
+    "type": "letta",
+    "createdAt": 1764489582229,
+    "lastUsedAt": 1764489582229
+  },
+  "letta_agent-99db68c4-79d9-4a0a-9129-2432a6c72e1c": {
+    "id": "letta_agent-99db68c4-79d9-4a0a-9129-2432a6c72e1c",
+    "mxid": "@agent_99db68c4_79d9_4a0a_9129_2432a6c72e1c:matrix.oculair.ca",
+    "displayName": "Huly - Vibe Kanban",
+    "accessToken": "Y98YZ8vYiexZ63xaPjtJzh7LvuxNbUnG",
+    "type": "letta",
+    "createdAt": 1764489582312,
+    "lastUsedAt": 1764489582312
+  },
+  "letta_agent-0623f440-dc16-49ab-a5e6-c9ccb22fa726": {
+    "id": "letta_agent-0623f440-dc16-49ab-a5e6-c9ccb22fa726",
+    "mxid": "@agent_0623f440_dc16_49ab_a5e6_c9ccb22fa726:matrix.oculair.ca",
+    "displayName": "Huly - Letta OpenCode Plugin",
+    "accessToken": "nNXgF9ous2RbnV3svhdSqX41mkGZAvYk",
+    "type": "letta",
+    "createdAt": 1764489582393,
+    "lastUsedAt": 1764489582393
+  },
+  "letta_agent-e4f3fcb4-8e7f-4bc1-817d-17ffa4220590": {
+    "id": "letta_agent-e4f3fcb4-8e7f-4bc1-817d-17ffa4220590",
+    "mxid": "@agent_e4f3fcb4_8e7f_4bc1_817d_17ffa4220590:matrix.oculair.ca",
+    "displayName": "Huly - Huly MCP Server",
+    "accessToken": "N7ZREKrrcXAPJ9kl1Y41fEpfrJdREx2Y",
+    "type": "letta",
+    "createdAt": 1764489582478,
+    "lastUsedAt": 1764489582478
+  },
+  "letta_agent-13eb4426-b06f-4d35-ae5a-5d6ca80409f5": {
+    "id": "letta_agent-13eb4426-b06f-4d35-ae5a-5d6ca80409f5",
+    "mxid": "@agent_13eb4426_b06f_4d35_ae5a_5d6ca80409f5:matrix.oculair.ca",
+    "displayName": "Huly - Letta MCP Server",
+    "accessToken": "nWHfbGiZEXq7zF2BzMtPIJ7qlJh55u7k",
+    "type": "letta",
+    "createdAt": 1764489582564,
+    "lastUsedAt": 1764489582564
+  },
+  "letta_agent-1790605d-434c-4aa6-ae29-6267c14549d8": {
+    "id": "letta_agent-1790605d-434c-4aa6-ae29-6267c14549d8",
+    "mxid": "@agent_1790605d_434c_4aa6_ae29_6267c14549d8:matrix.oculair.ca",
+    "displayName": "Huly - Claude Code X Letta",
+    "accessToken": "ySqlXSoM0Pmq1t1pBTsIiW5DEyhanjDj",
+    "type": "letta",
+    "createdAt": 1764489582655,
+    "lastUsedAt": 1764489582655
+  },
+  "letta_agent-b9e6baac-03c2-46d1-af00-b04f23412f90": {
+    "id": "letta_agent-b9e6baac-03c2-46d1-af00-b04f23412f90",
+    "mxid": "@agent_b9e6baac_03c2_46d1_af00_b04f23412f90:matrix.oculair.ca",
+    "displayName": "Huly - Docling",
+    "accessToken": "5IDbOaHZpjLmIzrAuvMUcTfu3ipxwpIz",
+    "type": "letta",
+    "createdAt": 1764489582737,
+    "lastUsedAt": 1764489582737
+  },
+  "letta_agent-42f9b0c3-fbc0-48a3-af52-7c7aa903f759": {
+    "id": "letta_agent-42f9b0c3-fbc0-48a3-af52-7c7aa903f759",
+    "mxid": "@agent_42f9b0c3_fbc0_48a3_af52_7c7aa903f759:matrix.oculair.ca",
+    "displayName": "Huly - Claudia",
+    "accessToken": "ZJ8uQZ0xWAszDK8ISFMSG9L0SY2b4Oid",
+    "type": "letta",
+    "createdAt": 1764489582820,
+    "lastUsedAt": 1764489582820
+  },
+  "letta_agent-5196f211-8196-4052-b0ee-f324ee321f41": {
+    "id": "letta_agent-5196f211-8196-4052-b0ee-f324ee321f41",
+    "mxid": "@agent_5196f211_8196_4052_b0ee_f324ee321f41:matrix.oculair.ca",
+    "displayName": "Huly - Dockerfiles",
+    "accessToken": "NGi7F6ZF4EeCEfgCAAmf38kzZ9mSKmd4",
+    "type": "letta",
+    "createdAt": 1764489582915,
+    "lastUsedAt": 1764489582915
+  },
+  "letta_agent-fb4ce57f-ebc1-448f-a6ac-4c1600003ce8": {
+    "id": "letta_agent-fb4ce57f-ebc1-448f-a6ac-4c1600003ce8",
+    "mxid": "@agent_fb4ce57f_ebc1_448f_a6ac_4c1600003ce8:matrix.oculair.ca",
+    "displayName": "Huly - Instabot",
+    "accessToken": "3wsS660pcR3XBfe4WdKNQmiGxCTPnX7F",
+    "type": "letta",
+    "createdAt": 1764489582998,
+    "lastUsedAt": 1764489582998
+  },
+  "letta_agent-42e6158d-b19d-4d23-a943-2e93cd7c1a2f": {
+    "id": "letta_agent-42e6158d-b19d-4d23-a943-2e93cd7c1a2f",
+    "mxid": "@agent_42e6158d_b19d_4d23_a943_2e93cd7c1a2f:matrix.oculair.ca",
+    "displayName": "Huly - Komodo MCP",
+    "accessToken": "I6d9pomwse9GqNqZAZG5xgfQvWkG0MNY",
+    "type": "letta",
+    "createdAt": 1764489583080,
+    "lastUsedAt": 1764489583080
+  },
+  "letta_agent-a67871be-220f-4c19-88c9-7a6db15f3583": {
+    "id": "letta_agent-a67871be-220f-4c19-88c9-7a6db15f3583",
+    "mxid": "@agent_a67871be_220f_4c19_88c9_7a6db15f3583:matrix.oculair.ca",
+    "displayName": "Huly - Google Keep MCP",
+    "accessToken": "prgx44ccp2ZItmLs8r5kuOiGYcKeOuhT",
+    "type": "letta",
+    "createdAt": 1764489583161,
+    "lastUsedAt": 1764489583161
+  },
+  "letta_agent-5a145be1-3c15-491e-b5a8-e9f3fe1e716e": {
+    "id": "letta_agent-5a145be1-3c15-491e-b5a8-e9f3fe1e716e",
+    "mxid": "@agent_5a145be1_3c15_491e_b5a8_e9f3fe1e716e:matrix.oculair.ca",
+    "displayName": "Huly - Letta Tools Selector",
+    "accessToken": "Nn2EZkU22wu2L09kZI0uQqlFKtZMkj5s",
+    "type": "letta",
+    "createdAt": 1764489583247,
+    "lastUsedAt": 1764489583247
+  },
+  "letta_agent-597b5756-2915-4560-ba6b-91005f085166": {
+    "id": "letta_agent-597b5756-2915-4560-ba6b-91005f085166",
+    "mxid": "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca",
+    "displayName": "Meridian",
+    "accessToken": "bSLmUK9VvS8rLHP5YzIGIyeQStH5zaFN",
+    "type": "letta",
+    "createdAt": 1764489583330,
+    "lastUsedAt": 1764489583330
+  },
+  "letta_agent-0f68f210-bdec-4fa0-a8de-939c3944f477": {
+    "id": "letta_agent-0f68f210-bdec-4fa0-a8de-939c3944f477",
+    "mxid": "@agent_0f68f210_bdec_4fa0_a8de_939c3944f477:matrix.oculair.ca",
+    "displayName": "Huly - Default",
+    "accessToken": "c4Y2zVg2IR2PGrXGv21IDWg9UBjSb4kY",
+    "type": "letta",
+    "createdAt": 1764489583409,
+    "lastUsedAt": 1764489583409
+  },
+  "letta_agent-c8487d94-c01e-4bb8-be27-2d976bd735c1": {
+    "id": "letta_agent-c8487d94-c01e-4bb8-be27-2d976bd735c1",
+    "mxid": "@agent_c8487d94_c01e_4bb8_be27_2d976bd735c1:matrix.oculair.ca",
+    "displayName": "Huly - BookStack MCP",
+    "accessToken": "hXJGoDAfatL0EGgRO5M5Xgk7ob3Ha8t6",
+    "type": "letta",
+    "createdAt": 1764489583493,
+    "lastUsedAt": 1764489583493
+  },
+  "letta_agent-ab7ad09a-b988-4184-94cc-7e99a3732d62": {
+    "id": "letta_agent-ab7ad09a-b988-4184-94cc-7e99a3732d62",
+    "mxid": "@agent_ab7ad09a_b988_4184_94cc_7e99a3732d62:matrix.oculair.ca",
+    "displayName": "Huly - SureFinance MCP Server",
+    "accessToken": "tURLH27cI6Mi30jg2SuA6k0Bo6PynVf6",
+    "type": "letta",
+    "createdAt": 1764489583578,
+    "lastUsedAt": 1764489583578
+  },
+  "letta_agent-e3541d44-6ff7-465d-8e85-ddd24515bb6f": {
+    "id": "letta_agent-e3541d44-6ff7-465d-8e85-ddd24515bb6f",
+    "mxid": "@agent_e3541d44_6ff7_465d_8e85_ddd24515bb6f:matrix.oculair.ca",
+    "displayName": "Huly - OpenCode Project",
+    "accessToken": "CejDYLwMArNZvWPSqopF2k6tIrG7u3T3",
+    "type": "letta",
+    "createdAt": 1764489583657,
+    "lastUsedAt": 1764489583657
+  },
+  "letta_agent-80ac3bb8-1087-412d-a19c-7c8c6aeb5916": {
+    "id": "letta_agent-80ac3bb8-1087-412d-a19c-7c8c6aeb5916",
+    "mxid": "@agent_80ac3bb8_1087_412d_a19c_7c8c6aeb5916:matrix.oculair.ca",
+    "displayName": "Huly - Graphiti Knowledge Graph Platform",
+    "accessToken": "AsDPQbUoHJax8tl7SkpwDWocYUaYtfoR",
+    "type": "letta",
+    "createdAt": 1764489583750,
+    "lastUsedAt": 1764489583750
+  },
+  "letta_agent-4527bcab-1b11-47f4-bb5d-2a4f44ca9ca2": {
+    "id": "letta_agent-4527bcab-1b11-47f4-bb5d-2a4f44ca9ca2",
+    "mxid": "@agent_4527bcab_1b11_47f4_bb5d_2a4f44ca9ca2:matrix.oculair.ca",
+    "displayName": "Huly - Claude API Gateway",
+    "accessToken": "LC5phJBcocWbZkWQiJ6SEXikNdWtYcBb",
+    "type": "letta",
+    "createdAt": 1764489583830,
+    "lastUsedAt": 1764489583830
+  },
+  "letta_agent-f17152eb-fc96-4e02-8e86-a583948eb70a": {
+    "id": "letta_agent-f17152eb-fc96-4e02-8e86-a583948eb70a",
+    "mxid": "@agent_f17152eb_fc96_4e02_8e86_a583948eb70a:matrix.oculair.ca",
+    "displayName": "letta-cli-agent",
+    "accessToken": "m0CPL64pnttZ7QC5aao2OyD73KCSY22R",
+    "type": "letta",
+    "createdAt": 1764489583915,
+    "lastUsedAt": 1764489583915
+  },
+  "letta_agent-c023a8d3-9ba3-4c62-9fb7-f039b4c455e0": {
+    "id": "letta_agent-c023a8d3-9ba3-4c62-9fb7-f039b4c455e0",
+    "mxid": "@agent_c023a8d3_9ba3_4c62_9fb7_f039b4c455e0:matrix.oculair.ca",
+    "displayName": "letta-cli-agent",
+    "accessToken": "WYHq708nuhqyrfF7IkUfBzXuRu0kQRsP",
+    "type": "letta",
+    "createdAt": 1764489584006,
+    "lastUsedAt": 1764489584006
+  },
+  "letta_agent-0a2b4b2e-c578-4b04-93d6-00f0e1639507": {
+    "id": "letta_agent-0a2b4b2e-c578-4b04-93d6-00f0e1639507",
+    "mxid": "@agent_0a2b4b2e_c578_4b04_93d6_00f0e1639507:matrix.oculair.ca",
+    "displayName": "Huly-PM-Control",
+    "accessToken": "9zXZFoxrXNnXu4csX2jbMrkt0YOSz1Tb",
+    "type": "letta",
+    "createdAt": 1764489584102,
+    "lastUsedAt": 1764489584102
+  },
+  "letta_agent-750cab6e-2b66-456a-8fe1-7c8ea8350149": {
+    "id": "letta_agent-750cab6e-2b66-456a-8fe1-7c8ea8350149",
+    "mxid": "@agent_750cab6e_2b66_456a_8fe1_7c8ea8350149:matrix.oculair.ca",
+    "displayName": "Huly-PM-Control",
+    "accessToken": "hxazC4fcGK9LgxATk9P8M7okHUNAFOlD",
+    "type": "letta",
+    "createdAt": 1764489584189,
+    "lastUsedAt": 1764489584189
+  },
+  "letta_agent-0b634ec8-f7bb-465a-b67c-a6c65194171e": {
+    "id": "letta_agent-0b634ec8-f7bb-465a-b67c-a6c65194171e",
+    "mxid": "@agent_0b634ec8_f7bb_465a_b67c_a6c65194171e:matrix.oculair.ca",
+    "displayName": "letta-cli-agent",
+    "accessToken": "Beyvb0QnIOkInpYkzZ8p0uswXqHwa6sT",
+    "type": "letta",
+    "createdAt": 1764489584282,
+    "lastUsedAt": 1764489584282
+  },
+  "letta_agent-fe8a9291-b49a-4fc1-94c3-1a23b86b6108": {
+    "id": "letta_agent-fe8a9291-b49a-4fc1-94c3-1a23b86b6108",
+    "mxid": "@agent_fe8a9291_b49a_4fc1_94c3_1a23b86b6108:matrix.oculair.ca",
+    "displayName": "GraphitiExplorer",
+    "accessToken": "IuFu3fASs8NgbpCQsQci9qDOhHGhlnNC",
+    "type": "letta",
+    "createdAt": 1764489584377,
+    "lastUsedAt": 1764489584377
+  },
+  "opencode_L29wdC9zdGFja3MvbWF0cml4LXN5bmFwc2UtZGVwbG95bWVudA": {
+    "id": "opencode_L29wdC9zdGFja3MvbWF0cml4LXN5bmFwc2UtZGVwbG95bWVudA",
+    "mxid": "@oc_matrix_synapse_deployment:matrix.oculair.ca",
+    "displayName": "OpenCode: Matrix Synapse Deployment",
+    "accessToken": "hiLpdlhbasYM2LKHA1viQWJJlQGGx7b5",
+    "type": "opencode",
+    "createdAt": 1764490813405,
+    "lastUsedAt": 1764530310980
+  },
+  "opencode_v2_L29wdC9zdGFja3MvbGV0dGF0b29sc3NlbGVjdG9y": {
+    "id": "opencode_v2_L29wdC9zdGFja3MvbGV0dGF0b29sc3NlbGVjdG9y",
+    "mxid": "@oc_lettatoolsselector_v2:matrix.oculair.ca",
+    "displayName": "OpenCode: Lettatoolsselector",
+    "accessToken": "qndJlZJA1IFgH3LxfXSrTq8YFQAVq1pC",
+    "password": "MCP_07ELSZgnu18FMTahov29GNUb",
+    "type": "opencode",
+    "createdAt": 1764998903375,
+    "lastUsedAt": 1764998903375
+  },
+  "opencode_v2_L29wdC9zdGFja3MvbWF0cml4LXN5bmFwc2UtZGVwbG95bWVudA": {
+    "id": "opencode_v2_L29wdC9zdGFja3MvbWF0cml4LXN5bmFwc2UtZGVwbG95bWVudA",
+    "mxid": "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca",
+    "displayName": "OpenCode: Matrix Synapse Deployment",
+    "accessToken": "bNu73SAFYZm6WHvn0EvGkC5pqFpzcCSf",
+    "password": "MCP_PWdkry5CJQXelsz6DKRYfmt0",
+    "type": "opencode",
+    "createdAt": 1765083422882,
+    "lastUsedAt": 1765083422882
+  }
+}

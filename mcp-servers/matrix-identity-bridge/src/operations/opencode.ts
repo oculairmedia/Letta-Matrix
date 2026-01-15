@@ -48,7 +48,7 @@ export const opencode_send: OperationHandler = async (args, ctx) => {
 export const opencode_status: OperationHandler = async (args, ctx) => {
   if (args.directory) {
     const session = ctx.openCodeService.getSession(args.directory);
-    const identity = ctx.openCodeService.getIdentity(args.directory);
+    const identity = await ctx.openCodeService.getIdentity(args.directory);
 
     return result({
       directory: args.directory,
@@ -68,7 +68,7 @@ export const opencode_status: OperationHandler = async (args, ctx) => {
     });
   }
 
-  const status = ctx.openCodeService.getStatus();
+  const status = await ctx.openCodeService.getStatus();
 
   return result({
     total_identities: status.totalIdentities,

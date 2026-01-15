@@ -1,0 +1,14 @@
+{
+  "name": "claude-code-matrix-context",
+  "version": "0.1.0",
+  "description": "Claude Code plugin that injects Matrix messages into conversation context",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "Oculair Media",
+    "email": "support@oculair.ca"
+  },
+  "dependencies": {
+    "yaml": "^2.8.1"
+  }
+}

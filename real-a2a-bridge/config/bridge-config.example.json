@@ -1,0 +1,19 @@
+{
+  "matrix": {
+    "homeserver": "https://matrix.oculair.ca",
+    "serverName": "matrix.oculair.ca",
+    "registrationToken": "matrix_mcp_secret_token_2024",
+    "roomId": "!YOUR_ROOM_ID:matrix.oculair.ca",
+    "localpart": "p2p_bridge",
+    "displayName": "P2P Bridge"
+  },
+  "p2p": {
+    "room": "agent-swarm-global",
+    "identity": "matrix-bridge",
+    "ticket": null
+  },
+  "bridge": {
+    "logMessages": true,
+    "healthCheckIntervalMs": 300000
+  }
+}

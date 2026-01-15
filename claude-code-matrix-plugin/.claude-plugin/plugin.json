@@ -1,0 +1,20 @@
+{
+  "name": "matrix-context",
+  "version": "0.1.0",
+  "description": "Inject Matrix messages as context into Claude Code conversations",
+  "author": {
+    "name": "Oculair Media",
+    "email": "support@oculair.ca"
+  },
+  "homepage": "https://github.com/oculairmedia/Letta-Matrix",
+  "repository": "https://github.com/oculairmedia/Letta-Matrix.git",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "matrix",
+    "context",
+    "messaging",
+    "integration",
+    "plugin"
+  ]
+}

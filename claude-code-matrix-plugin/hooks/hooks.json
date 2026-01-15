@@ -1,0 +1,16 @@
+{
+  "description": "Matrix context injector",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun ${CLAUDE_PLUGIN_ROOT}/hooks/matrix-inject.ts",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

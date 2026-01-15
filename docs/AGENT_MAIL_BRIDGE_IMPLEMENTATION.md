@@ -43,7 +43,7 @@ Features:
 - `matrix_client_data/agent_mail_mappings.json` - Mapping data
 
 Converts Matrix agent names to valid Agent Mail names:
-- `"Huly - Matrix Synapse Deployment"` → `"HulyMatrixSynapse"`
+- `"Huly - Matrix Tuwunel Deployment"` → `"HulyMatrixTuwunel"`
 - `"BMO"` → `"BMO"`  
 - `"Meridian"` → `"Meridian"`
 

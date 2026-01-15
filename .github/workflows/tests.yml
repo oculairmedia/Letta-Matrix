@@ -64,6 +64,13 @@ jobs:
         mkdir -p $MATRIX_DATA_DIR
         ./run_tests.sh unit
 
+    - name: Run OpenCode bridge tests
+      run: |
+        cd opencode-bridge
+        npm install
+        npm run test
+
+
     - name: Upload test results
       if: always()
       uses: actions/upload-artifact@v4

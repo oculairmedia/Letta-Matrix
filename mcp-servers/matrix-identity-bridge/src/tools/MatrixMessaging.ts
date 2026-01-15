@@ -6,8 +6,12 @@
 
 import { MCPTool } from 'mcp-framework';
 import { z } from 'zod';
+import fs from 'fs/promises';
+import path from 'path';
 import { getToolContext, result, requireParam, requireIdentity, requireLetta, ToolContext } from '../core/tool-context.js';
 import { IdentityManager } from '../core/identity-manager.js';
+import { AgentMappingStore } from '../core/agent-mapping-store.js';
+import type { MatrixIdentity } from '../types/index.js';
 
 // All supported operations
 const operations = [
@@ -18,6 +22,25 @@ const operations = [
   'talk_to_agent', // NEW: Simplified agent chat with name resolution
   'opencode_connect', 'opencode_send', 'opencode_notify', 'opencode_status'
 ] as const;
+
+type CallerContext = {
+  directory?: string;
+  name?: string;
+  source?: 'input' | 'opencode' | 'claude-code' | 'pwd' | 'unknown';
+  sourceOverride?: 'opencode' | 'claude-code';
+};
+
+type AgentMapping = {
+  agent_id: string;
+  agent_name?: string;
+  matrix_user_id?: string;
+  matrix_password?: string;
+  created?: boolean;
+  room_id?: string;
+  room_created?: boolean;
+  matrix_room_id?: string;
+  invitation_status?: Record<string, string>;
+};
 
 const schema = z.object({
   operation: z.enum(operations).describe(
@@ -35,10 +58,16 @@ const schema = z.object({
   caller_name: z.string().optional().describe(
     'Display name override. Example: "OpenCode - MyProject"'
   ),
+  caller_source: z.enum(['opencode', 'claude-code']).optional().describe(
+    'Explicit caller source when both agents share a directory.'
+  ),
   
   // === IDENTITY PARAMETERS ===
   identity_id: z.string().optional().describe(
     'Identity ID for operations requiring an identity. Use identity_list to find available IDs.'
+  ),
+  sender_identity_id: z.string().optional().describe(
+    'Explicit sender identity ID for talk_to_agent. Overrides caller/OpenCode identity.'
   ),
   id: z.string().optional().describe('Unique ID when creating a new identity'),
   localpart: z.string().optional().describe(
@@ -187,49 +216,153 @@ TIPS
 • Responses are async - agent replies appear in Matrix`;
   schema = schema;
 
-  /**
-   * Get the effective caller directory - from input or environment variable.
-   * This makes the tool resilient by checking multiple sources in order:
-   * 1. Explicit input (caller_directory parameter)
-   * 2. OPENCODE_PROJECT_DIR env var
-   * 3. PWD env var (always available, set to working directory)
-   */
-  private getEffectiveCallerDirectory(input: Input): string | undefined {
-    // Explicit input takes priority
+  private async getCallerContext(input: Input): Promise<CallerContext> {
     if (input.caller_directory) {
-      return input.caller_directory;
+      return {
+        directory: input.caller_directory,
+        name: input.caller_name,
+        source: 'input',
+        sourceOverride: input.caller_source
+      };
     }
-    // Fall back to OPENCODE_PROJECT_DIR environment variable
+
     const envDir = process.env.OPENCODE_PROJECT_DIR;
     if (envDir) {
       console.log(`[MatrixMessaging] Using OPENCODE_PROJECT_DIR: ${envDir}`);
-      return envDir;
+      return {
+        directory: envDir,
+        name: input.caller_name,
+        source: 'opencode',
+        sourceOverride: input.caller_source
+      };
     }
-    // Fall back to PWD - this is always set to the working directory
+
+    const telemetry = await this.readClaudeCodeTelemetry();
+    if (telemetry?.cwd) {
+      console.log(`[MatrixMessaging] Using Claude Code telemetry: ${telemetry.cwd}`);
+      return {
+        directory: telemetry.cwd,
+        name: input.caller_name || telemetry.display_name,
+        source: 'claude-code',
+        sourceOverride: input.caller_source
+      };
+    }
+
     const pwd = process.env.PWD;
     if (pwd) {
       console.log(`[MatrixMessaging] Using PWD: ${pwd}`);
-      return pwd;
+      return {
+        directory: pwd,
+        name: input.caller_name,
+        source: 'pwd',
+        sourceOverride: input.caller_source
+      };
     }
-    return undefined;
+
+    return { name: input.caller_name, source: 'unknown', sourceOverride: input.caller_source };
+  }
+
+  private async readClaudeCodeTelemetry(): Promise<{ cwd?: string; display_name?: string; updated_at?: number } | null> {
+    const candidates = [
+      process.env.MATRIX_MCP_TELEMETRY_PATH,
+      '/app/data/claude-code-telemetry.json',
+      '/opt/stacks/matrix-synapse-deployment/mcp-servers/matrix-identity-bridge/data/claude-code-telemetry.json'
+    ].filter((value): value is string => Boolean(value));
+
+    for (const telemetryPath of candidates) {
+      try {
+        const raw = await fs.readFile(telemetryPath, 'utf-8');
+        const data = JSON.parse(raw) as { cwd?: string; display_name?: string; updated_at?: number };
+        if (!data || typeof data !== 'object') {
+          return null;
+        }
+        return data;
+      } catch (error: any) {
+        if (error?.code === 'ENOENT') {
+          continue;
+        }
+        console.error('[MatrixMessaging] Failed to read Claude Code telemetry:', error);
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  private async getOrCreateClaudeCodeIdentity(
+    ctx: ToolContext,
+    directory: string,
+    callerName?: string
+  ): Promise<MatrixIdentity> {
+    const encoded = Buffer.from(directory).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    const identityId = `claude_code_${encoded}`;
+    const projectName = directory.split('/').filter(Boolean).pop() || 'project';
+    const localpart = `cc_${projectName.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+
+    return await ctx.identityManager.getOrCreateIdentity({
+      id: identityId,
+      localpart,
+      displayName: callerName || `Claude Code: ${projectName}`,
+      type: 'custom'
+    });
+  }
+
+  private async resolveCallerIdentity(
+    ctx: ToolContext,
+    callerDirectory: string | undefined,
+    callerName: string | undefined,
+    effectiveSource: CallerContext['source'],
+    identityId?: string
+  ): Promise<MatrixIdentity> {
+    if (identityId) {
+      const identity = await ctx.storage.getIdentityAsync(identityId);
+      if (!identity) {
+        throw new Error(`Identity not found: ${identityId}`);
+      }
+      return identity;
+    }
+
+    if (!callerDirectory) {
+      throw new Error('No caller directory available to derive identity');
+    }
+
+    if (effectiveSource === 'claude-code') {
+      return await this.getOrCreateClaudeCodeIdentity(ctx, callerDirectory, callerName);
+    }
+
+    return await ctx.openCodeService.getOrCreateIdentity(callerDirectory, callerName);
+  }
+
+  private async resolveCallerIdentityId(
+    ctx: ToolContext,
+    callerDirectory: string | undefined,
+    callerName: string | undefined,
+    effectiveSource: CallerContext['source'],
+    identityId?: string
+  ): Promise<string> {
+    const identity = await this.resolveCallerIdentity(
+      ctx,
+      callerDirectory,
+      callerName,
+      effectiveSource,
+      identityId
+    );
+    return identity.id;
   }
 
   async execute(input: Input): Promise<string> {
     try {
       const ctx = getToolContext();
 
-      // Get effective caller directory (from input or env)
-      const callerDirectory = this.getEffectiveCallerDirectory(input);
+      const callerContext = await this.getCallerContext(input);
 
-      // Auto-register with OpenCode bridge if we have a caller directory
-      if (callerDirectory) {
-        await this.autoRegisterWithBridge(callerDirectory, input.room_id);
+      const effectiveSource = callerContext.sourceOverride || callerContext.source;
+      if (callerContext.directory && effectiveSource !== 'claude-code') {
+        await this.autoRegisterWithBridge(callerContext.directory, input.room_id);
       }
 
-      return await this.executeOperation(input, ctx, callerDirectory);
+      return await this.executeOperation(input, ctx, callerContext);
     } catch (error: unknown) {
-      // Catch all errors and return them as success responses
-      // This prevents mcp-framework from wrapping errors in a format Letta can't parse
       const errMsg = error instanceof Error ? error.message : String(error);
       console.error(`[MatrixMessaging] Operation ${input.operation} failed: ${errMsg}`);
       return result({
@@ -240,7 +373,11 @@ TIPS
     }
   }
 
-  private async executeOperation(input: Input, ctx: ToolContext, callerDirectory: string | undefined): Promise<string> {
+  private async executeOperation(input: Input, ctx: ToolContext, callerContext: CallerContext): Promise<string> {
+    const callerDirectory = callerContext.directory;
+    const callerName = callerContext.name;
+    const effectiveSource = callerContext.sourceOverride || callerContext.source;
+
     switch (input.operation) {
       // === MESSAGE OPERATIONS ===
       case 'send': {
@@ -256,37 +393,29 @@ TIPS
         // 2. agent_id - either explicit or injected from header (derives identity)
         // 3. callerDirectory / OpenCode identity (fallback for OpenCode callers)
         if (input.identity_id) {
-          // Explicit identity_id takes highest priority
-          identity = requireIdentity(input.identity_id);
+          identity = await requireIdentity(input.identity_id);
           console.log(`[MatrixMessaging] send: Using explicit identity_id ${input.identity_id}`);
         } else if (agentId && ctx.lettaService) {
-          // Auto-derive identity from agent_id (explicit or from X-Agent-Id header)
           const source = input.agent_id ? 'explicit' : 'X-Agent-Id header';
           console.log(`[MatrixMessaging] send: Resolving identity from agent_id (${source}): ${agentId}`);
           const identityId = await ctx.lettaService.getOrCreateAgentIdentity(agentId);
-          identity = ctx.storage.getIdentity(identityId);
+          identity = await ctx.storage.getIdentityAsync(identityId);
           if (!identity) {
             throw new Error(`Failed to get identity for agent: ${agentId}`);
           }
           console.log(`[MatrixMessaging] send: Auto-derived identity ${identityId} from agent_id ${agentId}`);
-        } else if (callerDirectory) {
-          // Fallback: use OpenCode identity from caller directory
-          identity = await ctx.openCodeService.getOrCreateIdentity(callerDirectory);
-          console.log(`[MatrixMessaging] send: Using OpenCode identity for ${callerDirectory}`);
-          // Update display name if caller_name provided
-          if (input.caller_name && identity.displayName !== input.caller_name) {
-            // TODO: Could update display name here if needed
-          }
         } else {
-          // No identity available - provide helpful error
-          throw new Error(
-            `No identity available for send operation.\n\n` +
-            `OPTIONS:\n` +
-            `• Use identity_id: {operation: "send", identity_id: "your-id", room_id: "!room:domain", message: "Hi"}\n` +
-            `• Use agent_id: {operation: "send", agent_id: "agent-uuid", room_id: "!room:domain", message: "Hi"}\n\n` +
-            `TIP: Letta agents should automatically have X-Agent-Id header which gets injected.\n` +
-            `Use {operation: "letta_list"} to find agent IDs, or {operation: "identity_list"} for identities.`
+          identity = await this.resolveCallerIdentity(
+            ctx,
+            callerDirectory,
+            callerName,
+            effectiveSource
           );
+          if (effectiveSource === 'claude-code') {
+            console.log(`[MatrixMessaging] send: Using Claude Code identity for ${callerDirectory}`);
+          } else {
+            console.log(`[MatrixMessaging] send: Using OpenCode identity for ${callerDirectory}`);
+          }
         }
         
         const message = requireParam(input.message, 'message');
@@ -359,7 +488,7 @@ TIPS
       }
 
       case 'react': {
-        const identity = requireIdentity(input.identity_id);
+        const identity = await requireIdentity(input.identity_id);
         const room_id = requireParam(input.room_id, 'room_id');
         const event_id = requireParam(input.event_id, 'event_id');
         const emoji = requireParam(input.emoji, 'emoji');
@@ -371,7 +500,7 @@ TIPS
       }
 
       case 'edit': {
-        const identity = requireIdentity(input.identity_id);
+        const identity = await requireIdentity(input.identity_id);
         const room_id = requireParam(input.room_id, 'room_id');
         const event_id = requireParam(input.event_id, 'event_id');
         const new_content = requireParam(input.new_content, 'new_content');
@@ -386,7 +515,7 @@ TIPS
       }
 
       case 'typing': {
-        const identity = requireIdentity(input.identity_id);
+        const identity = await requireIdentity(input.identity_id);
         const room_id = requireParam(input.room_id, 'room_id');
         const typingState = requireParam(input.typing, 'typing');
         const client = await ctx.clientPool.getClient(identity);
@@ -419,34 +548,64 @@ TIPS
 
       // === ROOM OPERATIONS ===
       case 'room_join': {
-        const identity_id = requireParam(input.identity_id, 'identity_id');
         const room_id_or_alias = requireParam(input.room_id_or_alias, 'room_id_or_alias');
-        const roomId = await ctx.roomManager.joinRoom(identity_id, room_id_or_alias);
+        const resolvedIdentityId = await this.resolveCallerIdentityId(
+          ctx,
+          callerDirectory,
+          callerName,
+          effectiveSource,
+          input.identity_id
+        );
+        const roomId = await ctx.roomManager.joinRoom(resolvedIdentityId, room_id_or_alias);
         return result({ room_id: roomId });
       }
 
       case 'room_leave': {
-        const identity_id = requireParam(input.identity_id, 'identity_id');
         const room_id = requireParam(input.room_id, 'room_id');
-        await ctx.roomManager.leaveRoom(identity_id, room_id);
+        const resolvedIdentityId = await this.resolveCallerIdentityId(
+          ctx,
+          callerDirectory,
+          callerName,
+          effectiveSource,
+          input.identity_id
+        );
+        await ctx.roomManager.leaveRoom(resolvedIdentityId, room_id);
         return result({ room_id });
       }
 
       case 'room_info': {
-        const identity_id = requireParam(input.identity_id, 'identity_id');
         const room_id = requireParam(input.room_id, 'room_id');
-        const info = await ctx.roomManager.getRoomInfo(identity_id, room_id);
+        const resolvedIdentityId = await this.resolveCallerIdentityId(
+          ctx,
+          callerDirectory,
+          callerName,
+          effectiveSource,
+          input.identity_id
+        );
+        const info = await ctx.roomManager.getRoomInfo(resolvedIdentityId, room_id);
         return result({ ...info } as Record<string, unknown>);
       }
 
       case 'room_list': {
-        const identity_id = requireParam(input.identity_id, 'identity_id');
-        const rooms = await ctx.roomManager.listJoinedRooms(identity_id);
+        const resolvedIdentityId = await this.resolveCallerIdentityId(
+          ctx,
+          callerDirectory,
+          callerName,
+          effectiveSource,
+          input.identity_id
+        );
+        const rooms = await ctx.roomManager.listJoinedRooms(resolvedIdentityId);
         return result({ rooms, count: rooms.length });
       }
 
       case 'room_create': {
-        const identity = requireIdentity(input.identity_id);
+        const identity = await this.resolveCallerIdentity(
+          ctx,
+          callerDirectory,
+          callerName,
+          effectiveSource,
+          input.identity_id
+        );
         const name = requireParam(input.name, 'name');
         const client = await ctx.clientPool.getClient(identity);
         const roomId = await client.createRoom({
@@ -460,7 +619,13 @@ TIPS
       }
 
       case 'room_invite': {
-        const identity = requireIdentity(input.identity_id);
+        const identity = await this.resolveCallerIdentity(
+          ctx,
+          callerDirectory,
+          callerName,
+          effectiveSource,
+          input.identity_id
+        );
         const room_id = requireParam(input.room_id, 'room_id');
         const user_mxid = requireParam(input.user_mxid, 'user_mxid');
         const client = await ctx.clientPool.getClient(identity);
@@ -469,7 +634,13 @@ TIPS
       }
 
       case 'room_search': {
-        const identity = requireIdentity(input.identity_id);
+        const identity = await this.resolveCallerIdentity(
+          ctx,
+          callerDirectory,
+          callerName,
+          effectiveSource,
+          input.identity_id
+        );
         const room_id = requireParam(input.room_id, 'room_id');
         const query = requireParam(input.query, 'query');
         const client = await ctx.clientPool.getClient(identity);
@@ -508,11 +679,23 @@ TIPS
         const identity = await ctx.identityManager.getOrCreateIdentity({
           id, localpart, displayName: display_name, avatarUrl: input.avatar_url, type
         });
+
+        const shouldUpdate =
+          (display_name && identity.displayName !== display_name) ||
+          (input.avatar_url && identity.avatarUrl !== input.avatar_url);
+        if (shouldUpdate) {
+          try {
+            await ctx.identityManager.updateIdentity(identity.id, display_name, input.avatar_url);
+          } catch (error) {
+            console.warn('[MatrixMessaging] Failed to update identity profile:', error);
+          }
+        }
+
         return result({ identity: { id: identity.id, mxid: identity.mxid, display_name: identity.displayName, type: identity.type } });
       }
 
       case 'identity_get': {
-        const identity = requireIdentity(input.identity_id);
+        const identity = await requireIdentity(input.identity_id);
         return result({
           identity: {
             id: identity.id, mxid: identity.mxid, display_name: identity.displayName,
@@ -558,7 +741,7 @@ TIPS
             `• explicit: Known identity ID → {operation: "identity_derive", explicit: "my-identity-id"}`
           );
         }
-        const identity = ctx.storage.getIdentity(identityId);
+        const identity = await ctx.storage.getIdentityAsync(identityId);
         return result({ identity_id: identityId, source, registered: !!identity, mxid: identity?.mxid });
       }
 
@@ -569,7 +752,7 @@ TIPS
         const to_mxid = requireParam(input.to_mxid, 'to_mxid');
         const message = requireParam(input.message, 'message');
         const identityId = await letta.getOrCreateAgentIdentity(agent_id);
-        const identity = ctx.storage.getIdentity(identityId);
+        const identity = await ctx.storage.getIdentityAsync(identityId);
         if (!identity) {
           throw new Error(
             `Failed to get identity for agent: ${agent_id}\n\n` +
@@ -594,6 +777,8 @@ TIPS
           agent_name: input.agent_name, 
           agent_id: input.agent_id,
           message: input.message?.substring(0, 50),
+          identity_id: input.identity_id,
+          sender_identity_id: input.sender_identity_id,
           caller_directory: callerDirectory
         }));
         
@@ -646,17 +831,42 @@ TIPS
           console.log(`[MatrixMessaging] Auto-attached matrix_messaging tool to ${agent_name}`);
         }
         
-        // Get OpenCode identity for the caller
-        // callerDirectory is derived from: input > OPENCODE_PROJECT_DIR > PWD
-        // PWD is always available, so this should always work!
         let callerIdentity;
-        console.log(`[MatrixMessaging] Getting identity for callerDirectory: ${callerDirectory || 'NONE'}`);
+        let callerIdentitySource: 'explicit' | 'opencode' | 'default' = 'default';
         try {
-          if (callerDirectory) {
-            callerIdentity = await ctx.openCodeService.getOrCreateIdentity(callerDirectory);
-            console.log(`[MatrixMessaging] Got identity: ${callerIdentity.mxid}`);
+          if (input.sender_identity_id || input.identity_id) {
+            const identityId = input.sender_identity_id ?? input.identity_id;
+            if (!identityId) {
+              throw new Error('Identity id not provided');
+            }
+            callerIdentity = await ctx.storage.getIdentityAsync(identityId);
+            if (!callerIdentity) {
+              throw new Error(`Identity not found: ${identityId}`);
+            }
+            callerIdentitySource = 'explicit';
+            console.log(`[MatrixMessaging] Using explicit identity_id: ${callerIdentity.mxid}`);
+          } else if (callerDirectory) {
+            const effectiveSource = callerContext.sourceOverride || callerContext.source;
+            if (effectiveSource === 'claude-code') {
+              const encoded = Buffer.from(callerDirectory).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+              const identityId = `claude_code_${encoded}`;
+              const localpart = `cc_${(callerDirectory.split('/').pop() || 'project').toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+              callerIdentity = await ctx.identityManager.getOrCreateIdentity({
+                id: identityId,
+                localpart,
+                displayName: callerName || `Claude Code: ${callerDirectory.split('/').filter(Boolean).pop() || 'Project'}`,
+                type: 'custom'
+              });
+              callerIdentitySource = 'explicit';
+              console.log(`[MatrixMessaging] Using Claude Code identity: ${callerIdentity.mxid}`);
+            } else {
+              callerIdentitySource = 'opencode';
+              console.log(`[MatrixMessaging] Getting identity for callerDirectory: ${callerDirectory || 'NONE'}`);
+              callerIdentity = await ctx.openCodeService.getOrCreateIdentity(callerDirectory, callerName);
+              console.log(`[MatrixMessaging] Got identity: ${callerIdentity.mxid}`);
+            }
           } else {
-            // Fallback to default identity (shouldn't happen since PWD is always set)
+            callerIdentitySource = 'default';
             callerIdentity = await ctx.openCodeService.getOrCreateDefaultIdentity();
             console.log(`[MatrixMessaging] Using default OpenCode identity: ${callerIdentity.mxid}`);
           }
@@ -665,57 +875,25 @@ TIPS
           console.error(`[MatrixMessaging] Failed to get/create identity: ${errMsg}`);
           throw new Error(`Failed to create sender identity: ${errMsg}`);
         }
-        
-        // Look up the agent's Matrix room from agent_user_mappings.json
-        let roomId: string | null = null;
-        try {
-          const fs = await import('fs');
-          const mappingsPath = '/opt/stacks/matrix-synapse-deployment/matrix_client_data/agent_user_mappings.json';
-          if (fs.existsSync(mappingsPath)) {
-            const mappings = JSON.parse(fs.readFileSync(mappingsPath, 'utf-8'));
-            const agentMapping = mappings[agent_id];
-            // Support both field names for backwards compatibility
-            const foundRoomId = agentMapping?.room_id || agentMapping?.matrix_room_id;
-            if (foundRoomId) {
-              roomId = foundRoomId;
-              console.log(`[MatrixMessaging] Using room ${roomId} for ${agent_name}`);
-            }
-          }
-        } catch (e) {
-          console.error('[MatrixMessaging] Failed to read agent mappings:', e);
-        }
-        
-        if (!roomId) {
-          throw new Error(
-            `No Matrix room configured for ${agent_name} (${agent_id}).\n\n` +
-            `The agent exists but doesn't have a room set up yet.\n\n` +
-            `TO CHECK AGENT STATUS:\n` +
-            `  {operation: "letta_lookup", agent: "${agent_name}"}\n\n` +
-            `This usually means the agent needs to be configured in agent_user_mappings.json.`
-          );
-        }
-        
+
+        const roomId = await this.getOrCreateAgentRoom(agent_id, agent_name, callerIdentity, ctx);
+
         const client = await ctx.clientPool.getClient(callerIdentity);
-        
-        // Ensure the caller can join the room
-        // First, try to get the agent's identity to invite the caller
+
         let joined = false;
         try {
-          // Try joining directly first (works if room is public or already invited)
           await client.joinRoom(roomId);
           joined = true;
           console.log(`[MatrixMessaging] ${callerIdentity.mxid} joined room ${roomId}`);
         } catch (joinError: unknown) {
           const errorMessage = joinError instanceof Error ? joinError.message : String(joinError);
           console.log(`[MatrixMessaging] Direct join failed: ${errorMessage}`);
-          
-          // If join failed, try to invite the caller using admin credentials
+
           try {
-            // Get admin credentials from environment
             const adminUsername = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
             const adminPassword = process.env.MATRIX_ADMIN_PASSWORD;
             const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://127.0.0.1:6167';
-            
+
             if (!adminPassword) {
               console.log(`[MatrixMessaging] No MATRIX_ADMIN_PASSWORD set, cannot invite`);
               throw new Error('Admin credentials not configured');
@@ -781,7 +959,7 @@ TIPS
         if (!joined) {
           // Check why invite failed
           const agentIdentityId = `letta_${agent_id}`;
-          const agentIdentity = ctx.storage.getIdentity(agentIdentityId);
+          const agentIdentity = await ctx.storage.getIdentityAsync(agentIdentityId);
           const debugInfo = agentIdentity 
             ? `Agent identity ${agentIdentity.mxid} found but invite/join failed`
             : `Agent identity ${agentIdentityId} NOT found in storage`;
@@ -804,7 +982,9 @@ TIPS
         });
         
         const matrixApiUrl = process.env.MATRIX_API_URL || 'http://matrix-api:8000';
-        const opencodeSender = callerIdentity.mxid.startsWith('@oc_') ? callerIdentity.mxid : undefined;
+        const opencodeSender = callerIdentity.type === 'opencode' && callerIdentity.mxid.startsWith('@oc_')
+          ? callerIdentity.mxid
+          : undefined;
         try {
           await fetch(`${matrixApiUrl}/conversations/register`, {
             method: 'POST',
@@ -879,7 +1059,7 @@ TIPS
         }
         
         const identityId = IdentityManager.generateLettaId(resolved.agent_id);
-        const identity = ctx.storage.getIdentity(identityId);
+        const identity = await ctx.storage.getIdentityAsync(identityId);
         return result({
           agent: { id: agent.id, name: agent.name, description: agent.description, model: agent.model },
           matrix_identity: identity ? { identity_id: identityId, mxid: identity.mxid, display_name: identity.displayName } : null,
@@ -891,14 +1071,16 @@ TIPS
       case 'letta_list': {
         const letta = requireLetta();
         const agents = await letta.listAgents();
-        const agentsWithIdentities = agents.map(agent => {
-          const identityId = IdentityManager.generateLettaId(agent.id);
-          const identity = ctx.storage.getIdentity(identityId);
-          return {
-            agent_id: agent.id, name: agent.name, description: agent.description, model: agent.model,
-            matrix_identity: identity ? { identity_id: identityId, mxid: identity.mxid } : null
-          };
-        });
+        const agentsWithIdentities = await Promise.all(
+          agents.map(async agent => {
+            const identityId = IdentityManager.generateLettaId(agent.id);
+            const identity = await ctx.storage.getIdentityAsync(identityId);
+            return {
+              agent_id: agent.id, name: agent.name, description: agent.description, model: agent.model,
+              matrix_identity: identity ? { identity_id: identityId, mxid: identity.mxid } : null
+            };
+          })
+        );
         return result({ count: agents.length, agents: agentsWithIdentities });
       }
 
@@ -931,7 +1113,7 @@ TIPS
 
         const agent_id = resolved.agent_id;
         const identityId = await letta.getOrCreateAgentIdentity(agent_id);
-        const identity = ctx.storage.getIdentity(identityId);
+        const identity = await ctx.storage.getIdentityAsync(identityId);
         if (!identity) {
           throw new Error(
             `Failed to create identity for ${resolved.agent_name}.\n\n` +
@@ -1009,7 +1191,7 @@ TIPS
       case 'opencode_status': {
         if (input.directory) {
           const session = ctx.openCodeService.getSession(input.directory);
-          const identity = ctx.openCodeService.getIdentity(input.directory);
+          const identity = await ctx.openCodeService.getIdentity(input.directory);
           return result({
             directory: input.directory,
             connected: !!session,
@@ -1018,11 +1200,11 @@ TIPS
             identity: identity ? { id: identity.id, mxid: identity.mxid, display_name: identity.displayName } : null
           });
         }
-        const status = ctx.openCodeService.getStatus();
+        const status = await ctx.openCodeService.getStatus();
         return result({
           total_identities: status.totalIdentities,
           active_sessions: status.activeSessions,
-          sessions: status.sessions.map(s => ({ directory: s.directory, identity_id: s.identityId, mxid: s.mxid, connected_at: s.connectedAt }))
+          sessions: status.sessions.map((s) => ({ directory: s.directory, identity_id: s.identityId, mxid: s.mxid, connected_at: s.connectedAt }))
         });
       }
 
@@ -1038,6 +1220,137 @@ TIPS
           `• Subscriptions: subscribe, unsubscribe`
         );
     }
+  }
+
+  private getAgentMappingsPath(): string {
+    if (process.env.AGENT_USER_MAPPINGS_PATH) {
+      return process.env.AGENT_USER_MAPPINGS_PATH;
+    }
+
+    const dataDir = process.env.DATA_DIR || '/app/data';
+    return path.join(dataDir, 'agent_user_mappings.json');
+  }
+
+  private async loadAgentMappings(): Promise<Record<string, AgentMapping>> {
+    const mappingsPath = this.getAgentMappingsPath();
+
+    try {
+      const raw = await fs.readFile(mappingsPath, 'utf-8');
+      const data = JSON.parse(raw) as Record<string, AgentMapping>;
+      return data && typeof data === 'object' ? data : {};
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') {
+        return {};
+      }
+      console.error('[MatrixMessaging] Failed to load agent mappings:', error);
+      return {};
+    }
+  }
+
+  private async saveAgentMappings(mappings: Record<string, AgentMapping>): Promise<void> {
+    const mappingsPath = this.getAgentMappingsPath();
+    await fs.mkdir(path.dirname(mappingsPath), { recursive: true });
+    await fs.writeFile(mappingsPath, JSON.stringify(mappings, null, 2), 'utf-8');
+  }
+
+  private async getOrCreateAgentRoom(
+    agentId: string,
+    agentName: string,
+    callerIdentity: { mxid: string },
+    ctx: ToolContext
+  ): Promise<string> {
+    const matrixApiUrl = process.env.MATRIX_API_URL || 'http://matrix-api:8000';
+    const mappingStore = new AgentMappingStore({ apiUrl: matrixApiUrl });
+    const apiMapping = await mappingStore.getMappingByAgentId(agentId);
+
+    const mappings = await this.loadAgentMappings();
+    const existing = mappings[agentId];
+    const existingRoom = apiMapping?.room_id || apiMapping?.matrix_room_id || existing?.room_id || existing?.matrix_room_id;
+
+    if (!ctx.lettaService) {
+      throw new Error('Letta service not available for agent room provisioning');
+    }
+
+    const agentIdentityId = await ctx.lettaService.getOrCreateAgentIdentity(agentId);
+    const agentIdentity = await ctx.storage.getIdentityAsync(agentIdentityId);
+    if (!agentIdentity) {
+      throw new Error(`Identity not found for agent: ${agentId}`);
+    }
+
+    const client = await ctx.clientPool.getClient(agentIdentity);
+
+    const createNewRoom = async (): Promise<string> => {
+      const roomId = await client.createRoom({
+        name: agentName,
+        topic: `Room for ${agentName}`,
+        preset: 'private_chat',
+        initial_state: [
+          { type: 'm.room.history_visibility', content: { history_visibility: 'shared' } }
+        ]
+      });
+
+      try {
+        await ctx.roomManager.inviteUser(agentIdentityId, roomId, callerIdentity.mxid);
+      } catch (error) {
+        console.error('[MatrixMessaging] Failed to invite caller to agent room:', error);
+      }
+
+      mappings[agentId] = {
+        ...existing,
+        agent_id: agentId,
+        agent_name: agentName,
+        matrix_user_id: agentIdentity.mxid,
+        matrix_password: agentIdentity.password,
+        created: true,
+        room_id: roomId,
+        room_created: true,
+        invitation_status: {
+          ...(existing?.invitation_status ?? {}),
+          [callerIdentity.mxid]: 'invited'
+        }
+      };
+
+      await this.saveAgentMappings(mappings);
+      console.log(`[MatrixMessaging] Created agent room ${roomId} for ${agentName}`);
+      return roomId;
+    };
+
+    if (existingRoom) {
+      try {
+        await client.joinRoom(existingRoom);
+      } catch (error) {
+        console.warn('[MatrixMessaging] Agent identity could not join existing room, keeping existing room:', error);
+        return existingRoom;
+      }
+
+      try {
+        await ctx.roomManager.inviteUser(agentIdentityId, existingRoom, callerIdentity.mxid);
+        mappings[agentId] = {
+          ...existing,
+          agent_id: agentId,
+          agent_name: agentName,
+          matrix_user_id: agentIdentity.mxid,
+          matrix_password: agentIdentity.password,
+          room_id: existingRoom,
+          invitation_status: {
+            ...(existing?.invitation_status ?? {}),
+            [callerIdentity.mxid]: 'invited'
+          }
+        };
+        await this.saveAgentMappings(mappings);
+        return existingRoom;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('M_FORBIDDEN') || errorMessage.includes('not in the room')) {
+          console.warn('[MatrixMessaging] Invite failed for existing room, keeping existing room:', errorMessage);
+          return existingRoom;
+        }
+        console.warn('[MatrixMessaging] Invite failed for existing room, continuing:', errorMessage);
+        return existingRoom;
+      }
+    }
+
+    return await createNewRoom();
   }
 
   /**

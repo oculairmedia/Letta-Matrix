@@ -8,6 +8,19 @@ import {
 } from "matrix-js-sdk";
 import { EventEmitter } from "events";
 
+function createQuietLogger() {
+  const quiet = {
+    trace: () => undefined,
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+    getChild: (_namespace: string) => quiet,
+  };
+
+  return quiet;
+}
+
 export interface MatrixMessage {
   roomId: string;
   sender: string;
@@ -43,6 +56,7 @@ export class MatrixSyncClient extends EventEmitter {
       baseUrl: options.homeserver,
       accessToken: options.accessToken,
       userId: options.userId,
+      logger: createQuietLogger(),
     });
 
     this.setupHandlers();

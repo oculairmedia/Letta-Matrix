@@ -27,6 +27,17 @@ export const identity_create: OperationHandler = async (args, ctx) => {
     type
   });
 
+  const shouldUpdate =
+    (display_name && identity.displayName !== display_name) ||
+    (args.avatar_url && identity.avatarUrl !== args.avatar_url);
+  if (shouldUpdate) {
+    try {
+      await ctx.identityManager.updateIdentity(identity.id, display_name, args.avatar_url);
+    } catch (error) {
+      console.warn('[Identity] Failed to update identity profile:', error);
+    }
+  }
+
   return result({
     identity: {
       id: identity.id,
@@ -38,7 +49,7 @@ export const identity_create: OperationHandler = async (args, ctx) => {
 };
 
 export const identity_get: OperationHandler = async (args, ctx) => {
-  const identity = requireIdentity(ctx, args.identity_id);
+  const identity = await requireIdentity(ctx, args.identity_id);
 
   return result({
     identity: {
@@ -89,7 +100,7 @@ export const identity_derive: OperationHandler = async (args, ctx) => {
     throw new McpError(ErrorCode.InvalidParams, 'Must provide one of: directory, agent_id, session_id, or explicit');
   }
 
-  const identity = ctx.storage.getIdentity(identityId);
+  const identity = await ctx.storage.getIdentityAsync(identityId);
 
   return result({
     identity_id: identityId,

@@ -1,0 +1,8 @@
+topics:
+  agent-swarm-global: "!DVm2zHm4pzERz7BaTb:matrix.oculair.ca"
+
+agents:
+  meridian: "!O8cbkBGCMB8Ujlaret:matrix.oculair.ca"
+
+defaults:
+  topic: "agent-swarm-global"

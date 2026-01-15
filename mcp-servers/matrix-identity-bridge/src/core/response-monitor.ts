@@ -181,7 +181,7 @@ export class ResponseMonitor {
       // If no agent identity, try to get any identity that's in the room
       if (!client) {
         // Fall back to admin or first available identity
-        const identities = this.storage.getAllIdentities();
+        const identities = await this.storage.getAllIdentitiesAsync();
         for (const identity of identities) {
           client = await this.clientPool.getClientById(identity.id);
           if (client) {

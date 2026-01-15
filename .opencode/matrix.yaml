@@ -2,6 +2,9 @@ homeserver: https://matrix.oculair.ca
 defaultRoomId: "!MtuqLUCwvKypRU6gll:matrix.oculair.ca"
 noReply: false
 projectRooms: {}
+# Subscribe to agent rooms for talk_to_agent responses
+extraRooms:
+  - "!O8cbkBGCMB8Ujlaret:matrix.oculair.ca"  # Meridian's room
 filters:
   msgtypes:
     - m.text

@@ -268,7 +268,7 @@ export class LettaService {
     const identityId = IdentityManager.generateLettaId(agentId);
     
     // Check if identity already exists
-    const existing = this.storage.getIdentity(identityId);
+    const existing = await this.storage.getIdentityAsync(identityId);
     if (existing) {
       return identityId;
     }

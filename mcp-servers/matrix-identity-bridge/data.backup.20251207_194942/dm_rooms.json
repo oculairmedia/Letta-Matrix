@@ -1,0 +1,592 @@
+{
+  "@admin:matrix.oculair.ca<->@agent_7659b796_4723_4d61_98b5_737f874ee652:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_7659b796_4723_4d61_98b5_737f874ee652:matrix.oculair.ca",
+    "roomId": "!EbcdOi9u9jQiNDO3j5:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_7659b796_4723_4d61_98b5_737f874ee652:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_cc2aaa60_731d_41a8_99f4_de7154131a23:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_cc2aaa60_731d_41a8_99f4_de7154131a23:matrix.oculair.ca",
+    "roomId": "!NjtVIAikxmaWTkyX6c:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_cc2aaa60_731d_41a8_99f4_de7154131a23:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_cd236f48_d3c5_482b_9225_b68e66335508:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_cd236f48_d3c5_482b_9225_b68e66335508:matrix.oculair.ca",
+    "roomId": "!VMqtKiw91AKv3BHKIY:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_cd236f48_d3c5_482b_9225_b68e66335508:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_9ea700d6_d533_401c_a820_62a415b4ee7a:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_9ea700d6_d533_401c_a820_62a415b4ee7a:matrix.oculair.ca",
+    "roomId": "!4NQI9d9d6EgzDyTRkf:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_9ea700d6_d533_401c_a820_62a415b4ee7a:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_22e8b386_7a9a_4a3f_94a9_7521f1b85315:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_22e8b386_7a9a_4a3f_94a9_7521f1b85315:matrix.oculair.ca",
+    "roomId": "!4ZTuNjAaci3gJKfRpu:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_22e8b386_7a9a_4a3f_94a9_7521f1b85315:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_491d3ba3_ca12_41ca_8921_571b7558eab5:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_491d3ba3_ca12_41ca_8921_571b7558eab5:matrix.oculair.ca",
+    "roomId": "!VGLvr6JRYqIuuFrhos:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_491d3ba3_ca12_41ca_8921_571b7558eab5:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_9e926617_1e4e_45f6_b1be_427ba434fe87:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_9e926617_1e4e_45f6_b1be_427ba434fe87:matrix.oculair.ca",
+    "roomId": "!GzdpOPDmOBUk3L93aV:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_9e926617_1e4e_45f6_b1be_427ba434fe87:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_0d969a5e_d464_4f4b_867d_aa55de76a93f:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_0d969a5e_d464_4f4b_867d_aa55de76a93f:matrix.oculair.ca",
+    "roomId": "!L8hytfl8Sc5LkCFrn1:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_0d969a5e_d464_4f4b_867d_aa55de76a93f:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_6b1d55d2_5102_4ae9_83b2_bed3a1e07e63:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_6b1d55d2_5102_4ae9_83b2_bed3a1e07e63:matrix.oculair.ca",
+    "roomId": "!1dKknJuJmTSB460YVz:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_6b1d55d2_5102_4ae9_83b2_bed3a1e07e63:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_f4363380_9cce_4fa0_bb63_dfdac0ae10e5:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_f4363380_9cce_4fa0_bb63_dfdac0ae10e5:matrix.oculair.ca",
+    "roomId": "!TtsNtfjHKWShqpYI8V:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_f4363380_9cce_4fa0_bb63_dfdac0ae10e5:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_b6474606_59d6_4430_aa35_7df43d9720b6:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_b6474606_59d6_4430_aa35_7df43d9720b6:matrix.oculair.ca",
+    "roomId": "!I0AXu82ul7Q9h7zLo3:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_b6474606_59d6_4430_aa35_7df43d9720b6:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_50c0dac2_ae74_4f38_8ad2_80600ded33ab:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_50c0dac2_ae74_4f38_8ad2_80600ded33ab:matrix.oculair.ca",
+    "roomId": "!fz2WxJwovtOnb5ai3v:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_50c0dac2_ae74_4f38_8ad2_80600ded33ab:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_6abced97_c375_4c0b_9a66_c91e6ef9d1a7:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_6abced97_c375_4c0b_9a66_c91e6ef9d1a7:matrix.oculair.ca",
+    "roomId": "!2C4Mji29vxJZoMEKj1:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_6abced97_c375_4c0b_9a66_c91e6ef9d1a7:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_5c378827_3beb_4bde_b0c2_2d011bbdd747:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_5c378827_3beb_4bde_b0c2_2d011bbdd747:matrix.oculair.ca",
+    "roomId": "!614ZWutvq3JGzkda2y:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_5c378827_3beb_4bde_b0c2_2d011bbdd747:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_fc4c89fa_5442_49b4_bb10_a35708ed3328:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_fc4c89fa_5442_49b4_bb10_a35708ed3328:matrix.oculair.ca",
+    "roomId": "!8jf6gsTQR0iipUzJtx:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_fc4c89fa_5442_49b4_bb10_a35708ed3328:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_16579ae3_c4c0_4db5_b068_86fe9736ccdd:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_16579ae3_c4c0_4db5_b068_86fe9736ccdd:matrix.oculair.ca",
+    "roomId": "!LJvJ1q9rm8HDWMo5mU:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_16579ae3_c4c0_4db5_b068_86fe9736ccdd:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_6da1641b_fd6f_4f19_b54b_5c0458d98a82:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_6da1641b_fd6f_4f19_b54b_5c0458d98a82:matrix.oculair.ca",
+    "roomId": "!b7uz0o1yVF7sCRFdTK:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_6da1641b_fd6f_4f19_b54b_5c0458d98a82:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_269fecac_8537_474d_bcbb_b95a7fbb5e04:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_269fecac_8537_474d_bcbb_b95a7fbb5e04:matrix.oculair.ca",
+    "roomId": "!Hvv52wByxOUemLVG3V:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_269fecac_8537_474d_bcbb_b95a7fbb5e04:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca",
+    "roomId": "!MtuqLUCwvKypRU6gll:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_a202db1e_00c8_4915_8b6e_261ef12d8348:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_a202db1e_00c8_4915_8b6e_261ef12d8348:matrix.oculair.ca",
+    "roomId": "!2XuGWKJe8w9Jf9aE2r:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_a202db1e_00c8_4915_8b6e_261ef12d8348:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_8fb03e45_9469_4058_84fb_e3e64fc31be6:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_8fb03e45_9469_4058_84fb_e3e64fc31be6:matrix.oculair.ca",
+    "roomId": "!GEryPhoX6EwnvVN52g:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_8fb03e45_9469_4058_84fb_e3e64fc31be6:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_f2fdf2aa_5b83_4c2d_a926_2e86e6793551:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_f2fdf2aa_5b83_4c2d_a926_2e86e6793551:matrix.oculair.ca",
+    "roomId": "!IHJi2xyhK7JNkUBzu6:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_f2fdf2aa_5b83_4c2d_a926_2e86e6793551:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 1764489733371
+  },
+  "@admin:matrix.oculair.ca<->@agent_79bebc40_d8e5_432c_898e_0f14715a0162:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_79bebc40_d8e5_432c_898e_0f14715a0162:matrix.oculair.ca",
+    "roomId": "!Lufto6O3Cf5eD2jLor:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_79bebc40_d8e5_432c_898e_0f14715a0162:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_48d25d1f_1238_46d7_94a8_8b77afcf6a96:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_48d25d1f_1238_46d7_94a8_8b77afcf6a96:matrix.oculair.ca",
+    "roomId": "!46bLlCNBMBeb9nYkOQ:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_48d25d1f_1238_46d7_94a8_8b77afcf6a96:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_8b0dcbc4_0945_4668_a1d1_893346c57b34:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_8b0dcbc4_0945_4668_a1d1_893346c57b34:matrix.oculair.ca",
+    "roomId": "!9keWkpcmyyAKesttdh:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_8b0dcbc4_0945_4668_a1d1_893346c57b34:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_5a8ec754_6816_4972_b3a1_74c1cb36a6b9:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_5a8ec754_6816_4972_b3a1_74c1cb36a6b9:matrix.oculair.ca",
+    "roomId": "!f68hWazuxL7qYppixt:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_5a8ec754_6816_4972_b3a1_74c1cb36a6b9:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_b602a275_3ae1_401b_a31d_b2f1282a37c0:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_b602a275_3ae1_401b_a31d_b2f1282a37c0:matrix.oculair.ca",
+    "roomId": "!7Bn7N50E1G5OePWX32:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_b602a275_3ae1_401b_a31d_b2f1282a37c0:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_a2b149bb_ba81_46de_b627_39b135e2670f:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_a2b149bb_ba81_46de_b627_39b135e2670f:matrix.oculair.ca",
+    "roomId": "!PpG2MW9nupzYI3KMy8:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_a2b149bb_ba81_46de_b627_39b135e2670f:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_264173af_e5dd_4efa_9ac0_d6517285e01c:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_264173af_e5dd_4efa_9ac0_d6517285e01c:matrix.oculair.ca",
+    "roomId": "!7Vj3AHaiCRvS17RHPK:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_264173af_e5dd_4efa_9ac0_d6517285e01c:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_a73a455c_80b3_4bbc_b6de_5bcc737aa911:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_a73a455c_80b3_4bbc_b6de_5bcc737aa911:matrix.oculair.ca",
+    "roomId": "!NUNBlLmaZToFN6QCid:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_a73a455c_80b3_4bbc_b6de_5bcc737aa911:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_99db68c4_79d9_4a0a_9129_2432a6c72e1c:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_99db68c4_79d9_4a0a_9129_2432a6c72e1c:matrix.oculair.ca",
+    "roomId": "!mfigKrvnCSxHrE2X51:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_99db68c4_79d9_4a0a_9129_2432a6c72e1c:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_0623f440_dc16_49ab_a5e6_c9ccb22fa726:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_0623f440_dc16_49ab_a5e6_c9ccb22fa726:matrix.oculair.ca",
+    "roomId": "!8AXoEXCYopCf3tYzZk:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_0623f440_dc16_49ab_a5e6_c9ccb22fa726:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_e4f3fcb4_8e7f_4bc1_817d_17ffa4220590:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_e4f3fcb4_8e7f_4bc1_817d_17ffa4220590:matrix.oculair.ca",
+    "roomId": "!C79db59vWg8ULwELqJ:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_e4f3fcb4_8e7f_4bc1_817d_17ffa4220590:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_13eb4426_b06f_4d35_ae5a_5d6ca80409f5:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_13eb4426_b06f_4d35_ae5a_5d6ca80409f5:matrix.oculair.ca",
+    "roomId": "!V0nzStajx71WSlwEyB:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_13eb4426_b06f_4d35_ae5a_5d6ca80409f5:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_1790605d_434c_4aa6_ae29_6267c14549d8:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_1790605d_434c_4aa6_ae29_6267c14549d8:matrix.oculair.ca",
+    "roomId": "!5TtEJQKRZ4uniiUTFT:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_1790605d_434c_4aa6_ae29_6267c14549d8:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_b9e6baac_03c2_46d1_af00_b04f23412f90:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_b9e6baac_03c2_46d1_af00_b04f23412f90:matrix.oculair.ca",
+    "roomId": "!8vXGvJXbUzNlsXReqD:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_b9e6baac_03c2_46d1_af00_b04f23412f90:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_42f9b0c3_fbc0_48a3_af52_7c7aa903f759:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_42f9b0c3_fbc0_48a3_af52_7c7aa903f759:matrix.oculair.ca",
+    "roomId": "!H2lpEqJDokbrCssfZs:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_42f9b0c3_fbc0_48a3_af52_7c7aa903f759:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_5196f211_8196_4052_b0ee_f324ee321f41:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_5196f211_8196_4052_b0ee_f324ee321f41:matrix.oculair.ca",
+    "roomId": "!2DHSEWcpFhIIcg3aF2:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_5196f211_8196_4052_b0ee_f324ee321f41:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_fb4ce57f_ebc1_448f_a6ac_4c1600003ce8:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_fb4ce57f_ebc1_448f_a6ac_4c1600003ce8:matrix.oculair.ca",
+    "roomId": "!eqRDBeIxpWsAUXYrdI:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_fb4ce57f_ebc1_448f_a6ac_4c1600003ce8:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_42e6158d_b19d_4d23_a943_2e93cd7c1a2f:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_42e6158d_b19d_4d23_a943_2e93cd7c1a2f:matrix.oculair.ca",
+    "roomId": "!ZASq4lLQ9duSwvx7Rt:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_42e6158d_b19d_4d23_a943_2e93cd7c1a2f:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_a67871be_220f_4c19_88c9_7a6db15f3583:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_a67871be_220f_4c19_88c9_7a6db15f3583:matrix.oculair.ca",
+    "roomId": "!QzOZWt0BZ0buLTwPeJ:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_a67871be_220f_4c19_88c9_7a6db15f3583:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_5a145be1_3c15_491e_b5a8_e9f3fe1e716e:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_5a145be1_3c15_491e_b5a8_e9f3fe1e716e:matrix.oculair.ca",
+    "roomId": "!2sPVsl31WDVJugQTKb:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_5a145be1_3c15_491e_b5a8_e9f3fe1e716e:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca",
+    "roomId": "!O8cbkBGCMB8Ujlaret:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 1764564676052
+  },
+  "@admin:matrix.oculair.ca<->@agent_0f68f210_bdec_4fa0_a8de_939c3944f477:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_0f68f210_bdec_4fa0_a8de_939c3944f477:matrix.oculair.ca",
+    "roomId": "!5qqyCQI0BhLzmQjb4s:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_0f68f210_bdec_4fa0_a8de_939c3944f477:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_c8487d94_c01e_4bb8_be27_2d976bd735c1:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_c8487d94_c01e_4bb8_be27_2d976bd735c1:matrix.oculair.ca",
+    "roomId": "!caK6Q73hOurvnRNaMn:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_c8487d94_c01e_4bb8_be27_2d976bd735c1:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_ab7ad09a_b988_4184_94cc_7e99a3732d62:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_ab7ad09a_b988_4184_94cc_7e99a3732d62:matrix.oculair.ca",
+    "roomId": "!9XheNeDNmlxmcprdXd:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_ab7ad09a_b988_4184_94cc_7e99a3732d62:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_e3541d44_6ff7_465d_8e85_ddd24515bb6f:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_e3541d44_6ff7_465d_8e85_ddd24515bb6f:matrix.oculair.ca",
+    "roomId": "!D2h66fYP8Dlxi1SGpX:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_e3541d44_6ff7_465d_8e85_ddd24515bb6f:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_80ac3bb8_1087_412d_a19c_7c8c6aeb5916:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_80ac3bb8_1087_412d_a19c_7c8c6aeb5916:matrix.oculair.ca",
+    "roomId": "!7dvrochAEBmtCJ9Ea3:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_80ac3bb8_1087_412d_a19c_7c8c6aeb5916:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_4527bcab_1b11_47f4_bb5d_2a4f44ca9ca2:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_4527bcab_1b11_47f4_bb5d_2a4f44ca9ca2:matrix.oculair.ca",
+    "roomId": "!LeDQYfFrtS8uSTxqi6:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_4527bcab_1b11_47f4_bb5d_2a4f44ca9ca2:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_f17152eb_fc96_4e02_8e86_a583948eb70a:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_f17152eb_fc96_4e02_8e86_a583948eb70a:matrix.oculair.ca",
+    "roomId": "!0myE6jD1SjXSDHJdWJ:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_f17152eb_fc96_4e02_8e86_a583948eb70a:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_c023a8d3_9ba3_4c62_9fb7_f039b4c455e0:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_c023a8d3_9ba3_4c62_9fb7_f039b4c455e0:matrix.oculair.ca",
+    "roomId": "!0myE6jD1SjXSDHJdWJ:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_c023a8d3_9ba3_4c62_9fb7_f039b4c455e0:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_0a2b4b2e_c578_4b04_93d6_00f0e1639507:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_0a2b4b2e_c578_4b04_93d6_00f0e1639507:matrix.oculair.ca",
+    "roomId": "!46Fcaj3ILEJILsXxaR:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_0a2b4b2e_c578_4b04_93d6_00f0e1639507:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_750cab6e_2b66_456a_8fe1_7c8ea8350149:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_750cab6e_2b66_456a_8fe1_7c8ea8350149:matrix.oculair.ca",
+    "roomId": "!sxXRc6cj3x37Y5u3Wl:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_750cab6e_2b66_456a_8fe1_7c8ea8350149:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_0b634ec8_f7bb_465a_b67c_a6c65194171e:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_0b634ec8_f7bb_465a_b67c_a6c65194171e:matrix.oculair.ca",
+    "roomId": "!0myE6jD1SjXSDHJdWJ:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_0b634ec8_f7bb_465a_b67c_a6c65194171e:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@admin:matrix.oculair.ca<->@agent_fe8a9291_b49a_4fc1_94c3_1a23b86b6108:matrix.oculair.ca": {
+    "key": "@admin:matrix.oculair.ca<->@agent_fe8a9291_b49a_4fc1_94c3_1a23b86b6108:matrix.oculair.ca",
+    "roomId": "!81HSgbYxQUhxEj297G:matrix.oculair.ca",
+    "participants": [
+      "@admin:matrix.oculair.ca",
+      "@agent_fe8a9291_b49a_4fc1_94c3_1a23b86b6108:matrix.oculair.ca"
+    ],
+    "createdAt": 0,
+    "lastActivityAt": 0
+  },
+  "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca<->@oc_matrix_synapse_deployment:matrix.oculair.ca": {
+    "key": "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca<->@oc_matrix_synapse_deployment:matrix.oculair.ca",
+    "roomId": "!cCi0dBb0fB58rfGALI:matrix.oculair.ca",
+    "participants": [
+      "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca",
+      "@oc_matrix_synapse_deployment:matrix.oculair.ca"
+    ],
+    "createdAt": 1764490813866,
+    "lastActivityAt": 1764732459546
+  },
+  "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca<->@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca": {
+    "key": "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca<->@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca",
+    "roomId": "!LcfZYrzjQ3BbCrXkRw:matrix.oculair.ca",
+    "participants": [
+      "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca",
+      "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca"
+    ],
+    "createdAt": 1764564559320,
+    "lastActivityAt": 1764564559331
+  },
+  "@meridian:matrix.oculair.ca<->@oc_matrix_synapse_deployment:matrix.oculair.ca": {
+    "key": "@meridian:matrix.oculair.ca<->@oc_matrix_synapse_deployment:matrix.oculair.ca",
+    "roomId": "!zTQ6qF1tZfpetEuilN:matrix.oculair.ca",
+    "participants": [
+      "@meridian:matrix.oculair.ca",
+      "@oc_matrix_synapse_deployment:matrix.oculair.ca"
+    ],
+    "createdAt": 1764742560926,
+    "lastActivityAt": 1764746918404
+  },
+  "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca<->@meridian:matrix.oculair.ca": {
+    "key": "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca<->@meridian:matrix.oculair.ca",
+    "roomId": "!56Sqn0Wf8QmT9l3mmT:matrix.oculair.ca",
+    "participants": [
+      "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca",
+      "@meridian:matrix.oculair.ca"
+    ],
+    "createdAt": 1764892090391,
+    "lastActivityAt": 1764892090452
+  }
+}

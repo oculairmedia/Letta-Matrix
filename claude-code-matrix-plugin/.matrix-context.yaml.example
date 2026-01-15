@@ -1,0 +1,8 @@
+homeserver: https://matrix.oculair.ca
+accessToken: ${MATRIX_ACCESS_TOKEN}
+userId: "@opencode:matrix.oculair.ca"
+rooms:
+  - "!MtuqLUCwvKypRU6gll:matrix.oculair.ca"
+filters:
+  msgtype: m.text
+  senders: []

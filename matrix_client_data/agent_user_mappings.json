@@ -549,13 +549,13 @@
     "agent_id": "agent-597b5756-2915-4560-ba6b-91005f085166",
     "agent_name": "Meridian",
     "matrix_user_id": "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca",
-    "matrix_password": "password",
     "created": true,
     "room_id": "!O8cbkBGCMB8Ujlaret:matrix.oculair.ca",
     "room_created": true,
     "invitation_status": {
       "@letta:matrix.oculair.ca": "joined",
-      "@admin:matrix.oculair.ca": "joined"
+      "@admin:matrix.oculair.ca": "joined",
+      "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca": "invited"
     }
   },
   "agent-0f68f210-bdec-4fa0-a8de-939c3944f477": {

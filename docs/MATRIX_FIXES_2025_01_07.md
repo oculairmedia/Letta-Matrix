@@ -1,7 +1,7 @@
-# Matrix Synapse Deployment Fixes - January 7, 2025
+# Matrix Tuwunel Deployment Fixes - January 7, 2025
 
 ## Overview
-This document details the fixes applied to resolve issues with the Matrix synapse deployment where agents were not responding to messages and the system was stuck in invitation retry loops.
+This document details the fixes applied to resolve issues with the Matrix Tuwunel deployment where agents were not responding to messages and the system was stuck in invitation retry loops.
 
 ## Issues Identified
 

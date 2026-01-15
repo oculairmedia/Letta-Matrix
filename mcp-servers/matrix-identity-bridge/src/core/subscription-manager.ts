@@ -48,7 +48,7 @@ export class SubscriptionManager {
     rooms?: string[],
     eventTypes?: string[]
   ): Promise<Subscription> {
-    const identity = this.storage.getIdentity(identityId);
+    const identity = await this.storage.getIdentityAsync(identityId);
     if (!identity) {
       throw new Error(`Identity not found: ${identityId}`);
     }

@@ -44,6 +44,12 @@ jobs:
           mkdir -p $MATRIX_DATA_DIR
           pytest tests/unit/ -v --cov=src.core.agent_user_manager --cov-report=xml
 
+      - name: Run OpenCode bridge tests
+        run: |
+          cd opencode-bridge
+          npm install
+          npm run test
+
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         with:

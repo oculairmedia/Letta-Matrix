@@ -57,10 +57,8 @@ export class IdentityManager {
    * Otherwise, provision new Matrix user
    */
   async getOrCreateIdentity(request: IdentityProvisionRequest): Promise<MatrixIdentity> {
-    // Check if identity already exists
-    const existing = this.storage.getIdentity(request.id);
+    const existing = await this.storage.getIdentityAsync(request.id);
     if (existing) {
-      // Update last used timestamp
       existing.lastUsedAt = Date.now();
       await this.storage.saveIdentity(existing);
       console.log('[IdentityManager] Using existing identity:', request.id);
@@ -204,7 +202,7 @@ export class IdentityManager {
             return { name: localpart, displayname: displayName };
           } catch (resetErr) {
             // Last resort: Check if user exists in identities.json with a stored password
-            const allIdentities = this.storage.getAllIdentities();
+            const allIdentities = await this.storage.getAllIdentitiesAsync();
             const existingIdentity = allIdentities.find(i => i.mxid === `@${localpart}:${this.extractDomain()}`);
             if (existingIdentity?.password) {
               console.log('[IdentityManager] Found stored password, trying login');
@@ -347,24 +345,21 @@ export class IdentityManager {
    * Get identity by ID
    */
   async getIdentity(id: string): Promise<MatrixIdentity | undefined> {
-    return this.storage.getIdentity(id);
+    return this.storage.getIdentityAsync(id);
   }
 
   /**
    * Get identity by MXID
    */
   async getIdentityByMXID(mxid: string): Promise<MatrixIdentity | undefined> {
-    return this.storage.getIdentityByMXID(mxid);
+    return this.storage.getIdentityByMXIDAsync(mxid);
   }
 
   /**
    * List all identities
    */
   async listIdentities(type?: 'letta' | 'opencode' | 'custom'): Promise<MatrixIdentity[]> {
-    const all = this.storage.getAllIdentities();
-    if (type) {
-      return all.filter(i => i.type === type);
-    }
+    const all = await this.storage.getAllIdentitiesAsync(type);
     return all;
   }
 
@@ -376,14 +371,13 @@ export class IdentityManager {
     displayName?: string,
     avatarUrl?: string
   ): Promise<MatrixIdentity> {
-    const identity = this.storage.getIdentity(id);
+    const identity = await this.storage.getIdentityAsync(id);
     if (!identity) {
       throw new Error(`Identity not found: ${id}`);
     }
 
-    // Update via Synapse Admin API
     const url = `${this.homeserverUrl}/_synapse/admin/v2/users/${identity.mxid}`;
-    
+
     const body: Partial<SynapseUserCreateRequest> = {};
     if (displayName !== undefined) {
       body.displayname = displayName;
@@ -404,11 +398,49 @@ export class IdentityManager {
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to update user: ${response.status} ${error}`);
+      const errorText = await response.text();
+      const shouldFallback = response.status === 404 || errorText.includes('M_UNRECOGNIZED');
+
+      if (shouldFallback && identity.accessToken) {
+        const profileHeaders = {
+          'Authorization': `Bearer ${identity.accessToken}`,
+          'Content-Type': 'application/json'
+        };
+
+        if (displayName !== undefined) {
+          const displayResponse = await fetch(
+            `${this.homeserverUrl}/_matrix/client/v3/profile/${identity.mxid}/displayname`,
+            {
+              method: 'PUT',
+              headers: profileHeaders,
+              body: JSON.stringify({ displayname: displayName })
+            }
+          );
+          if (!displayResponse.ok) {
+            const displayError = await displayResponse.text();
+            throw new Error(`Failed to update display name: ${displayResponse.status} ${displayError}`);
+          }
+        }
+
+        if (avatarUrl !== undefined) {
+          const avatarResponse = await fetch(
+            `${this.homeserverUrl}/_matrix/client/v3/profile/${identity.mxid}/avatar_url`,
+            {
+              method: 'PUT',
+              headers: profileHeaders,
+              body: JSON.stringify({ avatar_url: avatarUrl })
+            }
+          );
+          if (!avatarResponse.ok) {
+            const avatarError = await avatarResponse.text();
+            throw new Error(`Failed to update avatar: ${avatarResponse.status} ${avatarError}`);
+          }
+        }
+      } else {
+        throw new Error(`Failed to update user: ${response.status} ${errorText}`);
+      }
     }
 
-    // Save updated identity
     await this.storage.saveIdentity(identity);
 
     console.log('[IdentityManager] Updated identity:', id);
@@ -419,7 +451,7 @@ export class IdentityManager {
    * Delete identity (deactivate Matrix user)
    */
   async deleteIdentity(id: string): Promise<boolean> {
-    const identity = this.storage.getIdentity(id);
+    const identity = await this.storage.getIdentityAsync(id);
     if (!identity) {
       return false;
     }

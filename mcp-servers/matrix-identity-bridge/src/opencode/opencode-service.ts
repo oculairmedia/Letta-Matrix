@@ -80,24 +80,31 @@ export class OpenCodeService {
     sessionId?: string
   ): Promise<OpenCodeSession> {
     const identityId = this.deriveIdentityId(directory);
-    
-    // Check if session already exists
+
     const existingSession = this.sessions.get(directory);
     if (existingSession) {
       existingSession.lastActivityAt = Date.now();
       return existingSession;
     }
 
-    // Get or create Matrix identity
     const localpart = this.deriveLocalpart(directory);
     const displayName = displayNameOverride || this.deriveDisplayName(directory);
-    
+
     const identity = await this.identityManager.getOrCreateIdentity({
       id: identityId,
       localpart,
       displayName,
       type: 'opencode'
     });
+
+    if (displayNameOverride && identity.displayName !== displayNameOverride) {
+      try {
+        await this.identityManager.updateIdentity(identity.id, displayNameOverride);
+        identity.displayName = displayNameOverride;
+      } catch (error) {
+        console.warn('[OpenCodeService] Failed to update identity display name:', error);
+      }
+    }
 
     // Create session
     const session: OpenCodeSession = {
@@ -143,19 +150,25 @@ export class OpenCodeService {
   /**
    * Get identity for a directory (creates if needed)
    */
-  async getOrCreateIdentity(directory: string): Promise<MatrixIdentity> {
+  async getOrCreateIdentity(directory: string, displayNameOverride?: string): Promise<MatrixIdentity> {
     const identityId = this.deriveIdentityId(directory);
-    
-    // Check if identity already exists
-    const existing = this.storage.getIdentity(identityId);
+
+    const existing = await this.storage.getIdentityAsync(identityId);
     if (existing) {
+      if (displayNameOverride && existing.displayName !== displayNameOverride) {
+        try {
+          await this.identityManager.updateIdentity(existing.id, displayNameOverride);
+          existing.displayName = displayNameOverride;
+        } catch (error) {
+          console.warn('[OpenCodeService] Failed to update identity display name:', error);
+        }
+      }
       return existing;
     }
 
-    // Create new identity
     const localpart = this.deriveLocalpart(directory);
-    const displayName = this.deriveDisplayName(directory);
-    
+    const displayName = displayNameOverride || this.deriveDisplayName(directory);
+
     return await this.identityManager.getOrCreateIdentity({
       id: identityId,
       localpart,
@@ -175,7 +188,7 @@ export class OpenCodeService {
     const defaultDisplayName = 'OpenCode';
     
     // Check if default identity already exists
-    const existing = this.storage.getIdentity(defaultId);
+    const existing = await this.storage.getIdentityAsync(defaultId);
     if (existing) {
       console.log('[OpenCodeService] Using existing default identity:', existing.mxid);
       return existing;
@@ -197,17 +210,17 @@ export class OpenCodeService {
   /**
    * Check if a directory has a Matrix identity
    */
-  hasIdentity(directory: string): boolean {
+  async hasIdentity(directory: string): Promise<boolean> {
     const identityId = this.deriveIdentityId(directory);
-    return !!this.storage.getIdentity(identityId);
+    return !!await this.storage.getIdentityAsync(identityId);
   }
 
   /**
    * Get identity by directory
    */
-  getIdentity(directory: string): MatrixIdentity | undefined {
+  async getIdentity(directory: string): Promise<MatrixIdentity | undefined> {
     const identityId = this.deriveIdentityId(directory);
-    return this.storage.getIdentity(identityId);
+    return this.storage.getIdentityAsync(identityId);
   }
 
   /**
@@ -247,13 +260,13 @@ export class OpenCodeService {
   /**
    * Get status summary
    */
-  getStatus(): {
+  async getStatus(): Promise<{
     totalIdentities: number;
     activeSessions: number;
     sessions: OpenCodeSession[];
-  } {
+  }> {
     const sessions = this.getAllSessions();
-    const identities = this.storage.getAllIdentities().filter(i => i.type === 'opencode');
+    const identities = await this.storage.getAllIdentitiesAsync('opencode');
 
     return {
       totalIdentities: identities.length,

@@ -74,12 +74,12 @@ export function requireParam<T>(value: T | undefined, name: string, hint?: strin
 /**
  * Helper to require an identity with helpful error
  */
-export function requireIdentity(identity_id: string | undefined) {
+export async function requireIdentity(identity_id: string | undefined) {
   const ctx = getToolContext();
   const id = requireParam(identity_id, 'identity_id');
-  const identity = ctx.storage.getIdentity(id);
+  const identity = await ctx.storage.getIdentityAsync(id);
   if (!identity) {
-    const available = ctx.storage.getAllIdentities().slice(0, 5).map((i: { id: string }) => i.id);
+    const available = (await ctx.storage.getAllIdentitiesAsync()).slice(0, 5).map((i: { id: string }) => i.id);
     const hint = available.length > 0 
       ? `Available identities: ${available.join(', ')}${available.length >= 5 ? '...' : ''}`
       : 'No identities found. Use identity_create to create one.';

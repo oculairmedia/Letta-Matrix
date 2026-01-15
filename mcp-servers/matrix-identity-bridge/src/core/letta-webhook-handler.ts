@@ -468,7 +468,7 @@ export class LettaWebhookHandler {
 
     // Fallback to finding any client in the room
     if (!client) {
-      const identities = this.storage.getAllIdentities();
+      const identities = await this.storage.getAllIdentitiesAsync();
       for (const identity of identities) {
         const testClient = await this.clientPool.getClientById(identity.id);
         if (testClient) {
@@ -551,7 +551,7 @@ export class LettaWebhookHandler {
 
     // Fallback to finding any client in the room
     if (!client) {
-      const identities = this.storage.getAllIdentities();
+      const identities = await this.storage.getAllIdentitiesAsync();
       for (const identity of identities) {
         const testClient = await this.clientPool.getClientById(identity.id);
         if (testClient) {

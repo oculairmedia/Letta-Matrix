@@ -122,9 +122,9 @@ export function requireParam<T>(value: T | undefined, name: string): T {
 }
 
 // Helper to require an identity
-export function requireIdentity(ctx: OperationContext, identity_id: string | undefined) {
+export async function requireIdentity(ctx: OperationContext, identity_id: string | undefined) {
   const id = requireParam(identity_id, 'identity_id');
-  const identity = ctx.storage.getIdentity(id);
+  const identity = await ctx.storage.getIdentityAsync(id);
   if (!identity) {
     throw new McpError(ErrorCode.InvalidRequest, `Identity not found: ${id}`);
   }

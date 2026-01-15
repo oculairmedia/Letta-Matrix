@@ -96,7 +96,7 @@ Matrix names are sanitized for Agent Mail compatibility:
 
 | Matrix Name | Agent Mail Name |
 |-------------|-----------------|
-| `Huly - Matrix Synapse Deployment` | `HulyMatrixSynapse` |
+| `Huly - Matrix Tuwunel Deployment` | `HulyMatrixTuwunel` |
 | `BMO` | `BMO` |
 | `Meridian` | `Meridian` |
 | `GraphitiExplorer` | `GraphitiExplorer` |
@@ -117,8 +117,8 @@ Rules:
   "agent-870d3dfb-319f-4c52-91f1-72ab46d944a7": {
     "matrix_user_id": "@agent_870d3dfb_...:matrix.oculair.ca",
     "matrix_room_id": "!MtuqLUCwvKypRU6gll:matrix.oculair.ca",
-    "matrix_name": "Huly - Matrix Synapse Deployment",
-    "agent_mail_name": "HulyMatrixSynapse",
+    "matrix_name": "Huly - Matrix Tuwunel Deployment",
+    "agent_mail_name": "HulyMatrixTuwunel",
     "agent_mail_registered": false,
     "last_sync": "2025-12-24T18:00:00Z"
   }

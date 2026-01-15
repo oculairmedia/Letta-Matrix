@@ -25,7 +25,7 @@ import {
 async function resolveIdentity(args: MatrixMessagingArgs, ctx: OperationContext) {
   // If identity_id is provided directly, use it
   if (args.identity_id) {
-    const identity = ctx.storage.getIdentity(args.identity_id);
+    const identity = await ctx.storage.getIdentityAsync(args.identity_id);
     if (!identity) {
       throw new McpError(ErrorCode.InvalidRequest, `Identity not found: ${args.identity_id}`);
     }
@@ -56,7 +56,7 @@ async function resolveIdentity(args: MatrixMessagingArgs, ctx: OperationContext)
   // If we have an agent_id (from args or context), auto-derive the identity
   if (agentId && ctx.lettaService) {
     const identityId = await ctx.lettaService.getOrCreateAgentIdentity(agentId);
-    const identity = ctx.storage.getIdentity(identityId);
+    const identity = await ctx.storage.getIdentityAsync(identityId);
     if (!identity) {
       throw new McpError(ErrorCode.InternalError, `Failed to get identity for agent: ${agentId}`);
     }
@@ -141,7 +141,7 @@ export const read: OperationHandler = async (args, ctx) => {
 };
 
 export const react: OperationHandler = async (args, ctx) => {
-  const identity = requireIdentity(ctx, args.identity_id);
+  const identity = await requireIdentity(ctx, args.identity_id);
   const room_id = requireParam(args.room_id, 'room_id');
   const event_id = requireParam(args.event_id, 'event_id');
   const emoji = requireParam(args.emoji, 'emoji');
@@ -159,7 +159,7 @@ export const react: OperationHandler = async (args, ctx) => {
 };
 
 export const edit: OperationHandler = async (args, ctx) => {
-  const identity = requireIdentity(ctx, args.identity_id);
+  const identity = await requireIdentity(ctx, args.identity_id);
   const room_id = requireParam(args.room_id, 'room_id');
   const event_id = requireParam(args.event_id, 'event_id');
   const new_content = requireParam(args.new_content, 'new_content');
@@ -176,7 +176,7 @@ export const edit: OperationHandler = async (args, ctx) => {
 };
 
 export const typing: OperationHandler = async (args, ctx) => {
-  const identity = requireIdentity(ctx, args.identity_id);
+  const identity = await requireIdentity(ctx, args.identity_id);
   const room_id = requireParam(args.room_id, 'room_id');
   const typingState = requireParam(args.typing, 'typing');
 

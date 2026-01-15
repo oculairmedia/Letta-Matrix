@@ -1,0 +1,18 @@
+[Unit]
+Description=Matrix to real-a2a P2P Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/stacks/matrix-synapse-deployment/real-a2a-bridge
+ExecStart=/root/.bun/bin/bun run index.ts
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+Environment="NODE_ENV=production"
+
+[Install]
+WantedBy=multi-user.target

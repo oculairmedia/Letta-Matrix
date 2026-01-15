@@ -21,13 +21,13 @@ def sanitize_for_agent_mail(matrix_name: str) -> str:
     
     Strategy:
     1. For simple names (no special chars), keep as-is: "BMO" → "BMO"
-    2. For complex names, use CamelCase: "Huly - Matrix Synapse" → "HulyMatrixSynapse"
+    2. For complex names, use CamelCase: "Huly - Matrix Tuwunel" → "HulyMatrixTuwunel"
     
     Examples:
         "BMO" → "BMO"
         "Meridian" → "Meridian"
         "GraphitiExplorer" → "GraphitiExplorer"
-        "Huly - Matrix Synapse Deployment" → "HulyMatrixSynapse"
+        "Huly - Matrix Tuwunel Deployment" → "HulyMatrixTuwunel"
         "letta-cli-agent" → "LettaCliAgent"
     """
     # Check if name is simple (alphanumeric only)

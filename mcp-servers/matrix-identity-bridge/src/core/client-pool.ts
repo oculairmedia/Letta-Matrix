@@ -49,7 +49,7 @@ export class MatrixClientPool {
    * Get client by identity ID
    */
   async getClientById(identityId: string): Promise<MatrixClient | undefined> {
-    const identity = this.storage.getIdentity(identityId);
+    const identity = await this.storage.getIdentityAsync(identityId);
     if (!identity) {
       return undefined;
     }
@@ -141,7 +141,7 @@ export class MatrixClientPool {
    */
   async restartClient(identityId: string): Promise<MatrixClient | undefined> {
     await this.removeClient(identityId);
-    const identity = this.storage.getIdentity(identityId);
+    const identity = await this.storage.getIdentityAsync(identityId);
     if (!identity) {
       return undefined;
     }

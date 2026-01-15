@@ -154,8 +154,8 @@ export class RoomManager {
       this.getRoomMembers(client, roomId)
     ]);
 
-    const identity = this.storage.getIdentity(identityId);
-    const isDirect = identity 
+    const identity = await this.storage.getIdentityAsync(identityId);
+    const isDirect = identity
       ? this.storage.getDMRoomsForUser(identity.mxid).some(dm => dm.roomId === roomId)
       : false;
 

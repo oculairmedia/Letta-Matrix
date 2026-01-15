@@ -20,7 +20,7 @@ export const letta_send: OperationHandler = async (args, ctx) => {
   const message = requireParam(args.message, 'message');
 
   const identityId = await letta.getOrCreateAgentIdentity(agent_id);
-  const identity = ctx.storage.getIdentity(identityId);
+  const identity = await ctx.storage.getIdentityAsync(identityId);
   if (!identity) {
     throw new McpError(ErrorCode.InternalError, `Failed to get identity for agent: ${agent_id}`);
   }
@@ -60,7 +60,7 @@ export const letta_lookup: OperationHandler = async (args, ctx) => {
   }
 
   const identityId = IdentityManager.generateLettaId(agent_id);
-  const identity = ctx.storage.getIdentity(identityId);
+  const identity = await ctx.storage.getIdentityAsync(identityId);
 
   return result({
     agent: {
@@ -82,18 +82,20 @@ export const letta_list: OperationHandler = async (args, ctx) => {
   const letta = requireLetta(ctx);
   const agents = await letta.listAgents();
 
-  const agentsWithIdentities = agents.map(agent => {
-    const identityId = IdentityManager.generateLettaId(agent.id);
-    const identity = ctx.storage.getIdentity(identityId);
+  const agentsWithIdentities = await Promise.all(
+    agents.map(async agent => {
+      const identityId = IdentityManager.generateLettaId(agent.id);
+      const identity = await ctx.storage.getIdentityAsync(identityId);
 
-    return {
-      agent_id: agent.id,
-      name: agent.name,
-      description: agent.description,
-      model: agent.model,
-      matrix_identity: identity ? { identity_id: identityId, mxid: identity.mxid } : null
-    };
-  });
+      return {
+        agent_id: agent.id,
+        name: agent.name,
+        description: agent.description,
+        model: agent.model,
+        matrix_identity: identity ? { identity_id: identityId, mxid: identity.mxid } : null
+      };
+    })
+  );
 
   return result({ count: agents.length, agents: agentsWithIdentities });
 };
@@ -103,7 +105,7 @@ export const letta_identity: OperationHandler = async (args, ctx) => {
   const agent_id = requireParam(args.agent_id, 'agent_id');
 
   const identityId = await letta.getOrCreateAgentIdentity(agent_id);
-  const identity = ctx.storage.getIdentity(identityId);
+  const identity = await ctx.storage.getIdentityAsync(identityId);
   if (!identity) {
     throw new McpError(ErrorCode.InternalError, `Failed to create identity for agent: ${agent_id}`);
   }

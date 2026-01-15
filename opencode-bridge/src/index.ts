@@ -14,8 +14,7 @@ import "dotenv/config";
 import * as sdk from "matrix-js-sdk";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { createServer, IncomingMessage, ServerResponse } from "http";
-import { readFileSync, existsSync } from "fs";
-
+import { fetchAgentMappings } from "./agent-mappings.js";
 // Types
 interface OpenCodeRegistration {
   id: string;
@@ -44,7 +43,9 @@ const config = {
   },
   bridge: {
     port: parseInt(process.env.BRIDGE_PORT || "3200"),
-    agentMappingsPath: process.env.AGENT_MAPPINGS_PATH || "",
+  },
+  matrixApi: {
+    baseUrl: process.env.MATRIX_API_URL || "http://127.0.0.1:8000",
   },
   opencode: {
     defaultHost: process.env.OPENCODE_DEFAULT_HOST || "127.0.0.1",
@@ -180,21 +181,14 @@ async function findOrCreateRegistrationForMxid(
 }
 
 // Load agent mappings
-function loadAgentMappings(): void {
-  if (
-    config.bridge.agentMappingsPath &&
-    existsSync(config.bridge.agentMappingsPath)
-  ) {
-    try {
-      agentMappings = JSON.parse(
-        readFileSync(config.bridge.agentMappingsPath, "utf-8"),
-      );
-      console.log(
-        `[Bridge] Loaded ${Object.keys(agentMappings).length} agent mappings`,
-      );
-    } catch (e) {
-      console.error("[Bridge] Failed to load agent mappings:", e);
-    }
+async function loadAgentMappings(): Promise<void> {
+  try {
+    agentMappings = await fetchAgentMappings(config.matrixApi.baseUrl, fetch);
+    console.log(
+      `[Bridge] Loaded ${Object.keys(agentMappings).length} agent mappings`,
+    );
+  } catch (e) {
+    console.error("[Bridge] Failed to load agent mappings:", e);
   }
 }
 
@@ -788,6 +782,7 @@ async function handleRequest(
 
   // List available rooms (from agent mappings)
   if (url.pathname === "/rooms" && req.method === "GET") {
+    await loadAgentMappings();
     const rooms = Object.values(agentMappings).map((m) => ({
       room_id: m.room_id,
       agent_name: m.agent_name,
@@ -887,7 +882,7 @@ async function main(): Promise<void> {
   console.log("[Bridge] Starting OpenCode Matrix Bridge...");
 
   // Load agent mappings
-  loadAgentMappings();
+  await loadAgentMappings();
 
   // Start HTTP server
   const server = createServer(handleRequest);

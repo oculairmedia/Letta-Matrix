@@ -43,7 +43,7 @@ export const room_list: OperationHandler = async (args, ctx) => {
 };
 
 export const room_create: OperationHandler = async (args, ctx) => {
-  const identity = requireIdentity(ctx, args.identity_id);
+  const identity = await requireIdentity(ctx, args.identity_id);
   const name = requireParam(args.name, 'name');
 
   const client = await ctx.clientPool.getClient(identity);
@@ -65,7 +65,7 @@ export const room_create: OperationHandler = async (args, ctx) => {
 };
 
 export const room_invite: OperationHandler = async (args, ctx) => {
-  const identity = requireIdentity(ctx, args.identity_id);
+  const identity = await requireIdentity(ctx, args.identity_id);
   const room_id = requireParam(args.room_id, 'room_id');
   const user_mxid = requireParam(args.user_mxid, 'user_mxid');
 
@@ -76,7 +76,7 @@ export const room_invite: OperationHandler = async (args, ctx) => {
 };
 
 export const room_search: OperationHandler = async (args, ctx) => {
-  const identity = requireIdentity(ctx, args.identity_id);
+  const identity = await requireIdentity(ctx, args.identity_id);
   const room_id = requireParam(args.room_id, 'room_id');
   const query = requireParam(args.query, 'query');
 

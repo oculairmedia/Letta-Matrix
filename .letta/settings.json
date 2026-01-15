@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(echo:*)",
+      "Edit(mcp-servers/matrix-identity-bridge/src/core/**)",
+      "Edit(mcp-servers/matrix-identity-bridge/src/**)",
+      "Bash(npm run build:*)",
+      "Edit(**)",
+      "Bash(cd /opt/stacks/matrix-synapse-deployment && docker compose up -d matrix-messaging-mcp 2>&1)",
+      "Bash(head:*)",
+      "Bash(# Check webhook API spec\ncurl -s \"http://192.168.50.90:8283/openapi.json\" -H \"Authorization: Bearer lettaSecurePass123\" 2>/dev/null | jq '.paths[\"/v1/agents/{agent_id}/webhook\"]' 2>/dev/null)",
+      "Bash(# Get webhook config schema\ncurl -s \"http://192.168.50.90:8283/openapi.json\" -H \"Authorization: Bearer lettaSecurePass123\" 2>/dev/null | jq '.components.schemas.AgentWebhookConfigUpdate')",
+      "Bash(# Get webhook event types\ncurl -s \"http://192.168.50.90:8283/openapi.json\" -H \"Authorization: Bearer lettaSecurePass123\" 2>/dev/null | jq '.components.schemas.WebhookEventType')",
+      "Bash(# Check Meridian's current webhook config\ncurl -s \"http://192.168.50.90:8283/v1/agents/agent-597b5756-2915-4560-ba6b-91005f085166/webhook\" \\\n  -H \"Authorization: Bearer lettaSecurePass123\" 2>/dev/null | jq)",
+      "Bash(wc:*)",
+      "Bash(cd /opt/stacks/matrix-synapse-deployment && \\\nsource .env 2>/dev/null && \\\n./scripts/register-webhooks.sh 2>&1)",
+      "Bash(# Check if there's a way to determine if an agent has webhooks enabled\ncurl -s \"http://192.168.50.90:8283/v1/agents/agent-597b5756-2915-4560-ba6b-91005f085166/webhook\" \\\n  -H \"Authorization: Bearer lettaSecurePass123\" | jq '{url: .url, enabled: .enabled}')",
+      "Bash(tail:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

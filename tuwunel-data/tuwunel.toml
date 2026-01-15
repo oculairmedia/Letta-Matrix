@@ -1,0 +1,6 @@
+# Tuwunel Configuration
+# Appservices are registered via admin room commands, not in this file.
+# To register/update appservices, use: !admin appservices register
+
+[global]
+# Basic settings are configured via environment variables

@@ -45,7 +45,7 @@ bd sync               # Sync with git
 
 ## Huly Integration
 - **Project Code**: `MXSYN`
-- **Project Name**: Matrix Synapse Deployment
+- **Project Name**: Matrix Tuwunel Deployment
 - **Letta Agent ID**: `agent-870d3dfb-319f-4c52-91f1-72ab46d944a7`
 
 ## Project Agent Role

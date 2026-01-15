@@ -101,8 +101,15 @@ export async function loadMatrixConfig(worktree: string): Promise<MatrixConfig> 
   const projectRooms = normalizeProjectRooms(parsed.projectRooms);
   const filters = normalizeFilters(parsed.filters);
 
+  const extraRooms: string[] = [];
+  if (Array.isArray(parsed.extraRooms)) {
+    for (const room of parsed.extraRooms) {
+      extraRooms.push(ensureString(room, "extraRooms[]"));
+    }
+  }
+
   const subscribeRooms = Array.from(
-    new Set([defaultRoomId, ...Object.values(projectRooms)])
+    new Set([defaultRoomId, ...Object.values(projectRooms), ...extraRooms])
   );
 
   const roomLabels: Record<string, string> = {

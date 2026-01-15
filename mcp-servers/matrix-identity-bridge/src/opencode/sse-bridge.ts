@@ -280,7 +280,7 @@ export class OpenCodeSSEBridge extends EventEmitter {
     }
 
     try {
-      const identity = this.storage.getIdentity(session.identityId);
+      const identity = await this.storage.getIdentityAsync(session.identityId);
       if (!identity) {
         console.error('[SSEBridge] Identity not found:', session.identityId);
         return;
@@ -311,7 +311,7 @@ export class OpenCodeSSEBridge extends EventEmitter {
    */
   private async subscribeMatrix(session: BridgeSession): Promise<void> {
     try {
-      const identity = this.storage.getIdentity(session.identityId);
+      const identity = await this.storage.getIdentityAsync(session.identityId);
       if (!identity) {
         return;
       }
@@ -337,6 +337,14 @@ export class OpenCodeSSEBridge extends EventEmitter {
 
         const content = event.content?.body;
         if (content) {
+          if (session.targetRoomId) {
+            const localpart = session.mxid.split(':')[0];
+            const mentionMatches = [session.mxid, localpart].some((mention) => content.includes(mention));
+            if (!mentionMatches) {
+              return;
+            }
+          }
+
           await this.injectToOpenCode(session, event.sender, content);
         }
       });

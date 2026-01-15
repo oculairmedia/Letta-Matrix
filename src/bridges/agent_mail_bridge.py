@@ -164,7 +164,7 @@ class AgentMailBridge:
         - Max 3 words (keep it short)
         
         Examples:
-            "Huly - Matrix Synapse Deployment" → "HulyMatrixSynapse"
+            "Huly - Matrix Tuwunel Deployment" → "HulyMatrixTuwunel"
             "BMO" → "BMO"
             "Meridian" → "Meridian"
             "GraphitiExplorer" → "GraphitiExplorer"

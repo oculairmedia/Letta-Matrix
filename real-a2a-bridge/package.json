@@ -1,0 +1,16 @@
+{
+  "name": "real-a2a-bridge",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "matrix-js-sdk": "^40.0.0",
+    "yaml": "^2.8.2"
+  }
+}

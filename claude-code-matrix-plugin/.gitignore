@@ -1,0 +1,5 @@
+node_modules/
+.DS_Store
+.env
+.claude/matrix-context.yaml
+.claude/matrix-context-state.json
