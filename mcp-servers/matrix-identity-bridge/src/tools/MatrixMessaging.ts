@@ -4,14 +4,14 @@
  * Single tool with 26 operations via the 'operation' parameter.
  */
 
-import { MCPTool } from 'mcp-framework';
 import { z } from 'zod';
-import fs from 'fs/promises';
-import path from 'path';
+import type { InferSchema, ToolMetadata } from 'xmcp';
+import { headers } from 'xmcp/headers';
 import { getToolContext, result, requireParam, requireIdentity, requireLetta, ToolContext } from '../core/tool-context.js';
 import { IdentityManager } from '../core/identity-manager.js';
-import { AgentMappingStore } from '../core/agent-mapping-store.js';
-import type { MatrixIdentity } from '../types/index.js';
+import { getCallerContext, resolveCallerIdentity, resolveCallerIdentityId, type CallerContext } from '../core/caller-context.js';
+import { getOrCreateAgentRoom } from '../core/agent-rooms.js';
+import { autoRegisterWithBridge } from '../core/opencode-bridge.js';
 
 // All supported operations
 const operations = [
@@ -23,26 +23,8 @@ const operations = [
   'opencode_connect', 'opencode_send', 'opencode_notify', 'opencode_status'
 ] as const;
 
-type CallerContext = {
-  directory?: string;
-  name?: string;
-  source?: 'input' | 'opencode' | 'claude-code' | 'pwd' | 'unknown';
-  sourceOverride?: 'opencode' | 'claude-code';
-};
 
-type AgentMapping = {
-  agent_id: string;
-  agent_name?: string;
-  matrix_user_id?: string;
-  matrix_password?: string;
-  created?: boolean;
-  room_id?: string;
-  room_created?: boolean;
-  matrix_room_id?: string;
-  invitation_status?: Record<string, string>;
-};
-
-const schema = z.object({
+export const schema = {
   operation: z.enum(operations).describe(
     'The operation to perform. Common operations: ' +
     'send (send message to user/room), ' +
@@ -140,13 +122,13 @@ const schema = z.object({
   __injected_agent_id: z.string().optional().describe(
     'Internal: Agent ID injected by proxy from X-Agent-Id header. DO NOT SET MANUALLY.'
   )
-});
+};
 
-type Input = z.infer<typeof schema>;
+export type Input = InferSchema<typeof schema>;
 
-class MatrixMessaging extends MCPTool<typeof schema> {
-  name = 'matrix_messaging';
-  description = `Matrix messaging tool - talk to AI agents and send messages.
+export const metadata: ToolMetadata = {
+  name: 'matrix_messaging',
+  description: `Matrix messaging tool - talk to AI agents and send messages.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ★ EASIEST WAY TO TALK TO AN AGENT ★
@@ -213,172 +195,29 @@ TIPS
 
 • Use agent NAMES: "Meridian" not "agent-597b5756-..."
 • Fuzzy matching: "meridian", "MERIDIAN", "Merid" all work
-• Responses are async - agent replies appear in Matrix`;
-  schema = schema;
+• Responses are async - agent replies appear in Matrix`,
+};
 
-  private async getCallerContext(input: Input): Promise<CallerContext> {
-    if (input.caller_directory) {
-      return {
-        directory: input.caller_directory,
-        name: input.caller_name,
-        source: 'input',
-        sourceOverride: input.caller_source
-      };
-    }
+const getHeaders = () => {
+  const requestHeaders = headers();
+  return requestHeaders || {};
+};
 
-    const envDir = process.env.OPENCODE_PROJECT_DIR;
-    if (envDir) {
-      console.log(`[MatrixMessaging] Using OPENCODE_PROJECT_DIR: ${envDir}`);
-      return {
-        directory: envDir,
-        name: input.caller_name,
-        source: 'opencode',
-        sourceOverride: input.caller_source
-      };
-    }
-
-    const telemetry = await this.readClaudeCodeTelemetry();
-    if (telemetry?.cwd) {
-      console.log(`[MatrixMessaging] Using Claude Code telemetry: ${telemetry.cwd}`);
-      return {
-        directory: telemetry.cwd,
-        name: input.caller_name || telemetry.display_name,
-        source: 'claude-code',
-        sourceOverride: input.caller_source
-      };
-    }
-
-    const pwd = process.env.PWD;
-    if (pwd) {
-      console.log(`[MatrixMessaging] Using PWD: ${pwd}`);
-      return {
-        directory: pwd,
-        name: input.caller_name,
-        source: 'pwd',
-        sourceOverride: input.caller_source
-      };
-    }
-
-    return { name: input.caller_name, source: 'unknown', sourceOverride: input.caller_source };
+const getInjectedAgentId = (): string | undefined => {
+  const requestHeaders = getHeaders();
+  const raw = requestHeaders["x-agent-id"];
+  if (Array.isArray(raw)) {
+    return raw[0];
   }
+  return raw;
+};
 
-  private async readClaudeCodeTelemetry(): Promise<{ cwd?: string; display_name?: string; updated_at?: number } | null> {
-    const candidates = [
-      process.env.MATRIX_MCP_TELEMETRY_PATH,
-      '/app/data/claude-code-telemetry.json',
-      '/opt/stacks/matrix-synapse-deployment/mcp-servers/matrix-identity-bridge/data/claude-code-telemetry.json'
-    ].filter((value): value is string => Boolean(value));
+const executeOperation = async (input: Input, ctx: ToolContext, callerContext: CallerContext): Promise<string> => {
+  const callerDirectory = callerContext.directory;
+  const callerName = callerContext.name;
+  const effectiveSource = callerContext.sourceOverride || callerContext.source;
 
-    for (const telemetryPath of candidates) {
-      try {
-        const raw = await fs.readFile(telemetryPath, 'utf-8');
-        const data = JSON.parse(raw) as { cwd?: string; display_name?: string; updated_at?: number };
-        if (!data || typeof data !== 'object') {
-          return null;
-        }
-        return data;
-      } catch (error: any) {
-        if (error?.code === 'ENOENT') {
-          continue;
-        }
-        console.error('[MatrixMessaging] Failed to read Claude Code telemetry:', error);
-        return null;
-      }
-    }
-
-    return null;
-  }
-
-  private async getOrCreateClaudeCodeIdentity(
-    ctx: ToolContext,
-    directory: string,
-    callerName?: string
-  ): Promise<MatrixIdentity> {
-    const encoded = Buffer.from(directory).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    const identityId = `claude_code_${encoded}`;
-    const projectName = directory.split('/').filter(Boolean).pop() || 'project';
-    const localpart = `cc_${projectName.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
-
-    return await ctx.identityManager.getOrCreateIdentity({
-      id: identityId,
-      localpart,
-      displayName: callerName || `Claude Code: ${projectName}`,
-      type: 'custom'
-    });
-  }
-
-  private async resolveCallerIdentity(
-    ctx: ToolContext,
-    callerDirectory: string | undefined,
-    callerName: string | undefined,
-    effectiveSource: CallerContext['source'],
-    identityId?: string
-  ): Promise<MatrixIdentity> {
-    if (identityId) {
-      const identity = await ctx.storage.getIdentityAsync(identityId);
-      if (!identity) {
-        throw new Error(`Identity not found: ${identityId}`);
-      }
-      return identity;
-    }
-
-    if (!callerDirectory) {
-      throw new Error('No caller directory available to derive identity');
-    }
-
-    if (effectiveSource === 'claude-code') {
-      return await this.getOrCreateClaudeCodeIdentity(ctx, callerDirectory, callerName);
-    }
-
-    return await ctx.openCodeService.getOrCreateIdentity(callerDirectory, callerName);
-  }
-
-  private async resolveCallerIdentityId(
-    ctx: ToolContext,
-    callerDirectory: string | undefined,
-    callerName: string | undefined,
-    effectiveSource: CallerContext['source'],
-    identityId?: string
-  ): Promise<string> {
-    const identity = await this.resolveCallerIdentity(
-      ctx,
-      callerDirectory,
-      callerName,
-      effectiveSource,
-      identityId
-    );
-    return identity.id;
-  }
-
-  async execute(input: Input): Promise<string> {
-    try {
-      const ctx = getToolContext();
-
-      const callerContext = await this.getCallerContext(input);
-
-      const effectiveSource = callerContext.sourceOverride || callerContext.source;
-      if (callerContext.directory && effectiveSource !== 'claude-code') {
-        await this.autoRegisterWithBridge(callerContext.directory, input.room_id);
-      }
-
-      return await this.executeOperation(input, ctx, callerContext);
-    } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(`[MatrixMessaging] Operation ${input.operation} failed: ${errMsg}`);
-      return result({
-        success: false,
-        error: errMsg,
-        operation: input.operation
-      });
-    }
-  }
-
-  private async executeOperation(input: Input, ctx: ToolContext, callerContext: CallerContext): Promise<string> {
-    const callerDirectory = callerContext.directory;
-    const callerName = callerContext.name;
-    const effectiveSource = callerContext.sourceOverride || callerContext.source;
-
-    switch (input.operation) {
+  switch (input.operation) {
       // === MESSAGE OPERATIONS ===
       case 'send': {
         let identity;
@@ -386,7 +225,8 @@ TIPS
         // Get agent_id from multiple sources:
         // 1. Explicit agent_id in input (user specified)
         // 2. __injected_agent_id (proxy injected from X-Agent-Id header)
-        const agentId = input.agent_id || input.__injected_agent_id;
+        const agentId = input.agent_id || input.__injected_agent_id || getInjectedAgentId();
+
         
         // Priority order for identity resolution:
         // 1. Explicit identity_id (highest priority)
@@ -405,7 +245,7 @@ TIPS
           }
           console.log(`[MatrixMessaging] send: Auto-derived identity ${identityId} from agent_id ${agentId}`);
         } else {
-          identity = await this.resolveCallerIdentity(
+          identity = await resolveCallerIdentity(
             ctx,
             callerDirectory,
             callerName,
@@ -549,7 +389,7 @@ TIPS
       // === ROOM OPERATIONS ===
       case 'room_join': {
         const room_id_or_alias = requireParam(input.room_id_or_alias, 'room_id_or_alias');
-        const resolvedIdentityId = await this.resolveCallerIdentityId(
+        const resolvedIdentityId = await resolveCallerIdentityId(
           ctx,
           callerDirectory,
           callerName,
@@ -562,7 +402,7 @@ TIPS
 
       case 'room_leave': {
         const room_id = requireParam(input.room_id, 'room_id');
-        const resolvedIdentityId = await this.resolveCallerIdentityId(
+        const resolvedIdentityId = await resolveCallerIdentityId(
           ctx,
           callerDirectory,
           callerName,
@@ -575,7 +415,7 @@ TIPS
 
       case 'room_info': {
         const room_id = requireParam(input.room_id, 'room_id');
-        const resolvedIdentityId = await this.resolveCallerIdentityId(
+        const resolvedIdentityId = await resolveCallerIdentityId(
           ctx,
           callerDirectory,
           callerName,
@@ -587,7 +427,7 @@ TIPS
       }
 
       case 'room_list': {
-        const resolvedIdentityId = await this.resolveCallerIdentityId(
+        const resolvedIdentityId = await resolveCallerIdentityId(
           ctx,
           callerDirectory,
           callerName,
@@ -599,7 +439,7 @@ TIPS
       }
 
       case 'room_create': {
-        const identity = await this.resolveCallerIdentity(
+        const identity = await resolveCallerIdentity(
           ctx,
           callerDirectory,
           callerName,
@@ -619,7 +459,7 @@ TIPS
       }
 
       case 'room_invite': {
-        const identity = await this.resolveCallerIdentity(
+        const identity = await resolveCallerIdentity(
           ctx,
           callerDirectory,
           callerName,
@@ -634,7 +474,7 @@ TIPS
       }
 
       case 'room_search': {
-        const identity = await this.resolveCallerIdentity(
+        const identity = await resolveCallerIdentity(
           ctx,
           callerDirectory,
           callerName,
@@ -876,107 +716,162 @@ TIPS
           throw new Error(`Failed to create sender identity: ${errMsg}`);
         }
 
-        const roomId = await this.getOrCreateAgentRoom(agent_id, agent_name, callerIdentity, ctx);
+        const roomId = await getOrCreateAgentRoom(agent_id, agent_name, callerIdentity, ctx);
 
-        const client = await ctx.clientPool.getClient(callerIdentity);
-
-        let joined = false;
-        try {
-          await client.joinRoom(roomId);
-          joined = true;
-          console.log(`[MatrixMessaging] ${callerIdentity.mxid} joined room ${roomId}`);
-        } catch (joinError: unknown) {
-          const errorMessage = joinError instanceof Error ? joinError.message : String(joinError);
-          console.log(`[MatrixMessaging] Direct join failed: ${errorMessage}`);
-
-          try {
-            const adminUsername = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
-            const adminPassword = process.env.MATRIX_ADMIN_PASSWORD;
-            const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://127.0.0.1:6167';
-
-            if (!adminPassword) {
-              console.log(`[MatrixMessaging] No MATRIX_ADMIN_PASSWORD set, cannot invite`);
-              throw new Error('Admin credentials not configured');
-            }
-            
-            console.log(`[MatrixMessaging] Logging in as admin to invite ${callerIdentity.mxid}`);
-            
-            // Login as admin to get fresh token
-            const loginResponse = await fetch(`${homeserverUrl}/_matrix/client/v3/login`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                type: 'm.login.password',
-                identifier: { type: 'm.id.user', user: adminUsername.replace(/@([^:]+):.*/, '$1') },
-                password: adminPassword
-              })
-            });
-            
-            if (!loginResponse.ok) {
-              const err = await loginResponse.text();
-              throw new Error(`Admin login failed: ${err}`);
-            }
-            
-            const loginData = await loginResponse.json() as { access_token: string };
-            const adminToken = loginData.access_token;
-            console.log(`[MatrixMessaging] Admin login successful, sending invite...`);
-            
-            // Invite the user using admin token
-            const inviteResponse = await fetch(
-              `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`,
-              {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${adminToken}`,
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ user_id: callerIdentity.mxid })
-              }
-            );
-            
-            if (!inviteResponse.ok) {
-              const err = await inviteResponse.text();
-              throw new Error(`Invite failed: ${err}`);
-            }
-            
-            console.log(`[MatrixMessaging] Invited ${callerIdentity.mxid} to room via admin`);
-            
-            // Now try to join again
-            console.log(`[MatrixMessaging] Attempting to join after invite...`);
-            await client.joinRoom(roomId);
-            joined = true;
-            console.log(`[MatrixMessaging] ${callerIdentity.mxid} joined room after admin invite`);
-            
-          } catch (inviteError: unknown) {
-            const inviteErrorMessage = inviteError instanceof Error ? inviteError.message : String(inviteError);
-            console.error(`[MatrixMessaging] Failed to invite/join via admin: ${inviteErrorMessage}`);
-            if (inviteError instanceof Error && inviteError.stack) {
-              console.error(`[MatrixMessaging] Stack: ${inviteError.stack}`);
-            }
+        const additionalInvitees: Array<{ identityId: string; mxid: string }> = [];
+        if (callerDirectory && effectiveSource !== 'claude-code') {
+          const encoded = Buffer.from(callerDirectory)
+            .toString('base64')
+            .replace(/=/g, '')
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_');
+          const claudeIdentityId = `claude_code_${encoded}`;
+          const claudeIdentity = await ctx.storage.getIdentityAsync(claudeIdentityId);
+          if (claudeIdentity) {
+            additionalInvitees.push({ identityId: claudeIdentityId, mxid: claudeIdentity.mxid });
           }
         }
-        
-        if (!joined) {
-          // Check why invite failed
+
+        const allInvitees = [{ identityId: callerIdentity.id, mxid: callerIdentity.mxid }, ...additionalInvitees];
+
+        const adminUsername = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
+        const adminPassword = process.env.MATRIX_ADMIN_PASSWORD;
+        const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://127.0.0.1:6167';
+
+        let adminToken: string | null = null;
+        const getAdminToken = async (): Promise<string> => {
+          if (adminToken) return adminToken;
+          if (!adminPassword) {
+            throw new Error('Admin credentials not configured');
+          }
+
+          const loginResponse = await fetch(`${homeserverUrl}/_matrix/client/v3/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'm.login.password',
+              identifier: { type: 'm.id.user', user: adminUsername.replace(/@([^:]+):.*/, '$1') },
+              password: adminPassword
+            })
+          });
+
+          if (!loginResponse.ok) {
+            const err = await loginResponse.text();
+            throw new Error(`Admin login failed: ${err}`);
+          }
+
+          const loginData = await loginResponse.json() as { access_token: string };
+          adminToken = loginData.access_token;
+          return adminToken;
+        };
+
+        const ensureJoinForIdentity = async (identityId: string, mxid: string): Promise<boolean> => {
+          const client = await ctx.clientPool.getClientById(identityId);
+          if (!client) {
+            console.warn(`[MatrixMessaging] Client missing for identity ${identityId}`);
+            return false;
+          }
+
+          try {
+            await client.joinRoom(roomId);
+            console.log(`[MatrixMessaging] ${mxid} joined room ${roomId}`);
+            return true;
+          } catch (joinError: unknown) {
+            const errorMessage = joinError instanceof Error ? joinError.message : String(joinError);
+            console.log(`[MatrixMessaging] Direct join failed for ${mxid}: ${errorMessage}`);
+
+            try {
+              const token = await getAdminToken();
+
+              const membershipResponse = await fetch(
+                `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.member/${encodeURIComponent(mxid)}`,
+                {
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                  }
+                }
+              );
+
+              if (membershipResponse.ok) {
+                const membership = await membershipResponse.json() as { membership?: string };
+                const membershipState = membership?.membership;
+
+                if (membershipState === 'join') {
+                  console.log(`[MatrixMessaging] ${mxid} already joined ${roomId}`);
+                  return true;
+                }
+
+                if (membershipState === 'invite') {
+                  await client.joinRoom(roomId);
+                  console.log(`[MatrixMessaging] ${mxid} joined room after existing invite`);
+                  return true;
+                }
+              }
+
+              const inviteResponse = await fetch(
+                `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`,
+                {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ user_id: mxid })
+                }
+              );
+
+              if (!inviteResponse.ok) {
+                const err = await inviteResponse.text();
+                throw new Error(`Invite failed: ${err}`);
+              }
+
+              await client.joinRoom(roomId);
+              console.log(`[MatrixMessaging] ${mxid} joined room after admin invite`);
+              return true;
+            } catch (inviteError: unknown) {
+              const inviteErrorMessage = inviteError instanceof Error ? inviteError.message : String(inviteError);
+              console.error(`[MatrixMessaging] Failed to invite/join ${mxid}: ${inviteErrorMessage}`);
+              return false;
+            }
+          }
+        };
+
+        const joinResults = await Promise.all(
+          allInvitees.map(({ identityId, mxid }) => ensureJoinForIdentity(identityId, mxid))
+        );
+
+        if (!joinResults[0]) {
           const agentIdentityId = `letta_${agent_id}`;
           const agentIdentity = await ctx.storage.getIdentityAsync(agentIdentityId);
-          const debugInfo = agentIdentity 
+          const debugInfo = agentIdentity
             ? `Agent identity ${agentIdentity.mxid} found but invite/join failed`
             : `Agent identity ${agentIdentityId} NOT found in storage`;
-          
+
           throw new Error(
-            `Could not join room ${roomId} for ${agent_name}.\n\n` +
-            `The caller identity ${callerIdentity.mxid} needs to be invited to the room.\n\n` +
-            `Debug: ${debugInfo}\n\n` +
-            `This may happen if:\n` +
-            `• The room is private and requires an invite\n` +
-            `• The agent's Matrix identity doesn't have permission to invite\n\n` +
+            `Could not join room ${roomId} for ${agent_name}.
+
+` +
+            `The caller identity ${callerIdentity.mxid} needs to be invited to the room.
+
+` +
+            `Debug: ${debugInfo}
+
+` +
+            `This may happen if:
+` +
+            `• The room is private and requires an invite
+` +
+            `• The agent's Matrix identity doesn't have permission to invite
+
+` +
             `Try having an admin invite ${callerIdentity.mxid} to the room.`
           );
         }
-        
+
         // Send message to the agent's room
-        const eventId = await client.sendMessage(roomId, {
+        const senderClient = await ctx.clientPool.getClient(callerIdentity);
+        const eventId = await senderClient.sendMessage(roomId, {
           msgtype: 'm.text',
           body: message
         });
@@ -1190,7 +1085,7 @@ TIPS
 
       case 'opencode_status': {
         if (input.directory) {
-          const session = ctx.openCodeService.getSession(input.directory);
+          const session = await ctx.openCodeService.getBridgeSession(input.directory);
           const identity = await ctx.openCodeService.getIdentity(input.directory);
           return result({
             directory: input.directory,
@@ -1200,11 +1095,12 @@ TIPS
             identity: identity ? { id: identity.id, mxid: identity.mxid, display_name: identity.displayName } : null
           });
         }
-        const status = await ctx.openCodeService.getStatus();
+        const sessions = await ctx.openCodeService.listBridgeSessions();
+        const identities = await ctx.storage.getAllIdentitiesAsync('opencode');
         return result({
-          total_identities: status.totalIdentities,
-          active_sessions: status.activeSessions,
-          sessions: status.sessions.map((s) => ({ directory: s.directory, identity_id: s.identityId, mxid: s.mxid, connected_at: s.connectedAt }))
+          total_identities: identities.length,
+          active_sessions: sessions.length,
+          sessions: sessions.map((s) => ({ directory: s.directory, identity_id: s.identityId, mxid: s.mxid, connected_at: s.connectedAt }))
         });
       }
 
@@ -1222,218 +1118,31 @@ TIPS
     }
   }
 
-  private getAgentMappingsPath(): string {
-    if (process.env.AGENT_USER_MAPPINGS_PATH) {
-      return process.env.AGENT_USER_MAPPINGS_PATH;
+
+export default async function matrixMessaging(input: Input): Promise<string> {
+  try {
+    const ctx = getToolContext();
+
+    const injectedAgentId = getInjectedAgentId();
+    const effectiveInput = injectedAgentId && !input.__injected_agent_id
+      ? { ...input, __injected_agent_id: injectedAgentId }
+      : input;
+
+    const callerContext = await getCallerContext(effectiveInput);
+
+    const effectiveSource = callerContext.sourceOverride || callerContext.source;
+    if (callerContext.directory && effectiveSource !== 'claude-code') {
+      await autoRegisterWithBridge(callerContext.directory, effectiveInput.room_id);
     }
 
-    const dataDir = process.env.DATA_DIR || '/app/data';
-    return path.join(dataDir, 'agent_user_mappings.json');
-  }
-
-  private async loadAgentMappings(): Promise<Record<string, AgentMapping>> {
-    const mappingsPath = this.getAgentMappingsPath();
-
-    try {
-      const raw = await fs.readFile(mappingsPath, 'utf-8');
-      const data = JSON.parse(raw) as Record<string, AgentMapping>;
-      return data && typeof data === 'object' ? data : {};
-    } catch (error: any) {
-      if (error?.code === 'ENOENT') {
-        return {};
-      }
-      console.error('[MatrixMessaging] Failed to load agent mappings:', error);
-      return {};
-    }
-  }
-
-  private async saveAgentMappings(mappings: Record<string, AgentMapping>): Promise<void> {
-    const mappingsPath = this.getAgentMappingsPath();
-    await fs.mkdir(path.dirname(mappingsPath), { recursive: true });
-    await fs.writeFile(mappingsPath, JSON.stringify(mappings, null, 2), 'utf-8');
-  }
-
-  private async getOrCreateAgentRoom(
-    agentId: string,
-    agentName: string,
-    callerIdentity: { mxid: string },
-    ctx: ToolContext
-  ): Promise<string> {
-    const matrixApiUrl = process.env.MATRIX_API_URL || 'http://matrix-api:8000';
-    const mappingStore = new AgentMappingStore({ apiUrl: matrixApiUrl });
-    const apiMapping = await mappingStore.getMappingByAgentId(agentId);
-
-    const mappings = await this.loadAgentMappings();
-    const existing = mappings[agentId];
-    const existingRoom = apiMapping?.room_id || apiMapping?.matrix_room_id || existing?.room_id || existing?.matrix_room_id;
-
-    if (!ctx.lettaService) {
-      throw new Error('Letta service not available for agent room provisioning');
-    }
-
-    const agentIdentityId = await ctx.lettaService.getOrCreateAgentIdentity(agentId);
-    const agentIdentity = await ctx.storage.getIdentityAsync(agentIdentityId);
-    if (!agentIdentity) {
-      throw new Error(`Identity not found for agent: ${agentId}`);
-    }
-
-    const client = await ctx.clientPool.getClient(agentIdentity);
-
-    const createNewRoom = async (): Promise<string> => {
-      const roomId = await client.createRoom({
-        name: agentName,
-        topic: `Room for ${agentName}`,
-        preset: 'private_chat',
-        initial_state: [
-          { type: 'm.room.history_visibility', content: { history_visibility: 'shared' } }
-        ]
-      });
-
-      try {
-        await ctx.roomManager.inviteUser(agentIdentityId, roomId, callerIdentity.mxid);
-      } catch (error) {
-        console.error('[MatrixMessaging] Failed to invite caller to agent room:', error);
-      }
-
-      mappings[agentId] = {
-        ...existing,
-        agent_id: agentId,
-        agent_name: agentName,
-        matrix_user_id: agentIdentity.mxid,
-        matrix_password: agentIdentity.password,
-        created: true,
-        room_id: roomId,
-        room_created: true,
-        invitation_status: {
-          ...(existing?.invitation_status ?? {}),
-          [callerIdentity.mxid]: 'invited'
-        }
-      };
-
-      await this.saveAgentMappings(mappings);
-      console.log(`[MatrixMessaging] Created agent room ${roomId} for ${agentName}`);
-      return roomId;
-    };
-
-    if (existingRoom) {
-      try {
-        await client.joinRoom(existingRoom);
-      } catch (error) {
-        console.warn('[MatrixMessaging] Agent identity could not join existing room, keeping existing room:', error);
-        return existingRoom;
-      }
-
-      try {
-        await ctx.roomManager.inviteUser(agentIdentityId, existingRoom, callerIdentity.mxid);
-        mappings[agentId] = {
-          ...existing,
-          agent_id: agentId,
-          agent_name: agentName,
-          matrix_user_id: agentIdentity.mxid,
-          matrix_password: agentIdentity.password,
-          room_id: existingRoom,
-          invitation_status: {
-            ...(existing?.invitation_status ?? {}),
-            [callerIdentity.mxid]: 'invited'
-          }
-        };
-        await this.saveAgentMappings(mappings);
-        return existingRoom;
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (errorMessage.includes('M_FORBIDDEN') || errorMessage.includes('not in the room')) {
-          console.warn('[MatrixMessaging] Invite failed for existing room, keeping existing room:', errorMessage);
-          return existingRoom;
-        }
-        console.warn('[MatrixMessaging] Invite failed for existing room, continuing:', errorMessage);
-        return existingRoom;
-      }
-    }
-
-    return await createNewRoom();
-  }
-
-  /**
-   * Auto-register the calling OpenCode instance with the bridge.
-   * This enables auto-forwarding of messages back to OpenCode.
-   */
-  private async autoRegisterWithBridge(directory: string, roomId?: string): Promise<void> {
-    const bridgeUrl = process.env.OPENCODE_BRIDGE_URL || 'http://127.0.0.1:3201';
-    
-    try {
-      // Try to detect OpenCode's API port from environment or use a discovery mechanism
-      // OpenCode sets OPENCODE_API_PORT or we can try to read from a known location
-      let port = parseInt(process.env.OPENCODE_API_PORT || '0', 10);
-      
-      // If no port in env, try to read from OpenCode's runtime file
-      if (!port) {
-        try {
-          const fs = await import('fs');
-          const path = await import('path');
-          const runtimeFile = path.join(directory, '.opencode', 'runtime.json');
-          if (fs.existsSync(runtimeFile)) {
-            const runtime = JSON.parse(fs.readFileSync(runtimeFile, 'utf-8'));
-            port = runtime.port || runtime.apiPort || 0;
-          }
-        } catch {
-          // Ignore - no runtime file
-        }
-      }
-      
-      // Also try reading from a socket file or process list
-      if (!port) {
-        try {
-          const { execSync } = await import('child_process');
-          // Find opencode process listening port
-          const result = execSync("ss -tlnp | grep opencode | grep -oP ':\\K\\d+' | head -1", { encoding: 'utf-8' }).trim();
-          port = parseInt(result, 10) || 0;
-        } catch {
-          // Ignore - can't find port
-        }
-      }
-      
-      if (!port) {
-        console.log('[MatrixMessaging] Could not detect OpenCode port for auto-registration');
-        return;
-      }
-
-      // Build rooms array
-      const rooms: string[] = [];
-      if (roomId) rooms.push(roomId);
-
-      // Check if already registered with same port
-      const checkResponse = await fetch(`${bridgeUrl}/registrations`);
-      if (checkResponse.ok) {
-        const data = await checkResponse.json() as { registrations: Array<{ directory: string; port: number }> };
-        const existing = data.registrations.find(r => r.directory === directory && r.port === port);
-        if (existing) {
-          // Already registered with same port, skip
-          return;
-        }
-      }
-
-      // Register with bridge
-      const response = await fetch(`${bridgeUrl}/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          port,
-          hostname: '127.0.0.1',
-          sessionId: `opencode-${Date.now()}`,
-          directory,
-          rooms
-        })
-      });
-
-      if (response.ok) {
-        const result = await response.json() as { id: string };
-        console.log(`[MatrixMessaging] Auto-registered with bridge: ${result.id}`);
-      }
-    } catch (error) {
-      // Don't fail the operation if registration fails
-      console.error('[MatrixMessaging] Auto-registration failed:', error);
-    }
+    return await executeOperation(effectiveInput, ctx, callerContext);
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[MatrixMessaging] Operation ${input.operation} failed: ${errMsg}`);
+    return result({
+      success: false,
+      error: errMsg,
+      operation: input.operation,
+    });
   }
 }
-
-export default MatrixMessaging;

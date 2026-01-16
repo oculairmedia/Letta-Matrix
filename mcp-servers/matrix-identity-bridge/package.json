@@ -5,9 +5,9 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "build": "xmcp build",
+    "dev": "xmcp dev",
+    "start": "node dist/http.js",
     "type-check": "tsc --noEmit",
     "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
     "test:watch": "NODE_OPTIONS='--experimental-vm-modules' jest --watch"
@@ -28,6 +28,7 @@
     "@vector-im/matrix-bot-sdk": "^0.7.1-element.15",
     "dotenv": "^16.4.5",
     "mcp-framework": "^0.2.16",
+    "xmcp": "^0.5.9",
     "zod": "^3.25.76"
   },
   "devDependencies": {
