@@ -675,9 +675,16 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         }
         
         let callerIdentity;
-        let callerIdentitySource: 'explicit' | 'opencode' | 'default' = 'default';
+        let callerIdentitySource: 'explicit' | 'opencode' | 'letta_agent' | 'default' = 'default';
+        
+        // Check for injected agent ID from X-Agent-Id header (Letta agent calling)
+        const headerAgentId = getInjectedAgentId();
+        const callingAgentId = input.__injected_agent_id || headerAgentId;
+        console.log(`[MatrixMessaging] talk_to_agent: Agent ID check - header=${headerAgentId}, injected=${input.__injected_agent_id}, callerDirectory=${callerDirectory}`);
+        
         try {
           if (input.sender_identity_id || input.identity_id) {
+            // Explicit identity specified
             const identityId = input.sender_identity_id ?? input.identity_id;
             if (!identityId) {
               throw new Error('Identity id not provided');
@@ -687,19 +694,31 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
               throw new Error(`Identity not found: ${identityId}`);
             }
             callerIdentitySource = 'explicit';
-            console.log(`[MatrixMessaging] Using explicit identity_id: ${callerIdentity.mxid}`);
+            console.log(`[MatrixMessaging] talk_to_agent: Using explicit identity_id: ${callerIdentity.mxid}`);
+          } else if (callingAgentId && ctx.lettaService) {
+            // Letta agent calling via X-Agent-Id header - use that agent's Matrix identity
+            console.log(`[MatrixMessaging] talk_to_agent: Resolving identity from X-Agent-Id header: ${callingAgentId}`);
+            const identityId = await ctx.lettaService.getOrCreateAgentIdentity(callingAgentId);
+            callerIdentity = await ctx.storage.getIdentityAsync(identityId);
+            if (!callerIdentity) {
+              throw new Error(`Failed to get identity for calling agent: ${callingAgentId}`);
+            }
+            callerIdentitySource = 'letta_agent';
+            console.log(`[MatrixMessaging] talk_to_agent: Using Letta agent identity ${identityId} -> ${callerIdentity.mxid}`);
           } else if (callerDirectory) {
+            // OpenCode/Claude Code caller
             callerIdentity = await resolveCallerIdentity(ctx, callerDirectory, callerName, effectiveSource);
             callerIdentitySource = effectiveSource === 'claude-code' ? 'explicit' : 'opencode';
-            console.log(`[MatrixMessaging] Using ${effectiveSource} identity: ${callerIdentity.mxid}`);
+            console.log(`[MatrixMessaging] talk_to_agent: Using ${effectiveSource} identity: ${callerIdentity.mxid}`);
           } else {
+            // Fallback to default
             callerIdentitySource = 'default';
             callerIdentity = await ctx.openCodeService.getOrCreateDefaultIdentity();
-            console.log(`[MatrixMessaging] Using default OpenCode identity: ${callerIdentity.mxid}`);
+            console.log(`[MatrixMessaging] talk_to_agent: Using default OpenCode identity: ${callerIdentity.mxid}`);
           }
         } catch (identityError: unknown) {
           const errMsg = identityError instanceof Error ? identityError.message : String(identityError);
-          console.error(`[MatrixMessaging] Failed to get/create identity: ${errMsg}`);
+          console.error(`[MatrixMessaging] talk_to_agent: Failed to get/create identity: ${errMsg}`);
           throw new Error(`Failed to create sender identity: ${errMsg}`);
         }
 

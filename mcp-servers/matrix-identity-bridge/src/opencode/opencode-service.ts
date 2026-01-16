@@ -20,11 +20,21 @@ export interface OpenCodeConfig {
   baseUrl?: string;  // OpenCode API URL (optional)
 }
 
+type OpenCodeBridgeRegistration = {
+  id: string;
+  port: number;
+  hostname: string;
+  sessionId: string;
+  directory: string;
+  rooms: string[];
+  registeredAt: number;
+  lastSeen: number;
+};
+
 export class OpenCodeService {
   private storage: Storage;
   private identityManager: IdentityManager;
   private config: OpenCodeConfig;
-  private sessions: Map<string, OpenCodeSession> = new Map();
 
   constructor(
     storage: Storage,
@@ -34,6 +44,51 @@ export class OpenCodeService {
     this.storage = storage;
     this.identityManager = identityManager;
     this.config = config;
+  }
+
+  private getBridgeUrl(): string {
+    return process.env.OPENCODE_BRIDGE_URL || 'http://127.0.0.1:3201';
+  }
+
+  private async fetchBridgeRegistrations(): Promise<OpenCodeBridgeRegistration[]> {
+    const bridgeUrl = this.getBridgeUrl();
+    const response = await fetch(`${bridgeUrl}/registrations`);
+    if (!response.ok) {
+      throw new Error(`OpenCode bridge error: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json() as { registrations?: OpenCodeBridgeRegistration[] };
+    return Array.isArray(data.registrations) ? data.registrations : [];
+  }
+
+  private async triggerBridgeDiscovery(): Promise<void> {
+    const bridgeUrl = this.getBridgeUrl();
+    try {
+      await fetch(`${bridgeUrl}/discover`, { method: 'POST' });
+    } catch {
+      return;
+    }
+  }
+
+  private pickLatestRegistrationForDirectory(
+    registrations: OpenCodeBridgeRegistration[],
+    directory: string
+  ): OpenCodeBridgeRegistration | undefined {
+    const matching = registrations.filter((r) => r.directory === directory);
+    if (matching.length === 0) return undefined;
+    return matching.sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0];
+  }
+
+  private pickLatestRegistrationPerDirectory(
+    registrations: OpenCodeBridgeRegistration[]
+  ): OpenCodeBridgeRegistration[] {
+    const byDir = new Map<string, OpenCodeBridgeRegistration>();
+    for (const reg of registrations) {
+      const existing = byDir.get(reg.directory);
+      if (!existing || (reg.lastSeen || 0) > (existing.lastSeen || 0)) {
+        byDir.set(reg.directory, reg);
+      }
+    }
+    return Array.from(byDir.values());
   }
 
   /**
@@ -79,72 +134,111 @@ export class OpenCodeService {
     displayNameOverride?: string,
     sessionId?: string
   ): Promise<OpenCodeSession> {
-    const identityId = this.deriveIdentityId(directory);
+    void sessionId;
 
-    const existingSession = this.sessions.get(directory);
-    if (existingSession) {
-      existingSession.lastActivityAt = Date.now();
-      return existingSession;
+    const identity = await this.getOrCreateIdentity(directory, displayNameOverride);
+
+    await this.triggerBridgeDiscovery();
+
+    let registration: OpenCodeBridgeRegistration | undefined;
+    try {
+      const registrations = await this.fetchBridgeRegistrations();
+      registration = this.pickLatestRegistrationForDirectory(registrations, directory);
+    } catch {
+      registration = undefined;
     }
 
-    const localpart = this.deriveLocalpart(directory);
-    const displayName = displayNameOverride || this.deriveDisplayName(directory);
+    const connectedAt = registration?.registeredAt ? registration.registeredAt : Date.now();
+    const lastActivityAt = registration?.lastSeen ? registration.lastSeen : Date.now();
 
-    const identity = await this.identityManager.getOrCreateIdentity({
-      id: identityId,
-      localpart,
-      displayName,
-      type: 'opencode'
-    });
-
-    if (displayNameOverride && identity.displayName !== displayNameOverride) {
-      try {
-        await this.identityManager.updateIdentity(identity.id, displayNameOverride);
-        identity.displayName = displayNameOverride;
-      } catch (error) {
-        console.warn('[OpenCodeService] Failed to update identity display name:', error);
-      }
-    }
-
-    // Create session
-    const session: OpenCodeSession = {
+    return {
       directory,
-      identityId,
+      identityId: identity.id,
       mxid: identity.mxid,
       displayName: identity.displayName,
-      connectedAt: Date.now(),
-      lastActivityAt: Date.now()
+      connectedAt,
+      lastActivityAt
     };
-
-    this.sessions.set(directory, session);
-    console.log('[OpenCodeService] Connected:', directory, '->', identity.mxid);
-
-    return session;
   }
 
   /**
    * Disconnect an OpenCode instance
    */
   disconnect(directory: string): boolean {
-    const deleted = this.sessions.delete(directory);
-    if (deleted) {
-      console.log('[OpenCodeService] Disconnected:', directory);
-    }
-    return deleted;
+    void directory;
+    return false;
   }
 
   /**
    * Get session for a directory
    */
   getSession(directory: string): OpenCodeSession | undefined {
-    return this.sessions.get(directory);
+    void directory;
+    return undefined;
   }
 
   /**
    * Get all active sessions
    */
   getAllSessions(): OpenCodeSession[] {
-    return Array.from(this.sessions.values());
+    return [];
+  }
+
+  async getBridgeSession(directory: string): Promise<OpenCodeSession | undefined> {
+    await this.triggerBridgeDiscovery();
+
+    let registration: OpenCodeBridgeRegistration | undefined;
+    try {
+      const registrations = await this.fetchBridgeRegistrations();
+      registration = this.pickLatestRegistrationForDirectory(registrations, directory);
+    } catch {
+      registration = undefined;
+    }
+
+    if (!registration) return undefined;
+
+    const identity = await this.getOrCreateIdentity(directory);
+
+    return {
+      directory,
+      identityId: identity.id,
+      mxid: identity.mxid,
+      displayName: identity.displayName,
+      connectedAt: registration.registeredAt || Date.now(),
+      lastActivityAt: registration.lastSeen || Date.now()
+    };
+  }
+
+  async listBridgeSessions(): Promise<OpenCodeSession[]> {
+    await this.triggerBridgeDiscovery();
+
+    let registrations: OpenCodeBridgeRegistration[] = [];
+    try {
+      registrations = await this.fetchBridgeRegistrations();
+    } catch {
+      registrations = [];
+    }
+
+    const latest = this.pickLatestRegistrationPerDirectory(registrations);
+
+    const sessions: OpenCodeSession[] = [];
+    for (const reg of latest) {
+      try {
+        const identity = await this.getOrCreateIdentity(reg.directory);
+        sessions.push({
+          directory: reg.directory,
+          identityId: identity.id,
+          mxid: identity.mxid,
+          displayName: identity.displayName,
+          connectedAt: reg.registeredAt || Date.now(),
+          lastActivityAt: reg.lastSeen || Date.now()
+        });
+      } catch {
+        continue;
+      }
+    }
+
+    return sessions;
   }
 
   /**
@@ -234,13 +328,20 @@ export class OpenCodeService {
     isConnected: boolean;
   }>> {
     const identities = await this.identityManager.listIdentities('opencode');
-    
+
+    let registrations: OpenCodeBridgeRegistration[] = [];
+    try {
+      registrations = await this.fetchBridgeRegistrations();
+    } catch {
+      registrations = [];
+    }
+
+    const activeDirs = new Set(registrations.map((r) => r.directory));
+
     return identities.map(identity => {
-      // Decode directory from identity ID
       const encoded = identity.id.replace(/^opencode_/, '');
       let directory = '';
       try {
-        // Reverse the base64url encoding
         const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
         directory = Buffer.from(base64, 'base64').toString('utf-8');
       } catch {
@@ -252,7 +353,7 @@ export class OpenCodeService {
         directory,
         mxid: identity.mxid,
         displayName: identity.displayName,
-        isConnected: this.sessions.has(directory)
+        isConnected: activeDirs.has(directory)
       };
     });
   }
@@ -265,12 +366,37 @@ export class OpenCodeService {
     activeSessions: number;
     sessions: OpenCodeSession[];
   }> {
-    const sessions = this.getAllSessions();
     const identities = await this.storage.getAllIdentitiesAsync('opencode');
+
+    let registrations: OpenCodeBridgeRegistration[] = [];
+    try {
+      registrations = await this.fetchBridgeRegistrations();
+    } catch {
+      registrations = [];
+    }
+
+    const latest = this.pickLatestRegistrationPerDirectory(registrations);
+
+    const sessions: OpenCodeSession[] = [];
+    for (const reg of latest) {
+      try {
+        const identity = await this.getOrCreateIdentity(reg.directory);
+        sessions.push({
+          directory: reg.directory,
+          identityId: identity.id,
+          mxid: identity.mxid,
+          displayName: identity.displayName,
+          connectedAt: reg.registeredAt || Date.now(),
+          lastActivityAt: reg.lastSeen || Date.now()
+        });
+      } catch {
+        continue;
+      }
+    }
 
     return {
       totalIdentities: identities.length,
-      activeSessions: sessions.length,
+      activeSessions: latest.length,
       sessions
     };
   }

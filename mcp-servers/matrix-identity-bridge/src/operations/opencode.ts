@@ -47,7 +47,7 @@ export const opencode_send: OperationHandler = async (args, ctx) => {
 
 export const opencode_status: OperationHandler = async (args, ctx) => {
   if (args.directory) {
-    const session = ctx.openCodeService.getSession(args.directory);
+    const session = await ctx.openCodeService.getBridgeSession(args.directory);
     const identity = await ctx.openCodeService.getIdentity(args.directory);
 
     return result({
@@ -68,12 +68,13 @@ export const opencode_status: OperationHandler = async (args, ctx) => {
     });
   }
 
-  const status = await ctx.openCodeService.getStatus();
+  const sessions = await ctx.openCodeService.listBridgeSessions();
+  const identities = await ctx.storage.getAllIdentitiesAsync('opencode');
 
   return result({
-    total_identities: status.totalIdentities,
-    active_sessions: status.activeSessions,
-    sessions: status.sessions.map(s => ({
+    total_identities: identities.length,
+    active_sessions: sessions.length,
+    sessions: sessions.map(s => ({
       directory: s.directory,
       identity_id: s.identityId,
       mxid: s.mxid,

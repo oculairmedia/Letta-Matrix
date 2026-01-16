@@ -85,18 +85,28 @@ export class HttpAgentProxy {
 
     // Extract agent ID and existing session ID from headers
     const agentId = extractAgentIdFromHeaders(req.headers as Record<string, string | string[] | undefined>);
-    const existingSessionId = extractSessionIdFromHeaders(req.headers as Record<string, string | string[] | undefined>);
-    
+    let existingSessionId = extractSessionIdFromHeaders(req.headers as Record<string, string | string[] | undefined>);
+
+    // Check if the session ID exists in our active sessions
+    // If not, strip it so mcp-framework creates a new one
+    if (existingSessionId) {
+      const activeSessions = getActiveSessions();
+      if (!activeSessions.has(existingSessionId)) {
+        console.log(`[HttpProxy] Stale session ${existingSessionId.substring(0, 8)}... detected, stripping header to force new session`);
+        delete req.headers['mcp-session-id'];
+        existingSessionId = undefined;
+      }
+    }
+
     if (agentId) {
       console.log(`[HttpProxy] Request from agent: ${agentId} to ${url.pathname}${existingSessionId ? ` (session: ${existingSessionId.substring(0, 8)}...)` : ' (no session yet)'}`);
-      
+
       // If we have an existing session, store the mapping immediately
       if (existingSessionId) {
         setSessionAgentId(existingSessionId, agentId);
       }
     }
 
-    // Proxy the request and capture response headers
     await this.proxyRequestWithSessionCapture(req, res, agentId);
   }
 
@@ -142,10 +152,8 @@ export class HttpAgentProxy {
     agentId: string | undefined
   ): Promise<void> {
     return new Promise(async (resolve) => {
-      // Read the request body first
       let body = await this.readBody(clientReq);
       
-      // Inject agent_id into tools/call requests
       if (agentId && body) {
         body = this.injectAgentIdIntoBody(body, agentId);
       }
@@ -168,10 +176,12 @@ export class HttpAgentProxy {
       const proxyReq = http.request(options, (proxyRes) => {
         // Capture session ID from response headers (set by mcp-framework for new sessions)
         const newSessionId = proxyRes.headers['mcp-session-id'];
-        if (newSessionId && agentId) {
+        if (newSessionId) {
           const sessionId = Array.isArray(newSessionId) ? newSessionId[0] : newSessionId;
-          console.log(`[HttpProxy] New session ${sessionId.substring(0, 8)}... mapped to agent ${agentId.substring(0, 20)}...`);
-          setSessionAgentId(sessionId, agentId);
+          // Track all sessions, use 'anonymous' for those without agent ID
+          const effectiveAgentId = agentId || 'anonymous';
+          console.log(`[HttpProxy] New session ${sessionId.substring(0, 8)}... mapped to ${effectiveAgentId.substring(0, 20)}...`);
+          setSessionAgentId(sessionId, effectiveAgentId);
         }
         
         // Copy status and headers

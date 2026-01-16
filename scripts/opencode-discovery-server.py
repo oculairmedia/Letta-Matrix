@@ -36,7 +36,7 @@ class DiscoveryHandler(BaseHTTPRequestHandler):
         
         try:
             # Find OpenCode PIDs
-            result = subprocess.run(['pgrep', '-x', 'opencode'], 
+            result = subprocess.run(['pgrep', '-f', '^opencode(\\s|$)'], 
                                   capture_output=True, text=True)
             pids = result.stdout.strip().split('\n') if result.stdout.strip() else []
             

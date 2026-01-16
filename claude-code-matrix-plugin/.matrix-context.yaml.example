@@ -3,6 +3,17 @@ accessToken: ${MATRIX_ACCESS_TOKEN}
 userId: "@opencode:matrix.oculair.ca"
 rooms:
   - "!MtuqLUCwvKypRU6gll:matrix.oculair.ca"
+  # Or "*" to accept any joined room
+  # - "*"
+
+# Optional: use matrix-identity-bridge MCP for auto-provisioning/join.
+# When enabled, the hook will derive a deterministic Claude Code identity
+# scoped to your working directory and attempt to join configured rooms.
+identityBridge:
+  enabled: false
+  # URL of the matrix-identity-bridge MCP server (HTTP).
+  url: http://127.0.0.1:8005
+
 filters:
   msgtype: m.text
   senders: []

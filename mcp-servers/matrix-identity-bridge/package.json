@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "xmcp build",
+    "build": "xmcp build && node -e \"const fs=require('fs');const f='dist/http.js';let c=fs.readFileSync(f,'utf8');c=c.replace(/ly=\\{port:\\d+,/,'ly={port:void 0,');fs.writeFileSync(f,c);console.log('Patched port to use env var')\"",
     "dev": "xmcp dev",
     "start": "node dist/http.js",
     "type-check": "tsc --noEmit",

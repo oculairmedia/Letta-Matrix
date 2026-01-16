@@ -97,11 +97,29 @@ function deriveMatrixIdentities(directory: string): string[] {
 /**
  * Extract @oc_* mentions from message body
  * Returns array of MXIDs that match OpenCode identity pattern (including v2 suffix)
+ * 
+ * IMPORTANT: Only extracts mentions from the NEW message content, not quoted/replied content
  */
 function extractOpenCodeMentions(body: string): string[] {
-  // Match both old @oc_xxx and new @oc_xxx_v2 patterns
+  // Strip Matrix reply fallback (quoted previous messages)
+  // Format: "> <@user:domain> original message\n\nnew message"
+  const lines = body.split('\n');
+  let actualMessage = body;
+  
+  // If message starts with "> ", it's a reply - extract only the new content
+  if (lines[0].startsWith('> ')) {
+    // Find first non-quote line (actual new message starts after blank line following quotes)
+    const firstNonQuoteIdx = lines.findIndex((line, idx) => 
+      idx > 0 && line === '' && lines[idx - 1].startsWith('>')
+    );
+    if (firstNonQuoteIdx >= 0 && firstNonQuoteIdx < lines.length - 1) {
+      actualMessage = lines.slice(firstNonQuoteIdx + 1).join('\n');
+    }
+  }
+  
+  // Match both old @oc_xxx and new @oc_xxx_v2 patterns in the actual message only
   const mentionRegex = /@oc_[a-z0-9_]+(_v2)?:[a-z0-9._-]+/gi;
-  const matches = body.match(mentionRegex) || [];
+  const matches = actualMessage.match(mentionRegex) || [];
   return [...new Set(matches)]; // Deduplicate
 }
 
@@ -643,6 +661,33 @@ async function handleRequest(
     return;
   }
 
+  if (url.pathname === "/status" && req.method === "GET") {
+    const directory = url.searchParams.get("directory");
+    if (!directory) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing required query param: directory" }));
+      return;
+    }
+
+    let best: OpenCodeRegistration | undefined;
+    for (const reg of registrations.values()) {
+      if (reg.directory !== directory) continue;
+      if (!best || reg.lastSeen > best.lastSeen) {
+        best = reg;
+      }
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        directory,
+        registered: !!best,
+        registration: best || null,
+      }),
+    );
+    return;
+  }
+
   // Register OpenCode instance
   if (url.pathname === "/register" && req.method === "POST") {
     let body = "";
@@ -652,7 +697,7 @@ async function handleRequest(
         const data = JSON.parse(body);
         const { port, hostname, sessionId, directory, rooms } = data;
 
-        if (!port || !sessionId || !directory) {
+        if (port === undefined || !sessionId || !directory) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(
             JSON.stringify({

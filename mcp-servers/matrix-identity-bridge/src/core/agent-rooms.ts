@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { AgentMappingStore } from './agent-mapping-store.js';
+import { AgentMappingStore } from './agent-mapping-store.ts';
 import type { ToolContext } from './tool-context.js';
 
 export type AgentMapping = {

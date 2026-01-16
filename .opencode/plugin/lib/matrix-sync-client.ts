@@ -28,6 +28,8 @@ export interface MatrixMessage {
   body: string;
   eventId: string;
   timestamp: number;
+  isDirect: boolean;
+  joinedMemberCount: number;
 }
 
 interface MatrixSyncOptions {
@@ -85,6 +87,12 @@ export class MatrixSyncClient extends EventEmitter {
 
       if (!eventId || !sender) return;
 
+      const joinedMemberCount =
+        typeof (room as any).getJoinedMemberCount === "function"
+          ? (room as any).getJoinedMemberCount()
+          : 0;
+      const isDirect = joinedMemberCount === 2;
+
       const message: MatrixMessage = {
         roomId: room.roomId,
         sender,
@@ -92,6 +100,8 @@ export class MatrixSyncClient extends EventEmitter {
         body,
         eventId,
         timestamp,
+        isDirect,
+        joinedMemberCount,
       };
 
       this.emit("message", message);

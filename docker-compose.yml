@@ -217,9 +217,8 @@ services:
     container_name: matrix-messaging-mcp
     restart: unless-stopped
     ports:
-      - "3100:3100"
+      - "3103:3100"
       - "3101:3101"
-      - "3103:3102"
     environment:
       # Matrix Configuration
       - MATRIX_HOMESERVER_URL=http://tuwunel:6167

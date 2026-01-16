@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "../lib/config";
 import { MatrixClient, getStatePath } from "../lib/matrix-client";
+import { ensureClaudeCodeIdentity, ensureJoinedRooms } from "../lib/identity-bridge";
 import type { HookInput, HookOutput, MatrixMessage } from "../lib/types";
 
 const TELEMETRY_PATH =
@@ -79,9 +80,21 @@ async function main(): Promise<void> {
       return;
     }
 
+    const derivedIdentity = await ensureClaudeCodeIdentity(config, cwd);
+    if (derivedIdentity) {
+      config.accessToken = derivedIdentity.access_token;
+      config.userId = derivedIdentity.mxid;
+
+      try {
+        await ensureJoinedRooms(derivedIdentity.identity_id, config.rooms, config);
+      } catch (error) {
+        console.error("Failed to join rooms via identity bridge", error);
+      }
+    }
+
     const client = new MatrixClient(config, {
       statePath: getStatePath(cwd, config.isGlobal),
-      timeoutMs: 4000,
+      timeoutMs: 10000,
     });
 
     const messages = await client.getNewMessages();
