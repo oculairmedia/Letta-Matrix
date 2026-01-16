@@ -210,10 +210,7 @@ services:
       retries: 3
       start_period: 10s
   matrix-messaging-mcp:
-    build:
-      context: ./mcp-servers/matrix-identity-bridge
-      dockerfile: Dockerfile
-    image: matrix-identity-bridge:local
+    image: ghcr.io/oculairmedia/letta-matrix-identity-bridge:latest
     container_name: matrix-messaging-mcp
     restart: unless-stopped
     ports:
