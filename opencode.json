@@ -2,17 +2,9 @@
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "matrix-identity-bridge": {
-      "type": "local",
-      "command": ["/opt/stacks/matrix-synapse-deployment/mcp-servers/matrix-identity-bridge/mcp-stdio.sh"],
+      "type": "http",
+      "url": "http://192.168.50.90:3103/mcp",
       "enabled": true,
-      "environment": {
-        "MATRIX_HOMESERVER_URL": "http://127.0.0.1:6167",
-        "MATRIX_SERVER_NAME": "matrix.oculair.ca",
-        "MATRIX_ADMIN_USERNAME": "@admin:matrix.oculair.ca",
-        "MATRIX_ADMIN_PASSWORD": "m6kvcVMWiSYzi6v",
-        "DATA_DIR": "/opt/stacks/matrix-synapse-deployment/mcp-servers/matrix-identity-bridge/data",
-        "LETTA_API_URL": "http://192.168.50.90:8283"
-      },
       "timeout": 10000
     }
   }
