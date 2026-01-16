@@ -27,7 +27,6 @@ export const getCallerContext = async (input: CallerContextInput): Promise<Calle
 
   const envDir = process.env.OPENCODE_PROJECT_DIR;
   if (envDir) {
-    console.log(`[MatrixMessaging] Using OPENCODE_PROJECT_DIR: ${envDir}`);
     return {
       directory: envDir,
       name: input.caller_name,
@@ -38,7 +37,6 @@ export const getCallerContext = async (input: CallerContextInput): Promise<Calle
 
   const telemetry = await readClaudeCodeTelemetry();
   if (telemetry?.cwd) {
-    console.log(`[MatrixMessaging] Using Claude Code telemetry: ${telemetry.cwd}`);
     return {
       directory: telemetry.cwd,
       name: input.caller_name || telemetry.display_name,
@@ -49,7 +47,6 @@ export const getCallerContext = async (input: CallerContextInput): Promise<Calle
 
   const pwd = process.env.PWD;
   if (pwd) {
-    console.log(`[MatrixMessaging] Using PWD: ${pwd}`);
     return {
       directory: pwd,
       name: input.caller_name,

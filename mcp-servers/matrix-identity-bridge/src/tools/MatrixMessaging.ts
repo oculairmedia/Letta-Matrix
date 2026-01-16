@@ -6,12 +6,13 @@
 
 import { z } from 'zod';
 import type { InferSchema, ToolMetadata } from 'xmcp';
-import { headers } from 'xmcp/headers';
-import { getToolContext, result, requireParam, requireIdentity, requireLetta, ToolContext } from '../core/tool-context.js';
-import { IdentityManager } from '../core/identity-manager.js';
-import { getCallerContext, resolveCallerIdentity, resolveCallerIdentityId, type CallerContext } from '../core/caller-context.js';
-import { getOrCreateAgentRoom } from '../core/agent-rooms.js';
-import { autoRegisterWithBridge } from '../core/opencode-bridge.js';
+import { headers } from 'xmcp/dist/runtime/headers.js';
+import { initializeServices } from '../core/services';
+import { getToolContext, result, requireParam, requireIdentity, requireLetta, ToolContext } from '../core/tool-context';
+import { IdentityManager } from '../core/identity-manager';
+import { getCallerContext, resolveCallerIdentity, resolveCallerIdentityId, type CallerContext } from '../core/caller-context';
+import { getOrCreateAgentRoom } from '../core/agent-rooms';
+import { autoRegisterWithBridge } from '../core/opencode-bridge';
 
 // All supported operations
 const operations = [
@@ -215,7 +216,10 @@ const getInjectedAgentId = (): string | undefined => {
 const executeOperation = async (input: Input, ctx: ToolContext, callerContext: CallerContext): Promise<string> => {
   const callerDirectory = callerContext.directory;
   const callerName = callerContext.name;
-  const effectiveSource = callerContext.sourceOverride || callerContext.source;
+  // Only use claude-code when EXPLICITLY requested. Telemetry fallback (source='claude-code') 
+  // should NOT trigger Claude Code identity - that's for actual Claude Code sessions.
+  const effectiveSource = callerContext.sourceOverride === 'claude-code' ? 'claude-code' : 
+    (callerContext.source === 'claude-code' ? 'opencode' : callerContext.source);
 
   switch (input.operation) {
       // === MESSAGE OPERATIONS ===
@@ -226,7 +230,6 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         // 1. Explicit agent_id in input (user specified)
         // 2. __injected_agent_id (proxy injected from X-Agent-Id header)
         const agentId = input.agent_id || input.__injected_agent_id || getInjectedAgentId();
-
         
         // Priority order for identity resolution:
         // 1. Explicit identity_id (highest priority)
@@ -686,25 +689,9 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
             callerIdentitySource = 'explicit';
             console.log(`[MatrixMessaging] Using explicit identity_id: ${callerIdentity.mxid}`);
           } else if (callerDirectory) {
-            const effectiveSource = callerContext.sourceOverride || callerContext.source;
-            if (effectiveSource === 'claude-code') {
-              const encoded = Buffer.from(callerDirectory).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-              const identityId = `claude_code_${encoded}`;
-              const localpart = `cc_${(callerDirectory.split('/').pop() || 'project').toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
-              callerIdentity = await ctx.identityManager.getOrCreateIdentity({
-                id: identityId,
-                localpart,
-                displayName: callerName || `Claude Code: ${callerDirectory.split('/').filter(Boolean).pop() || 'Project'}`,
-                type: 'custom'
-              });
-              callerIdentitySource = 'explicit';
-              console.log(`[MatrixMessaging] Using Claude Code identity: ${callerIdentity.mxid}`);
-            } else {
-              callerIdentitySource = 'opencode';
-              console.log(`[MatrixMessaging] Getting identity for callerDirectory: ${callerDirectory || 'NONE'}`);
-              callerIdentity = await ctx.openCodeService.getOrCreateIdentity(callerDirectory, callerName);
-              console.log(`[MatrixMessaging] Got identity: ${callerIdentity.mxid}`);
-            }
+            callerIdentity = await resolveCallerIdentity(ctx, callerDirectory, callerName, effectiveSource);
+            callerIdentitySource = effectiveSource === 'claude-code' ? 'explicit' : 'opencode';
+            console.log(`[MatrixMessaging] Using ${effectiveSource} identity: ${callerIdentity.mxid}`);
           } else {
             callerIdentitySource = 'default';
             callerIdentity = await ctx.openCodeService.getOrCreateDefaultIdentity();
@@ -897,7 +884,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         }
         
         // Start tracking this conversation for cross-run handling
-        const { getConversationTracker } = await import('../core/conversation-tracker.js');
+                const { getConversationTracker } = await import('../core/conversation-tracker.ts');
         const tracker = getConversationTracker();
         const conv = tracker.startConversation(eventId, roomId, agent_id, message);
         console.log(`[MatrixMessaging] Started tracking conversation ${eventId} for agent ${agent_id}`);
@@ -1119,8 +1106,13 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
   }
 
 
+const servicesInitPromise = initializeServices().catch((error) => {
+  console.error("[MatrixMessaging] Failed to initialize services:", error);
+});
+
 export default async function matrixMessaging(input: Input): Promise<string> {
   try {
+    await servicesInitPromise;
     const ctx = getToolContext();
 
     const injectedAgentId = getInjectedAgentId();
