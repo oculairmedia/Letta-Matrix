@@ -78,20 +78,7 @@ export class MatrixClientPool {
     // Start client
     await client.start();
 
-    // Set display name and avatar if not already set
-    try {
-      const profile = await client.getUserProfile(identity.mxid);
-      
-      if (!profile.displayname || profile.displayname !== identity.displayName) {
-        await client.setDisplayName(identity.displayName);
-      }
-      
-      if (identity.avatarUrl && (!profile.avatar_url || profile.avatar_url !== identity.avatarUrl)) {
-        await client.setAvatarUrl(identity.avatarUrl);
-      }
-    } catch (error) {
-      console.error('[ClientPool] Error setting profile:', error);
-    }
+    // Profile sync removed: caused stale cache to overwrite Matrix display names
 
     return client;
   }

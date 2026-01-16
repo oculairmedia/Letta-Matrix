@@ -59,8 +59,8 @@ export class IdentityManager {
   async getOrCreateIdentity(request: IdentityProvisionRequest): Promise<MatrixIdentity> {
     const existing = await this.storage.getIdentityAsync(request.id);
     if (existing) {
-      existing.lastUsedAt = Date.now();
-      await this.storage.saveIdentity(existing);
+      // Don't save back - this was overwriting display names with stale cached values
+      // The lastUsedAt update is not critical enough to risk data corruption
       console.log('[IdentityManager] Using existing identity:', request.id);
       return existing;
     }
