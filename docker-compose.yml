@@ -2,7 +2,9 @@ services:
   tuwunel:
     image: ghcr.io/oculairmedia/tuwunel-docker2010:latest
     restart: unless-stopped
+    entrypoint: ["/entrypoint.sh"]
     command: ["-c", "/var/lib/tuwunel/tuwunel.toml", "-O", "address=\"0.0.0.0\"", "-O", "port=6167"]
+    stop_grace_period: 30s
     environment:
       - TUWUNEL_SERVER_NAME=${MATRIX_SERVER_NAME:-matrix.oculair.ca}
       - TUWUNEL_DATABASE_PATH=/var/lib/tuwunel
@@ -15,6 +17,7 @@ services:
       - TUWUNEL_LOG=info
     volumes:
       - ${TUWUNEL_DATA_PATH:-./tuwunel-data}:/var/lib/tuwunel
+      - ./docker/tuwunel-entrypoint.sh:/entrypoint.sh:ro
     networks:
       - matrix-internal
     ports:
@@ -216,6 +219,7 @@ services:
     ports:
       - "3100:3100"
       - "3101:3101"
+      - "3103:3102"
     environment:
       # Matrix Configuration
       - MATRIX_HOMESERVER_URL=http://tuwunel:6167
@@ -238,9 +242,9 @@ services:
       - USE_IDENTITY_API=true
       - MATRIX_API_URL=http://matrix-api:8000
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-matrix-identity-internal-key}
+      - OPENCODE_BRIDGE_URL=${OPENCODE_BRIDGE_URL:-http://127.0.0.1:3201}
     volumes:
       - ./mcp-servers/matrix-identity-bridge/data:/app/data
-      - ./mcp-servers/matrix-identity-bridge/dist:/app/dist:ro
     networks:
       - matrix-internal
     depends_on:
