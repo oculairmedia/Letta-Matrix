@@ -51,7 +51,12 @@
       "Bash(echo:*)",
       "Bash(done)",
       "Bash(python -m pytest:*)",
-      "mcp__matrix__matrix_messaging"
+      "mcp__matrix__matrix_messaging",
+      "Bash(git -C /opt/stacks/matrix-synapse-deployment log --oneline -5)",
+      "Bash(git -C /opt/stacks/matrix-synapse-deployment status --short)",
+      "Bash(git -C /opt/stacks/matrix-synapse-deployment diff --name-only HEAD~5..HEAD -- mcp-servers/matrix-identity-bridge/)",
+      "Bash(git -C /opt/stacks/matrix-synapse-deployment log --oneline --all -- mcp-servers/matrix-identity-bridge/src/tools/MatrixMessaging.ts)",
+      "Bash(gh run list:*)"
     ],
     "deny": []
   }
