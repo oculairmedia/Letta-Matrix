@@ -408,4 +408,45 @@ export class RoomManager {
     
     return memberDetails;
   }
+
+  async getRoomMembersAdmin(
+    roomId: string,
+    adminToken: string,
+    homeserverUrl: string
+  ): Promise<Array<{ mxid: string; displayName?: string; membership: string }>> {
+    const stateResponse = await fetch(
+      `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state`,
+      {
+        headers: {
+          'Authorization': `Bearer ${adminToken}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    if (!stateResponse.ok) {
+      const err = await stateResponse.text();
+      throw new Error(`Failed to get room state: ${err}`);
+    }
+
+    const state = await stateResponse.json() as Array<{
+      type: string;
+      state_key?: string;
+      content?: { membership?: string; displayname?: string };
+    }>;
+
+    const members: Array<{ mxid: string; displayName?: string; membership: string }> = [];
+
+    for (const event of state) {
+      if (event.type === 'm.room.member' && event.state_key && event.content?.membership) {
+        members.push({
+          mxid: event.state_key,
+          displayName: event.content.displayname,
+          membership: event.content.membership
+        });
+      }
+    }
+
+    return members;
+  }
 }

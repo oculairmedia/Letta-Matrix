@@ -13,6 +13,7 @@ import { IdentityManager } from '../core/identity-manager';
 import { getCallerContext, resolveCallerIdentity, resolveCallerIdentityId, type CallerContext } from '../core/caller-context';
 import { getOrCreateAgentRoom } from '../core/agent-rooms';
 import { autoRegisterWithBridge } from '../core/opencode-bridge';
+import { getAdminToken, getAdminConfig } from '../core/admin-auth.js';
 
 // All supported operations
 const operations = [
@@ -435,29 +436,8 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const scope = input.scope || 'joined';
         
         if (scope === 'server') {
-          const adminUsername = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
-          const adminPassword = process.env.MATRIX_ADMIN_PASSWORD;
-          const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
-          
-          if (!adminPassword) {
-            throw new Error('MATRIX_ADMIN_PASSWORD required for server scope');
-          }
-          
-          const loginResponse = await fetch(`${homeserverUrl}/_matrix/client/v3/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              type: 'm.login.password',
-              identifier: { type: 'm.id.user', user: adminUsername.replace(/@([^:]+):.*/, '$1') },
-              password: adminPassword
-            })
-          });
-          
-          if (!loginResponse.ok) {
-            throw new Error(`Admin login failed: ${await loginResponse.text()}`);
-          }
-          
-          const { access_token: adminToken } = await loginResponse.json() as { access_token: string };
+          const adminToken = await getAdminToken();
+          const { homeserverUrl } = getAdminConfig();
           const rooms = await ctx.roomManager.listServerRooms(adminToken, homeserverUrl);
           return result({ 
             rooms: rooms.map(r => ({ room_id: r.roomId, name: r.name, topic: r.topic, alias: r.canonicalAlias })),
@@ -551,29 +531,8 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
 
       case 'room_find': {
         const query = requireParam(input.query, 'query');
-        const adminUsername = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
-        const adminPassword = process.env.MATRIX_ADMIN_PASSWORD;
-        const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
-        
-        if (!adminPassword) {
-          throw new Error('MATRIX_ADMIN_PASSWORD required for room_find');
-        }
-        
-        const loginResponse = await fetch(`${homeserverUrl}/_matrix/client/v3/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: 'm.login.password',
-            identifier: { type: 'm.id.user', user: adminUsername.replace(/@([^:]+):.*/, '$1') },
-            password: adminPassword
-          })
-        });
-        
-        if (!loginResponse.ok) {
-          throw new Error(`Admin login failed: ${await loginResponse.text()}`);
-        }
-        
-        const { access_token: adminToken } = await loginResponse.json() as { access_token: string };
+        const adminToken = await getAdminToken();
+        const { homeserverUrl } = getAdminConfig();
         const rooms = await ctx.roomManager.findRoomsByName(query, adminToken, homeserverUrl);
         const limited = rooms.slice(0, input.limit || 20);
         
@@ -587,15 +546,9 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
 
       case 'room_members': {
         const room_id = requireParam(input.room_id, 'room_id');
-        const resolvedIdentityId = await resolveCallerIdentityId(
-          ctx,
-          callerDirectory,
-          callerName,
-          effectiveSource,
-          input.identity_id
-        );
-        
-        const members = await ctx.roomManager.getRoomMembersPublic(resolvedIdentityId, room_id);
+        const adminToken = await getAdminToken();
+        const { homeserverUrl } = getAdminConfig();
+        const members = await ctx.roomManager.getRoomMembersAdmin(room_id, adminToken, homeserverUrl);
         
         return result({
           room_id,
@@ -831,36 +784,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
 
         const allInvitees = [{ identityId: callerIdentity.id, mxid: callerIdentity.mxid }, ...additionalInvitees];
 
-        const adminUsername = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
-        const adminPassword = process.env.MATRIX_ADMIN_PASSWORD;
-        const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://127.0.0.1:6167';
-
-        let adminToken: string | null = null;
-        const getAdminToken = async (): Promise<string> => {
-          if (adminToken) return adminToken;
-          if (!adminPassword) {
-            throw new Error('Admin credentials not configured');
-          }
-
-          const loginResponse = await fetch(`${homeserverUrl}/_matrix/client/v3/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              type: 'm.login.password',
-              identifier: { type: 'm.id.user', user: adminUsername.replace(/@([^:]+):.*/, '$1') },
-              password: adminPassword
-            })
-          });
-
-          if (!loginResponse.ok) {
-            const err = await loginResponse.text();
-            throw new Error(`Admin login failed: ${err}`);
-          }
-
-          const loginData = await loginResponse.json() as { access_token: string };
-          adminToken = loginData.access_token;
-          return adminToken;
-        };
+        const { homeserverUrl } = getAdminConfig();
 
         const ensureJoinForIdentity = async (identityId: string, mxid: string): Promise<boolean> => {
           const client = await ctx.clientPool.getClientById(identityId);

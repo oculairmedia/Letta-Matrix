@@ -1,7 +1,3 @@
-/**
- * Room operation handlers
- */
-
 import {
   OperationContext,
   MatrixMessagingArgs,
@@ -10,6 +6,7 @@ import {
   requireParam,
   requireIdentity
 } from './types.js';
+import { getAdminToken, getAdminConfig } from '../core/admin-auth.js';
 
 export const room_join: OperationHandler = async (args, ctx) => {
   const identity_id = requireParam(args.identity_id, 'identity_id');
@@ -35,39 +32,12 @@ export const room_info: OperationHandler = async (args, ctx) => {
   return result({ ...info } as Record<string, unknown>);
 };
 
-async function getAdminToken(): Promise<string> {
-  const adminUsername = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
-  const adminPassword = process.env.MATRIX_ADMIN_PASSWORD;
-  const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
-  
-  if (!adminPassword) {
-    throw new Error('MATRIX_ADMIN_PASSWORD required');
-  }
-  
-  const loginResponse = await fetch(`${homeserverUrl}/_matrix/client/v3/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      type: 'm.login.password',
-      identifier: { type: 'm.id.user', user: adminUsername.replace(/@([^:]+):.*/, '$1') },
-      password: adminPassword
-    })
-  });
-  
-  if (!loginResponse.ok) {
-    throw new Error(`Admin login failed: ${await loginResponse.text()}`);
-  }
-  
-  const { access_token } = await loginResponse.json() as { access_token: string };
-  return access_token;
-}
-
 export const room_list: OperationHandler = async (args, ctx) => {
   const scope = args.scope || 'joined';
   
   if (scope === 'server') {
-    const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
     const adminToken = await getAdminToken();
+    const { homeserverUrl } = getAdminConfig();
     
     const rooms = await ctx.roomManager.listServerRooms(adminToken, homeserverUrl);
     return result({ 
@@ -151,8 +121,8 @@ export const room_search: OperationHandler = async (args, ctx) => {
 
 export const room_find: OperationHandler = async (args, ctx) => {
   const query = requireParam(args.query, 'query');
-  const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
   const adminToken = await getAdminToken();
+  const { homeserverUrl } = getAdminConfig();
   
   const rooms = await ctx.roomManager.findRoomsByName(query, adminToken, homeserverUrl);
   const limited = rooms.slice(0, args.limit || 20);
@@ -166,10 +136,11 @@ export const room_find: OperationHandler = async (args, ctx) => {
 };
 
 export const room_members: OperationHandler = async (args, ctx) => {
-  const identity_id = requireParam(args.identity_id, 'identity_id');
   const room_id = requireParam(args.room_id, 'room_id');
+  const adminToken = await getAdminToken();
+  const { homeserverUrl } = getAdminConfig();
   
-  const members = await ctx.roomManager.getRoomMembersPublic(identity_id, room_id);
+  const members = await ctx.roomManager.getRoomMembersAdmin(room_id, adminToken, homeserverUrl);
   
   return result({
     room_id,
