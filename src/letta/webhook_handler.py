@@ -443,9 +443,40 @@ class LettaWebhookHandler:
                 agent_id=agent_id
             )
         
-        # Skip audit for Matrix-originated conversations (already handled by matrix-client)
         if is_matrix_conversation(agent_id):
+            opencode_sender = get_opencode_sender(agent_id)
             clear_matrix_conversation(agent_id)
+            
+            if opencode_sender:
+                logger.info(
+                    f"[Webhook] Forwarding response for OpenCode/ClaudeCode sender {opencode_sender}"
+                )
+                try:
+                    import aiohttp
+                    mcp_url = os.getenv("MCP_SERVER_URL", "http://matrix-messaging-mcp:3101")
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            f"{mcp_url}/conversations/response",
+                            json={
+                                "agent_id": agent_id,
+                                "response": assistant_content,
+                                "opencode_sender": opencode_sender
+                            }
+                        ) as resp:
+                            if resp.status == 200:
+                                logger.info(f"[Webhook] Forwarded response to MCP for {opencode_sender}")
+                            else:
+                                logger.warning(f"[Webhook] MCP forward failed: {resp.status}")
+                except Exception as e:
+                    logger.warning(f"[Webhook] Failed to forward to MCP: {e}")
+                
+                return WebhookResult(
+                    success=True,
+                    response_posted=True,
+                    response_content=assistant_content,
+                    agent_id=agent_id
+                )
+            
             logger.info(
                 f"[Webhook] Skipping audit for Matrix conversation agent {agent_id}"
             )

@@ -102,6 +102,12 @@ export class WebhookServer {
         return;
       }
 
+      // Response forwarding endpoint (called by matrix-api webhook handler)
+      if (url.pathname === '/conversations/response' && req.method === 'POST') {
+        await this.handleConversationResponse(req, res);
+        return;
+      }
+
       // 404 for unknown paths
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not Found', path: url.pathname }));
@@ -234,6 +240,46 @@ export class WebhookServer {
       conversation_id: conv.matrix_event_id,
       agent_id: conv.agent_id,
       tracking: true
+    }));
+  }
+
+  private async handleConversationResponse(
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ): Promise<void> {
+    const body = await this.readRequestBody(req);
+    const payload = JSON.parse(body) as {
+      agent_id: string;
+      response: string;
+      opencode_sender: string;
+    };
+
+    console.log(`[WebhookServer] Received forwarded response for ${payload.opencode_sender} from agent ${payload.agent_id}`);
+
+    if (!payload.agent_id || !payload.response || !payload.opencode_sender) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'error',
+        message: 'Missing required fields: agent_id, response, opencode_sender'
+      }));
+      return;
+    }
+
+    const tracker = getConversationTracker();
+    const conv = tracker.getConversationByAgent(payload.agent_id);
+    
+    if (conv) {
+      tracker.completeWithResponse(conv.matrix_event_id, payload.response);
+      console.log(`[WebhookServer] Completed conversation ${conv.matrix_event_id} with response`);
+    } else {
+      console.warn(`[WebhookServer] No active conversation found for agent ${payload.agent_id}`);
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      agent_id: payload.agent_id,
+      conversation_found: !!conv
     }));
   }
 
@@ -378,6 +424,7 @@ export class WebhookServer {
         console.log(`[WebhookServer] Endpoints:`);
         console.log(`  - Tool Selector: POST /webhook/tool-selector`);
         console.log(`  - Letta Agent Response: POST /webhooks/letta/agent-response`);
+        console.log(`  - Conversation Response: POST /conversations/response`);
         console.log(`  - Conversations: GET /conversations`);
         console.log(`  - Health: GET /health`);
         resolve();

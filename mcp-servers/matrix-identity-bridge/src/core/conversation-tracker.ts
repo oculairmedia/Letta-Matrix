@@ -25,6 +25,7 @@ export interface ConversationState {
   updated_at: string;
   original_query?: string;
   tools_attached?: string[];
+  response?: string;
 }
 
 export interface WebhookPayload {
@@ -222,6 +223,27 @@ export class ConversationTracker {
     }
     
     console.log(`[ConversationTracker] Completed conversation ${matrixEventId}`);
+  }
+
+  completeWithResponse(matrixEventId: string, response: string): void {
+    const conv = this.conversations.get(matrixEventId);
+    if (!conv) return;
+
+    conv.status = 'completed';
+    conv.response = response;
+    conv.updated_at = new Date().toISOString();
+    
+    for (const run of conv.runs) {
+      if (run.status === 'active') {
+        run.status = 'completed';
+      }
+    }
+
+    if (this.agentConversations.get(conv.agent_id) === matrixEventId) {
+      this.agentConversations.delete(conv.agent_id);
+    }
+    
+    console.log(`[ConversationTracker] Completed conversation ${matrixEventId} with response (${response.length} chars)`);
   }
 
   /**

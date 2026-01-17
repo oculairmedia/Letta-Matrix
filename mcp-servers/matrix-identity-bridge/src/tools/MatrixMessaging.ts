@@ -898,7 +898,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         });
         
         const matrixApiUrl = process.env.MATRIX_API_URL || 'http://matrix-api:8000';
-        const opencodeSender = callerIdentity.type === 'opencode' && callerIdentity.mxid.startsWith('@oc_')
+        const opencodeSender = (callerIdentity.mxid.startsWith('@oc_') || callerIdentity.mxid.startsWith('@cc_'))
           ? callerIdentity.mxid
           : undefined;
         try {
