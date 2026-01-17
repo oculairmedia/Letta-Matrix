@@ -126,6 +126,47 @@ def get_mapping_by_matrix_user(matrix_user_id: str) -> Optional[dict]:
         return None
 
 
+def get_mapping_by_agent_name(name: str, fuzzy: bool = True) -> Optional[dict]:
+    """
+    Get mapping for an agent by display name or agent_id.
+    
+    Args:
+        name: The agent's display name (e.g., "Meridian", "BMO") or agent_id
+        fuzzy: If True, do case-insensitive partial matching
+        
+    Returns:
+        Mapping dict or None if not found
+    """
+    try:
+        if name.startswith("agent-"):
+            result = get_mapping_by_agent_id(name)
+            if result:
+                return result
+        
+        mappings = get_all_mappings()
+        name_lower = name.lower()
+        
+        for mapping in mappings.values():
+            agent_name = mapping.get("agent_name", "")
+            agent_name_lower = agent_name.lower()
+            
+            if fuzzy:
+                if name_lower == agent_name_lower:
+                    return mapping
+                if name_lower in agent_name_lower:
+                    return mapping
+                if agent_name_lower.startswith("huly - ") and name_lower in agent_name_lower[7:]:
+                    return mapping
+            else:
+                if name_lower == agent_name_lower:
+                    return mapping
+        
+        return None
+    except Exception as e:
+        logger.error(f"Error getting mapping for agent name {name}: {e}")
+        return None
+
+
 def upsert_mapping(
     agent_id: str,
     agent_name: str,

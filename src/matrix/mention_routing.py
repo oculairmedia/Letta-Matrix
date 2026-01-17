@@ -13,20 +13,23 @@ from typing import List, Tuple, Optional
 from src.core.mapping_service import (
     get_mapping_by_agent_id,
     get_mapping_by_matrix_user,
+    get_mapping_by_agent_name,
     get_all_mappings,
 )
 
 logger = logging.getLogger(__name__)
 
+# Regex for Matrix user IDs: @localpart:domain
+MXID_PATTERN = re.compile(r'@([a-zA-Z0-9._=\-/]+):([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})')
 
-def get_mapping_by_agent_name(name: str, fuzzy: bool = True) -> Optional[dict]:
-    """
-    Get mapping for an agent by display name.
-    
-    This is a temporary stub - will be moved to mapping_service.py
-    """
-    # TODO: Implement in mapping_service.py
-    raise NotImplementedError("get_mapping_by_agent_name not yet implemented")
+# Regex for friendly @mentions - single word only (multi-word names matched via partial/fuzzy)
+FRIENDLY_MENTION_PATTERN = re.compile(r'@([A-Za-z][A-Za-z0-9_\-]*)')
+
+# Special pattern for "Huly - ProjectName" style (with hyphen separator)  
+HULY_MENTION_PATTERN = re.compile(r'@(Huly\s*-\s*[A-Za-z][A-Za-z0-9_\-\s]*)', re.IGNORECASE)
+
+# Agent MXID pattern: @agent_UUID_parts:domain
+AGENT_MXID_PATTERN = re.compile(r'@(agent_[0-9a-f_]+):([a-zA-Z0-9.\-]+)')
 
 
 def strip_reply_fallback(body: str) -> str:
@@ -39,8 +42,22 @@ def strip_reply_fallback(body: str) -> str:
     
     Actual new message here
     """
-    # TODO: Implement
-    raise NotImplementedError("strip_reply_fallback not yet implemented")
+    if not body.startswith('>'):
+        return body
+    
+    lines = body.split('\n')
+    new_message_lines = []
+    past_quote = False
+    
+    for line in lines:
+        if past_quote:
+            new_message_lines.append(line)
+        elif not line.startswith('>'):
+            past_quote = True
+            if line.strip():
+                new_message_lines.append(line)
+    
+    return '\n'.join(new_message_lines).strip()
 
 
 def extract_agent_mentions(body: str) -> List[Tuple[str, str, str]]:
@@ -48,9 +65,38 @@ def extract_agent_mentions(body: str) -> List[Tuple[str, str, str]]:
     Extract @agent mentions from message body.
     
     Returns list of (matched_text, agent_id, agent_name) tuples.
+    Strips reply fallback before parsing to avoid matching quoted content.
+    Deduplicates by agent_id.
     """
-    # TODO: Implement
-    raise NotImplementedError("extract_agent_mentions not yet implemented")
+    clean_body = strip_reply_fallback(body)
+    found_agents: dict[str, Tuple[str, str, str]] = {}
+    
+    # 1. Check for full Matrix user ID mentions (@agent_xxx:domain)
+    for match in AGENT_MXID_PATTERN.finditer(clean_body):
+        full_mxid = match.group(0)
+        mapping = get_mapping_by_matrix_user(full_mxid)
+        if mapping:
+            agent_id = mapping["agent_id"]
+            if agent_id not in found_agents:
+                found_agents[agent_id] = (full_mxid, agent_id, mapping["agent_name"])
+    
+    # 2. Check for friendly @Name mentions
+    for match in FRIENDLY_MENTION_PATTERN.finditer(clean_body):
+        name = match.group(1)
+        full_match = match.group(0)
+        
+        # Skip if it looks like an email (has @ before and text after with @)
+        start = match.start()
+        if start > 0 and clean_body[start-1].isalnum():
+            continue
+            
+        mapping = get_mapping_by_agent_name(name, fuzzy=True)
+        if mapping:
+            agent_id = mapping["agent_id"]
+            if agent_id not in found_agents:
+                found_agents[agent_id] = (full_match, agent_id, mapping["agent_name"])
+    
+    return list(found_agents.values())
 
 
 async def forward_to_agent_room(
@@ -69,8 +115,56 @@ async def forward_to_agent_room(
     
     Returns event_id of forwarded message, or None on failure.
     """
-    # TODO: Implement
-    raise NotImplementedError("forward_to_agent_room not yet implemented")
+    from src.matrix.identity_client_pool import get_identity_client_pool
+    
+    try:
+        pool = get_identity_client_pool(config.homeserver_url)
+        
+        sender_mapping = get_mapping_by_matrix_user(sender_mxid)
+        if not sender_mapping:
+            logger.error(f"Cannot forward: no mapping for sender {sender_mxid}")
+            return None
+        
+        sender_agent_id = sender_mapping["agent_id"]
+        identity_id = f"letta_{sender_agent_id}"
+        
+        client = await pool.get_client(identity_id)
+        if not client:
+            logger.error(f"Cannot forward: no client for identity {identity_id}")
+            return None
+        
+        content = {
+            "msgtype": "m.text",
+            "body": f"[Forwarded from {sender_agent_name}]\n\n{message}",
+            "m.forwarded": True,
+            "m.forward_source": {
+                "room_id": source_room_id,
+                "event_id": original_event_id,
+                "sender": sender_mxid,
+                "sender_name": sender_agent_name,
+            },
+        }
+        
+        response = await client.room_send(
+            room_id=target_room_id,
+            message_type="m.room.message",
+            content=content,
+        )
+        
+        from nio import RoomSendResponse, RoomSendError
+        if isinstance(response, RoomSendResponse):
+            logger.info(f"Forwarded message to {target_agent_name}'s room: {response.event_id}")
+            return response.event_id
+        elif isinstance(response, RoomSendError):
+            logger.error(f"Failed to forward message: {response.message}")
+            return None
+        else:
+            logger.error(f"Unexpected response type: {type(response)}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error forwarding to {target_agent_name}'s room: {e}")
+        return None
 
 
 async def handle_agent_mention_routing(
@@ -85,5 +179,51 @@ async def handle_agent_mention_routing(
     """
     Check for @agent mentions and forward to mentioned agents' rooms.
     """
-    # TODO: Implement
-    raise NotImplementedError("handle_agent_mention_routing not yet implemented")
+    content = event.source.get("content", {})
+    if content.get("m.forwarded"):
+        logger.debug(f"Skipping already-forwarded message {event.event_id}")
+        return
+    
+    body = getattr(event, "body", "")
+    if not body:
+        return
+    
+    mentions = extract_agent_mentions(body)
+    if not mentions:
+        return
+    
+    logger.info(f"Found {len(mentions)} agent mention(s) in message from {sender_agent_name}")
+    
+    for matched_text, target_agent_id, target_agent_name in mentions:
+        if target_agent_id == sender_agent_id:
+            logger.debug(f"Skipping self-mention by {sender_agent_name}")
+            continue
+        
+        target_mapping = get_mapping_by_agent_id(target_agent_id)
+        if not target_mapping:
+            logger.warning(f"No mapping found for mentioned agent {target_agent_id}")
+            continue
+        
+        target_room_id = target_mapping.get("room_id")
+        if not target_room_id:
+            logger.warning(f"No room_id for agent {target_agent_name}")
+            continue
+        
+        logger.info(f"Forwarding message to {target_agent_name}'s room {target_room_id}")
+        
+        event_id = await forward_to_agent_room(
+            source_room_id=room.room_id,
+            target_room_id=target_room_id,
+            message=body,
+            sender_mxid=sender_mxid,
+            sender_agent_name=sender_agent_name,
+            target_agent_name=target_agent_name,
+            original_event_id=event.event_id,
+            config=config,
+            logger=logger,
+        )
+        
+        if event_id:
+            logger.info(f"Forwarded to {target_agent_name}: {event_id}")
+        else:
+            logger.error(f"Failed to forward to {target_agent_name}")

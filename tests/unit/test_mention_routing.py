@@ -296,13 +296,18 @@ class TestForwardToAgentRoom:
     
     @pytest.mark.asyncio
     async def test_forward_success(self, mock_config, mock_logger, mock_mapping_service):
-        """Test successful message forwarding"""
         from src.matrix.mention_routing import forward_to_agent_room
+        from nio import RoomSendResponse
         
-        with patch('src.matrix.mention_routing.get_client_for_identity') as mock_get_client:
+        with patch('src.matrix.identity_client_pool.get_identity_client_pool') as mock_get_pool:
             mock_client = AsyncMock()
-            mock_client.room_send = AsyncMock(return_value=Mock(event_id="$forwarded123"))
-            mock_get_client.return_value = mock_client
+            mock_response = Mock(spec=RoomSendResponse)
+            mock_response.event_id = "$forwarded123"
+            mock_client.room_send = AsyncMock(return_value=mock_response)
+            
+            mock_pool = Mock()
+            mock_pool.get_client = AsyncMock(return_value=mock_client)
+            mock_get_pool.return_value = mock_pool
             
             event_id = await forward_to_agent_room(
                 source_room_id="!source:matrix.oculair.ca",
@@ -321,19 +326,24 @@ class TestForwardToAgentRoom:
     
     @pytest.mark.asyncio
     async def test_forward_sets_forwarded_flag(self, mock_config, mock_logger, mock_mapping_service):
-        """Test that forwarded messages have m.forwarded flag"""
         from src.matrix.mention_routing import forward_to_agent_room
+        from nio import RoomSendResponse
         
-        with patch('src.matrix.mention_routing.get_client_for_identity') as mock_get_client:
+        with patch('src.matrix.identity_client_pool.get_identity_client_pool') as mock_get_pool:
             mock_client = AsyncMock()
-            mock_client.room_send = AsyncMock(return_value=Mock(event_id="$fwd"))
-            mock_get_client.return_value = mock_client
+            mock_response = Mock(spec=RoomSendResponse)
+            mock_response.event_id = "$fwd"
+            mock_client.room_send = AsyncMock(return_value=mock_response)
+            
+            mock_pool = Mock()
+            mock_pool.get_client = AsyncMock(return_value=mock_client)
+            mock_get_pool.return_value = mock_pool
             
             await forward_to_agent_room(
                 source_room_id="!source:test",
                 target_room_id="!target:test",
                 message="Test message",
-                sender_mxid="@sender:test",
+                sender_mxid="@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca",
                 sender_agent_name="Sender",
                 target_agent_name="Target",
                 original_event_id="$orig",
@@ -341,7 +351,6 @@ class TestForwardToAgentRoom:
                 logger=mock_logger,
             )
             
-            # Check the content passed to room_send
             call_args = mock_client.room_send.call_args
             content = call_args[1]["content"] if "content" in call_args[1] else call_args[0][2]
             
@@ -350,19 +359,24 @@ class TestForwardToAgentRoom:
     
     @pytest.mark.asyncio
     async def test_forward_includes_source_reference(self, mock_config, mock_logger, mock_mapping_service):
-        """Test that forwarded messages include source room and event reference"""
         from src.matrix.mention_routing import forward_to_agent_room
+        from nio import RoomSendResponse
         
-        with patch('src.matrix.mention_routing.get_client_for_identity') as mock_get_client:
+        with patch('src.matrix.identity_client_pool.get_identity_client_pool') as mock_get_pool:
             mock_client = AsyncMock()
-            mock_client.room_send = AsyncMock(return_value=Mock(event_id="$fwd"))
-            mock_get_client.return_value = mock_client
+            mock_response = Mock(spec=RoomSendResponse)
+            mock_response.event_id = "$fwd"
+            mock_client.room_send = AsyncMock(return_value=mock_response)
+            
+            mock_pool = Mock()
+            mock_pool.get_client = AsyncMock(return_value=mock_client)
+            mock_get_pool.return_value = mock_pool
             
             await forward_to_agent_room(
                 source_room_id="!source:test",
                 target_room_id="!target:test",
                 message="Test message",
-                sender_mxid="@sender:test",
+                sender_mxid="@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca",
                 sender_agent_name="Sender",
                 target_agent_name="Target",
                 original_event_id="$original123",
@@ -376,21 +390,20 @@ class TestForwardToAgentRoom:
             forward_source = content.get("m.forward_source", {})
             assert forward_source.get("room_id") == "!source:test"
             assert forward_source.get("event_id") == "$original123"
-            assert forward_source.get("sender") == "@sender:test"
+            assert forward_source.get("sender") == "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca"
     
     @pytest.mark.asyncio
     async def test_forward_returns_none_on_error(self, mock_config, mock_logger, mock_mapping_service):
-        """Test that None is returned when forwarding fails"""
         from src.matrix.mention_routing import forward_to_agent_room
         
-        with patch('src.matrix.mention_routing.get_client_for_identity') as mock_get_client:
-            mock_get_client.side_effect = Exception("Connection failed")
+        with patch('src.matrix.identity_client_pool.get_identity_client_pool') as mock_get_pool:
+            mock_get_pool.side_effect = Exception("Connection failed")
             
             event_id = await forward_to_agent_room(
                 source_room_id="!source:test",
                 target_room_id="!target:test",
                 message="Test message",
-                sender_mxid="@sender:test",
+                sender_mxid="@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca",
                 sender_agent_name="Sender",
                 target_agent_name="Target",
                 original_event_id="$orig",
@@ -595,38 +608,32 @@ class TestGetMappingByAgentName:
     """Tests for the get_mapping_by_agent_name() function in mapping_service"""
     
     @pytest.fixture
-    def mock_db_with_agents(self):
-        """Mock database with sample agents"""
-        with patch('src.core.mapping_service._get_db') as mock:
-            db = Mock()
-            
-            # Sample agent data
-            agents = [
-                Mock(agent_id="agent-1", agent_name="Meridian"),
-                Mock(agent_id="agent-2", agent_name="BMO"),
-                Mock(agent_id="agent-3", agent_name="Huly - Matrix Synapse Deployment"),
-            ]
-            
-            def get_by_name(name, fuzzy=True):
-                name_lower = name.lower()
-                for agent in agents:
-                    agent_name_lower = agent.agent_name.lower()
-                    if fuzzy:
-                        if name_lower == agent_name_lower or name_lower in agent_name_lower:
-                            return agent
-                        if agent_name_lower.startswith("huly - ") and name_lower in agent_name_lower[7:]:
-                            return agent
-                    else:
-                        if name_lower == agent_name_lower:
-                            return agent
-                return None
-            
-            db.get_by_agent_name = get_by_name
-            mock.return_value = db
-            yield db
+    def mock_all_mappings(self):
+        """Mock get_all_mappings with sample agents"""
+        sample_mappings = {
+            "agent-1": {
+                "agent_id": "agent-1",
+                "agent_name": "Meridian",
+                "matrix_user_id": "@meridian:matrix.oculair.ca",
+                "room_id": "!meridian:matrix.oculair.ca",
+            },
+            "agent-2": {
+                "agent_id": "agent-2",
+                "agent_name": "BMO",
+                "matrix_user_id": "@bmo:matrix.oculair.ca",
+                "room_id": "!bmo:matrix.oculair.ca",
+            },
+            "agent-3": {
+                "agent_id": "agent-3",
+                "agent_name": "Huly - Matrix Synapse Deployment",
+                "matrix_user_id": "@huly_mxsyn:matrix.oculair.ca",
+                "room_id": "!huly_mxsyn:matrix.oculair.ca",
+            },
+        }
+        with patch('src.core.mapping_service.get_all_mappings', return_value=sample_mappings):
+            yield sample_mappings
     
-    def test_exact_name_match(self, mock_db_with_agents):
-        """Test exact name matching"""
+    def test_exact_name_match(self, mock_all_mappings):
         from src.core.mapping_service import get_mapping_by_agent_name
         
         result = get_mapping_by_agent_name("Meridian")
@@ -634,8 +641,7 @@ class TestGetMappingByAgentName:
         assert result is not None
         assert result["agent_name"] == "Meridian"
     
-    def test_case_insensitive_match(self, mock_db_with_agents):
-        """Test case-insensitive matching"""
+    def test_case_insensitive_match(self, mock_all_mappings):
         from src.core.mapping_service import get_mapping_by_agent_name
         
         result = get_mapping_by_agent_name("meridian")
@@ -643,8 +649,7 @@ class TestGetMappingByAgentName:
         assert result is not None
         assert result["agent_name"] == "Meridian"
     
-    def test_huly_prefix_stripping(self, mock_db_with_agents):
-        """Test matching Huly agents by name without prefix"""
+    def test_huly_prefix_stripping(self, mock_all_mappings):
         from src.core.mapping_service import get_mapping_by_agent_name
         
         result = get_mapping_by_agent_name("Matrix Synapse Deployment")
@@ -652,16 +657,14 @@ class TestGetMappingByAgentName:
         assert result is not None
         assert result["agent_name"] == "Huly - Matrix Synapse Deployment"
     
-    def test_returns_none_for_unknown(self, mock_db_with_agents):
-        """Test that None is returned for unknown agent names"""
+    def test_returns_none_for_unknown(self, mock_all_mappings):
         from src.core.mapping_service import get_mapping_by_agent_name
         
         result = get_mapping_by_agent_name("NonExistentAgent")
         
         assert result is None
     
-    def test_fuzzy_disabled(self, mock_db_with_agents):
-        """Test with fuzzy matching disabled"""
+    def test_fuzzy_disabled(self, mock_all_mappings):
         from src.core.mapping_service import get_mapping_by_agent_name
         
         # Exact match should work
@@ -671,3 +674,15 @@ class TestGetMappingByAgentName:
         # Partial match should not work with fuzzy=False
         result = get_mapping_by_agent_name("Matrix Synapse", fuzzy=False)
         assert result is None
+    
+    def test_agent_id_lookup(self, mock_all_mappings):
+        from src.core.mapping_service import get_mapping_by_agent_name
+        
+        with patch('src.core.mapping_service.get_mapping_by_agent_id') as mock_by_id:
+            mock_by_id.return_value = mock_all_mappings["agent-1"]
+            
+            result = get_mapping_by_agent_name("agent-1")
+            
+            assert result is not None
+            assert result["agent_id"] == "agent-1"
+            mock_by_id.assert_called_once_with("agent-1")

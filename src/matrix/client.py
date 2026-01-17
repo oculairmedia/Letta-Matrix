@@ -1544,10 +1544,24 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             return
 
         # Allow messages from OTHER agents (inter-agent communication)
+        sender_mapping = None
         if room_agent_user_id:
             sender_mapping = get_mapping_by_matrix_user(event.sender)
             if sender_mapping and event.sender != room_agent_user_id:
                 logger.info(f"Received inter-agent message from {event.sender} in {room.display_name}")
+        
+        # Handle @mention-based routing for agent messages
+        if sender_mapping and sender_mapping.get("agent_id"):
+            from src.matrix.mention_routing import handle_agent_mention_routing
+            await handle_agent_mention_routing(
+                room=room,
+                event=event,
+                sender_mxid=event.sender,
+                sender_agent_id=sender_mapping["agent_id"],
+                sender_agent_name=sender_mapping.get("agent_name", "Unknown"),
+                config=config,
+                logger=logger,
+            )
         
         # Skip processing for rooms without a dedicated agent (relay/bridge rooms)
         # Letta can still write to these rooms via MCP tools, but won't auto-respond
