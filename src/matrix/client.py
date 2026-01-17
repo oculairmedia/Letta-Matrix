@@ -977,13 +977,51 @@ async def send_to_letta_api(
         def _sync_send():
             if conversation_id:
                 logger.debug(f"[API] Using Conversations API: {conversation_id}")
-                stream = letta_client.conversations.messages.create(
+                from src.core.retry import is_conversation_busy_error, ConversationBusyError
+                import time
+                
+                max_retries = 3
+                last_error: Optional[Exception] = None
+                
+                for attempt in range(max_retries + 1):
+                    try:
+                        stream = letta_client.conversations.messages.create(
+                            conversation_id=conversation_id,
+                            input=message_body,
+                            streaming=False,
+                        )
+                        messages = list(stream)
+                        return type('Response', (), {'messages': messages})()
+                    except Exception as e:
+                        if is_conversation_busy_error(e):
+                            last_error = e
+                            if attempt < max_retries:
+                                delay = min(1.0 * (2 ** attempt), 8.0)
+                                logger.warning(
+                                    f"[API-RETRY] Conversation {conversation_id} is busy, "
+                                    f"attempt {attempt + 1}/{max_retries + 1}, "
+                                    f"retrying in {delay:.1f}s"
+                                )
+                                time.sleep(delay)
+                                continue
+                            else:
+                                logger.error(
+                                    f"[API-RETRY] Conversation {conversation_id} still busy "
+                                    f"after {max_retries + 1} attempts"
+                                )
+                                raise ConversationBusyError(
+                                    conversation_id=conversation_id,
+                                    attempts=max_retries + 1,
+                                    last_error=e
+                                ) from e
+                        else:
+                            raise
+                
+                raise ConversationBusyError(
                     conversation_id=conversation_id,
-                    input=message_body,
-                    streaming=False,
+                    attempts=max_retries + 1,
+                    last_error=last_error
                 )
-                messages = list(stream)
-                return type('Response', (), {'messages': messages})()
             else:
                 logger.debug(f"[API] Using Agents API: {current_agent_id}")
                 return letta_client.agents.messages.create(

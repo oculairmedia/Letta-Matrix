@@ -118,6 +118,64 @@ class StepStreamReader:
         self.timeout = timeout
         self._last_tool_name: Optional[str] = None
     
+    def _create_stream_with_retry(
+        self,
+        conversation_id: str,
+        message: str,
+        background: bool = False,
+        max_retries: int = 3,
+    ) -> Any:
+        """
+        Create a streaming connection with retry on CONVERSATION_BUSY (409).
+        
+        Uses synchronous retry since this runs in a background thread.
+        """
+        import time
+        from src.core.retry import is_conversation_busy_error, ConversationBusyError
+        
+        last_error: Optional[Exception] = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                return self.client.conversations.messages.create(
+                    conversation_id=conversation_id,
+                    input=message,
+                    streaming=True,
+                    stream_tokens=False,
+                    include_pings=self.include_pings,
+                    background=background,
+                )
+            except Exception as e:
+                if is_conversation_busy_error(e):
+                    last_error = e
+                    if attempt < max_retries:
+                        delay = min(1.0 * (2 ** attempt), 8.0)
+                        logger.warning(
+                            f"[STREAM-RETRY] Conversation {conversation_id} is busy, "
+                            f"attempt {attempt + 1}/{max_retries + 1}, "
+                            f"retrying in {delay:.1f}s"
+                        )
+                        time.sleep(delay)
+                        continue
+                    else:
+                        logger.error(
+                            f"[STREAM-RETRY] Conversation {conversation_id} still busy "
+                            f"after {max_retries + 1} attempts"
+                        )
+                        raise ConversationBusyError(
+                            conversation_id=conversation_id,
+                            attempts=max_retries + 1,
+                            last_error=e
+                        ) from e
+                else:
+                    raise
+        
+        raise ConversationBusyError(
+            conversation_id=conversation_id,
+            attempts=max_retries + 1,
+            last_error=last_error
+        )
+    
     async def stream_message(
         self,
         agent_id: str,
@@ -153,12 +211,9 @@ class StepStreamReader:
                 try:
                     if conversation_id:
                         logger.debug(f"[STREAM] Using Conversations API: {conversation_id}")
-                        stream = self.client.conversations.messages.create(
+                        stream = self._create_stream_with_retry(
                             conversation_id=conversation_id,
-                            input=message,
-                            streaming=True,
-                            stream_tokens=False,
-                            include_pings=self.include_pings,
+                            message=message,
                             background=background,
                         )
                     else:
