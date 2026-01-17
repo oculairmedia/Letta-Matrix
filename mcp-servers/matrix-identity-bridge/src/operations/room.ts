@@ -36,10 +36,27 @@ export const room_info: OperationHandler = async (args, ctx) => {
 };
 
 export const room_list: OperationHandler = async (args, ctx) => {
+  const scope = args.scope || 'joined';
+  
+  if (scope === 'server') {
+    const adminToken = process.env.MATRIX_ADMIN_TOKEN;
+    const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
+    
+    if (!adminToken) {
+      throw new Error('MATRIX_ADMIN_TOKEN required for server scope');
+    }
+    
+    const rooms = await ctx.roomManager.listServerRooms(adminToken, homeserverUrl);
+    return result({ 
+      rooms: rooms.map(r => ({ room_id: r.roomId, name: r.name, topic: r.topic, alias: r.canonicalAlias })),
+      count: rooms.length,
+      scope: 'server'
+    });
+  }
+  
   const identity_id = requireParam(args.identity_id, 'identity_id');
-
   const rooms = await ctx.roomManager.listJoinedRooms(identity_id);
-  return result({ rooms, count: rooms.length });
+  return result({ rooms, count: rooms.length, scope: 'joined' });
 };
 
 export const room_create: OperationHandler = async (args, ctx) => {
@@ -106,5 +123,38 @@ export const room_search: OperationHandler = async (args, ctx) => {
       timestamp: r.result.origin_server_ts,
       content: r.result.content
     }))
+  });
+};
+
+export const room_find: OperationHandler = async (args, ctx) => {
+  const query = requireParam(args.query, 'query');
+  const adminToken = process.env.MATRIX_ADMIN_TOKEN;
+  const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
+  
+  if (!adminToken) {
+    throw new Error('MATRIX_ADMIN_TOKEN required for room_find');
+  }
+  
+  const rooms = await ctx.roomManager.findRoomsByName(query, adminToken, homeserverUrl);
+  const limited = rooms.slice(0, args.limit || 20);
+  
+  return result({
+    query,
+    rooms: limited.map(r => ({ room_id: r.roomId, name: r.name, topic: r.topic, alias: r.canonicalAlias })),
+    count: limited.length,
+    total: rooms.length
+  });
+};
+
+export const room_members: OperationHandler = async (args, ctx) => {
+  const identity_id = requireParam(args.identity_id, 'identity_id');
+  const room_id = requireParam(args.room_id, 'room_id');
+  
+  const members = await ctx.roomManager.getRoomMembersPublic(identity_id, room_id);
+  
+  return result({
+    room_id,
+    members,
+    count: members.length
   });
 };

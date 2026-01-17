@@ -50,6 +50,8 @@ const operations: Record<MatrixOperationType, OperationHandler> = {
   room_create: room.room_create,
   room_invite: room.room_invite,
   room_search: room.room_search,
+  room_find: room.room_find,
+  room_members: room.room_members,
 
   // Identity operations
   identity_create: identity.identity_create,
@@ -90,7 +92,7 @@ export async function handleOperation(
  * Get the tool description for the unified tool
  */
 export function getToolDescription(): string {
-  return `Matrix messaging with 26 operations. Use 'operation' param to select: send, read, react, edit, typing, subscribe, unsubscribe, room_join, room_leave, room_info, room_list, room_create, room_invite, room_search, identity_create, identity_get, identity_list, identity_derive, letta_send, letta_chat, letta_lookup, letta_list, letta_identity, opencode_connect, opencode_send, opencode_status`;
+  return `Matrix messaging with 28 operations. Use 'operation' param to select: send, read, react, edit, typing, subscribe, unsubscribe, room_join, room_leave, room_info, room_list, room_create, room_invite, room_search, room_find, room_members, identity_create, identity_get, identity_list, identity_derive, letta_send, letta_chat, letta_lookup, letta_list, letta_identity, opencode_connect, opencode_send, opencode_status`;
 }
 
 /**
@@ -126,6 +128,7 @@ export function getToolSchema(): Record<string, unknown> {
       user_mxid: { type: 'string', description: 'User MXID for invite' },
       query: { type: 'string', description: 'Search query' },
       limit: { type: 'number', description: 'Result limit' },
+      scope: { type: 'string', enum: ['joined', 'server'], description: 'Room scope for room_list' },
       typing: { type: 'boolean', description: 'Typing state' },
       timeout: { type: 'number', description: 'Timeout in ms' },
       rooms: { type: 'array', items: { type: 'string' }, description: 'Room IDs' },

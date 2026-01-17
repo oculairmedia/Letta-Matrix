@@ -18,6 +18,7 @@ export const MatrixOperation = z.enum([
   'send', 'read', 'react', 'edit', 'typing', 'subscribe', 'unsubscribe',
   // Room operations
   'room_join', 'room_leave', 'room_info', 'room_list', 'room_create', 'room_invite', 'room_search',
+  'room_find', 'room_members',
   // Identity operations
   'identity_create', 'identity_get', 'identity_list', 'identity_derive',
   // Letta integration
@@ -59,6 +60,7 @@ export const MatrixMessagingSchema = z.object({
   user_mxid: z.string().optional().describe('User MXID for invites'),
   query: z.string().optional().describe('Search query'),
   limit: z.number().optional().describe('Result limit'),
+  scope: z.enum(['joined', 'server']).optional().describe('Room scope: joined (identity rooms) or server (all admin rooms)'),
   
   // Typing parameters
   typing: z.boolean().optional().describe('Typing indicator state'),

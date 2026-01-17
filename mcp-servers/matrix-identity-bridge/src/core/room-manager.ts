@@ -7,6 +7,17 @@ import type { Storage } from './storage.js';
 import type { MatrixClientPool } from './client-pool.js';
 import type { DMRoomMapping, RoomInfo, MatrixEvent } from '../types/index.js';
 
+/**
+ * Room info with name for server-wide listing
+ */
+export interface ServerRoomInfo {
+  roomId: string;
+  name?: string;
+  topic?: string;
+  memberCount?: number;
+  canonicalAlias?: string;
+}
+
 export class RoomManager {
   private storage: Storage;
   private clientPool: MatrixClientPool;
@@ -309,10 +320,92 @@ export class RoomManager {
     return timeline.chunk || [];
   }
 
-  /**
-   * Create DM key (alphabetically sorted MXIDs)
-   */
   private createDMKey(mxid1: string, mxid2: string): string {
     return [mxid1, mxid2].sort().join('<->');
+  }
+
+  async listServerRooms(
+    adminToken: string,
+    homeserverUrl: string
+  ): Promise<ServerRoomInfo[]> {
+    const syncUrl = `${homeserverUrl}/_matrix/client/v3/sync?timeout=0`;
+    
+    const response = await fetch(syncUrl, {
+      headers: { 'Authorization': `Bearer ${adminToken}` }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch server rooms: ${response.status}`);
+    }
+    
+    const syncData = await response.json() as {
+      rooms?: {
+        join?: Record<string, {
+          state?: { events?: Array<{ type: string; content: Record<string, unknown> }> }
+        }>
+      }
+    };
+    
+    const joinedRooms = syncData.rooms?.join || {};
+    const rooms: ServerRoomInfo[] = [];
+    
+    for (const [roomId, roomData] of Object.entries(joinedRooms)) {
+      const stateEvents = roomData.state?.events || [];
+      const nameEvent = stateEvents.find(e => e.type === 'm.room.name');
+      const topicEvent = stateEvents.find(e => e.type === 'm.room.topic');
+      const aliasEvent = stateEvents.find(e => e.type === 'm.room.canonical_alias');
+      
+      rooms.push({
+        roomId,
+        name: nameEvent?.content?.name as string | undefined,
+        topic: topicEvent?.content?.topic as string | undefined,
+        canonicalAlias: aliasEvent?.content?.alias as string | undefined
+      });
+    }
+    
+    return rooms;
+  }
+
+  async findRoomsByName(
+    query: string,
+    adminToken: string,
+    homeserverUrl: string
+  ): Promise<ServerRoomInfo[]> {
+    const allRooms = await this.listServerRooms(adminToken, homeserverUrl);
+    const lowerQuery = query.toLowerCase();
+    
+    return allRooms.filter(room => {
+      const nameMatch = room.name?.toLowerCase().includes(lowerQuery);
+      const aliasMatch = room.canonicalAlias?.toLowerCase().includes(lowerQuery);
+      const topicMatch = room.topic?.toLowerCase().includes(lowerQuery);
+      return nameMatch || aliasMatch || topicMatch;
+    });
+  }
+
+  async getRoomMembersPublic(
+    identityId: string,
+    roomId: string
+  ): Promise<Array<{ mxid: string; displayName?: string }>> {
+    const client = await this.clientPool.getClientById(identityId);
+    if (!client) {
+      throw new Error(`Client not found for identity: ${identityId}`);
+    }
+    
+    const members = await client.getJoinedRoomMembers(roomId);
+    const memberDetails: Array<{ mxid: string; displayName?: string }> = [];
+    
+    for (const mxid of members) {
+      try {
+        const profile = await client.doRequest(
+          'GET',
+          `/_matrix/client/v3/profile/${encodeURIComponent(mxid)}`
+        ) as { displayname?: string };
+        memberDetails.push({ mxid, displayName: profile.displayname });
+      } catch {
+        memberDetails.push({ mxid });
+      }
+    }
+    
+    return memberDetails;
   }
 }
