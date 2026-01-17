@@ -686,6 +686,7 @@ class TestMessageCallback:
         mock_event.sender = "@agent_001:test.com"  # The room's own agent
         mock_event.body = "Agent self-message"
         mock_event.event_id = "$event_789"
+        mock_event.source = {"content": {"body": "Agent self-message", "msgtype": "m.text"}}
 
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
