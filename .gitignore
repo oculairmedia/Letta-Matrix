@@ -123,3 +123,5 @@ matrix_client_data/matrix_event_dedupe.db
 
 !.opencode/plugin/lib/
 !.opencode/plugin/lib/**
+!claude-code-matrix-plugin/lib/
+!claude-code-matrix-plugin/lib/**
