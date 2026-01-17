@@ -35,16 +35,39 @@ export const room_info: OperationHandler = async (args, ctx) => {
   return result({ ...info } as Record<string, unknown>);
 };
 
+async function getAdminToken(): Promise<string> {
+  const adminUsername = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
+  const adminPassword = process.env.MATRIX_ADMIN_PASSWORD;
+  const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
+  
+  if (!adminPassword) {
+    throw new Error('MATRIX_ADMIN_PASSWORD required');
+  }
+  
+  const loginResponse = await fetch(`${homeserverUrl}/_matrix/client/v3/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'm.login.password',
+      identifier: { type: 'm.id.user', user: adminUsername.replace(/@([^:]+):.*/, '$1') },
+      password: adminPassword
+    })
+  });
+  
+  if (!loginResponse.ok) {
+    throw new Error(`Admin login failed: ${await loginResponse.text()}`);
+  }
+  
+  const { access_token } = await loginResponse.json() as { access_token: string };
+  return access_token;
+}
+
 export const room_list: OperationHandler = async (args, ctx) => {
   const scope = args.scope || 'joined';
   
   if (scope === 'server') {
-    const adminToken = process.env.MATRIX_ADMIN_TOKEN;
     const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
-    
-    if (!adminToken) {
-      throw new Error('MATRIX_ADMIN_TOKEN required for server scope');
-    }
+    const adminToken = await getAdminToken();
     
     const rooms = await ctx.roomManager.listServerRooms(adminToken, homeserverUrl);
     return result({ 
@@ -128,12 +151,8 @@ export const room_search: OperationHandler = async (args, ctx) => {
 
 export const room_find: OperationHandler = async (args, ctx) => {
   const query = requireParam(args.query, 'query');
-  const adminToken = process.env.MATRIX_ADMIN_TOKEN;
   const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
-  
-  if (!adminToken) {
-    throw new Error('MATRIX_ADMIN_TOKEN required for room_find');
-  }
+  const adminToken = await getAdminToken();
   
   const rooms = await ctx.roomManager.findRoomsByName(query, adminToken, homeserverUrl);
   const limited = rooms.slice(0, args.limit || 20);

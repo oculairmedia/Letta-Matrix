@@ -1,0 +1,18 @@
+id: whatsapp
+as_token: 67682c7f46e3e2e8e2ef19b1afd83a1aa27c75d83b3ede45dff1e63cc2cb5d29
+hs_token: 06bbe8875f38806005185d9d9750f689a2df4941245f58a0c760db6f740f6b7e
+namespaces:
+  users:
+  - exclusive: true
+    regex: '@whatsapp_.*:matrix\.oculair\.ca'
+  - exclusive: true
+    regex: '@whatsappbot:matrix\.oculair\.ca'
+  aliases:
+  - exclusive: true
+    regex: '#whatsapp_.*:matrix\.oculair\.ca'
+  rooms: []
+url: http://mautrix-whatsapp:29318
+sender_localpart: whatsappbot
+rate_limited: false
+de.sorunome.msc2409.push_ephemeral: true
+push_ephemeral: true
