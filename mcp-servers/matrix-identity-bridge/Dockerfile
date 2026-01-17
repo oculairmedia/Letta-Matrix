@@ -14,6 +14,8 @@ COPY xmcp.config.ts ./
 COPY tsconfig.json ./
 RUN npm ci
 
+# Build arg to bust cache when source changes
+ARG CACHEBUST=1
 COPY src ./src
 
 RUN npm run build
