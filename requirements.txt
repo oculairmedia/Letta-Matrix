@@ -15,8 +15,8 @@ psycopg2-binary>=2.9.9
 # Additional dependencies that might be needed
 asyncio-mqtt==0.16.1
 
-# Letta SDK for file uploads and source management
-letta-client>=0.1.72
+# Letta SDK - v1.7.0+ required for Conversations API
+letta-client>=1.7.0
 
 # FastAPI dependencies for matrix-api
 fastapi==0.115.0  # Updated for compatibility with Starlette 0.38.6
