@@ -18,9 +18,10 @@ import { autoRegisterWithBridge } from '../core/opencode-bridge';
 const operations = [
   'send', 'read', 'react', 'edit', 'typing', 'subscribe', 'unsubscribe',
   'room_join', 'room_leave', 'room_info', 'room_list', 'room_create', 'room_invite', 'room_search',
+  'room_find', 'room_members',
   'identity_create', 'identity_get', 'identity_list', 'identity_derive',
   'letta_send', 'letta_chat', 'letta_lookup', 'letta_list', 'letta_identity',
-  'talk_to_agent', // NEW: Simplified agent chat with name resolution
+  'talk_to_agent',
   'opencode_connect', 'opencode_send', 'opencode_notify', 'opencode_status'
 ] as const;
 
@@ -87,8 +88,9 @@ export const schema = {
   is_public: z.boolean().optional().describe('true for public room, false for private (default)'),
   invite: z.array(z.string()).optional().describe('List of user MXIDs to invite when creating room'),
   user_mxid: z.string().optional().describe('User MXID to invite. Format: @user:domain'),
-  query: z.string().optional().describe('Search query text for room_search'),
+  query: z.string().optional().describe('Search query text for room_search or room_find'),
   limit: z.number().optional().describe('Max results to return (default: 50 for read, 10 for search)'),
+  scope: z.enum(['joined', 'server']).optional().describe('Room scope for room_list: joined (identity rooms) or server (all admin rooms)'),
   
   // === TYPING INDICATOR ===
   typing: z.boolean().optional().describe('true to show typing, false to stop'),
@@ -430,6 +432,24 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
       }
 
       case 'room_list': {
+        const scope = input.scope || 'joined';
+        
+        if (scope === 'server') {
+          const adminToken = process.env.MATRIX_ADMIN_TOKEN;
+          const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
+          
+          if (!adminToken) {
+            throw new Error('MATRIX_ADMIN_TOKEN required for server scope');
+          }
+          
+          const rooms = await ctx.roomManager.listServerRooms(adminToken, homeserverUrl);
+          return result({ 
+            rooms: rooms.map(r => ({ room_id: r.roomId, name: r.name, topic: r.topic, alias: r.canonicalAlias })),
+            count: rooms.length,
+            scope: 'server'
+          });
+        }
+        
         const resolvedIdentityId = await resolveCallerIdentityId(
           ctx,
           callerDirectory,
@@ -438,7 +458,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           input.identity_id
         );
         const rooms = await ctx.roomManager.listJoinedRooms(resolvedIdentityId);
-        return result({ rooms, count: rooms.length });
+        return result({ rooms, count: rooms.length, scope: 'joined' });
       }
 
       case 'room_create': {
@@ -510,6 +530,45 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
             timestamp: r.result.origin_server_ts,
             content: r.result.content
           }))
+        });
+      }
+
+      case 'room_find': {
+        const query = requireParam(input.query, 'query');
+        const adminToken = process.env.MATRIX_ADMIN_TOKEN;
+        const homeserverUrl = process.env.MATRIX_HOMESERVER_URL || 'http://localhost:6167';
+        
+        if (!adminToken) {
+          throw new Error('MATRIX_ADMIN_TOKEN required for room_find');
+        }
+        
+        const rooms = await ctx.roomManager.findRoomsByName(query, adminToken, homeserverUrl);
+        const limited = rooms.slice(0, input.limit || 20);
+        
+        return result({
+          query,
+          rooms: limited.map(r => ({ room_id: r.roomId, name: r.name, topic: r.topic, alias: r.canonicalAlias })),
+          count: limited.length,
+          total: rooms.length
+        });
+      }
+
+      case 'room_members': {
+        const room_id = requireParam(input.room_id, 'room_id');
+        const resolvedIdentityId = await resolveCallerIdentityId(
+          ctx,
+          callerDirectory,
+          callerName,
+          effectiveSource,
+          input.identity_id
+        );
+        
+        const members = await ctx.roomManager.getRoomMembersPublic(resolvedIdentityId, room_id);
+        
+        return result({
+          room_id,
+          members,
+          count: members.length
         });
       }
 
