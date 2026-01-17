@@ -1538,19 +1538,11 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             room_agent_id = room_agent_mapping.get("agent_id")
             room_agent_name = room_agent_mapping.get("agent_name", "Unknown")
 
-        # Only ignore messages from THIS room's own agent (prevent self-loops)
-        if room_agent_user_id and event.sender == room_agent_user_id:
-            logger.debug(f"Ignoring message from room's own agent {event.sender}")
-            return
-
-        # Allow messages from OTHER agents (inter-agent communication)
-        sender_mapping = None
-        if room_agent_user_id:
-            sender_mapping = get_mapping_by_matrix_user(event.sender)
-            if sender_mapping and event.sender != room_agent_user_id:
-                logger.info(f"Received inter-agent message from {event.sender} in {room.display_name}")
+        # Check if sender is an agent (for @mention routing)
+        sender_mapping = get_mapping_by_matrix_user(event.sender)
         
-        # Handle @mention-based routing for agent messages
+        # Handle @mention-based routing for ALL agent messages (including own agent)
+        # This allows agents to forward messages to other agents via @mentions
         if sender_mapping and sender_mapping.get("agent_id"):
             from src.matrix.mention_routing import handle_agent_mention_routing
             await handle_agent_mention_routing(
@@ -1562,6 +1554,16 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                 config=config,
                 logger=logger,
             )
+
+        # Only ignore messages from THIS room's own agent (prevent self-loops)
+        # This comes AFTER @mention routing so agents can still forward via mentions
+        if room_agent_user_id and event.sender == room_agent_user_id:
+            logger.debug(f"Ignoring message from room's own agent {event.sender}")
+            return
+
+        # Log inter-agent communication
+        if sender_mapping and event.sender != room_agent_user_id:
+            logger.info(f"Received inter-agent message from {event.sender} in {room.display_name}")
         
         # Skip processing for rooms without a dedicated agent (relay/bridge rooms)
         # Letta can still write to these rooms via MCP tools, but won't auto-respond
