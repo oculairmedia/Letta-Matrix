@@ -790,3 +790,69 @@ class TestIntegration:
         # Verify: Final message went through send_final_message (for rich reply support)
         assert len(final_messages) == 1
         assert "Here is your answer." in final_messages[0]["content"]
+
+
+class TestConversationsAPISupport:
+    """Tests for Conversations API support in StepStreamReader"""
+
+    def test_stream_reader_accepts_conversation_id(self):
+        """StepStreamReader.stream_message accepts conversation_id parameter"""
+        mock_client = MagicMock()
+        reader = StepStreamReader(letta_client=mock_client)
+        
+        import inspect
+        sig = inspect.signature(reader.stream_message)
+        params = list(sig.parameters.keys())
+        
+        assert "conversation_id" in params
+
+    @pytest.mark.asyncio
+    async def test_stream_message_uses_conversations_api_when_conversation_id_provided(self):
+        """When conversation_id is provided, uses conversations.messages.create"""
+        mock_client = MagicMock()
+        mock_stream = MagicMock()
+        mock_stream.__iter__ = MagicMock(return_value=iter([]))
+        mock_client.conversations.messages.create.return_value = mock_stream
+        
+        reader = StepStreamReader(letta_client=mock_client, timeout=1.0)
+        
+        events = []
+        async for event in reader.stream_message(
+            agent_id="agent-123",
+            message="Hello",
+            conversation_id="conv-456",
+        ):
+            events.append(event)
+        
+        mock_client.conversations.messages.create.assert_called_once()
+        call_kwargs = mock_client.conversations.messages.create.call_args.kwargs
+        assert call_kwargs["conversation_id"] == "conv-456"
+        assert call_kwargs["input"] == "Hello"
+        assert call_kwargs["streaming"] is True
+        
+        mock_client.agents.messages.stream.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stream_message_uses_agents_api_when_no_conversation_id(self):
+        """When conversation_id is None, uses agents.messages.stream"""
+        mock_client = MagicMock()
+        mock_stream = MagicMock()
+        mock_stream.__iter__ = MagicMock(return_value=iter([]))
+        mock_client.agents.messages.stream.return_value = mock_stream
+        
+        reader = StepStreamReader(letta_client=mock_client, timeout=1.0)
+        
+        events = []
+        async for event in reader.stream_message(
+            agent_id="agent-123",
+            message="Hello",
+            conversation_id=None,
+        ):
+            events.append(event)
+        
+        mock_client.agents.messages.stream.assert_called_once()
+        call_kwargs = mock_client.agents.messages.stream.call_args.kwargs
+        assert call_kwargs["agent_id"] == "agent-123"
+        assert call_kwargs["input"] == "Hello"
+        
+        mock_client.conversations.messages.create.assert_not_called()

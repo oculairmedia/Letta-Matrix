@@ -123,6 +123,7 @@ class StepStreamReader:
         agent_id: str,
         message: str,
         background: bool = False,
+        conversation_id: Optional[str] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         Stream a message to the agent and yield normalized events.
@@ -131,33 +132,45 @@ class StepStreamReader:
             agent_id: Letta agent ID
             message: User message to send
             background: Whether to use background mode for long operations
+            conversation_id: Optional conversation ID for Conversations API (context isolation)
             
         Yields:
             StreamEvent objects for each step
         """
-        logger.info(f"Starting step stream for agent {agent_id}")
+        if conversation_id:
+            logger.info(f"Starting step stream via Conversations API: conversation {conversation_id}")
+        else:
+            logger.info(f"Starting step stream for agent {agent_id}")
         
         try:
-            # Run streaming in executor since SDK is synchronous
-            # Use a queue to bridge sync stream to async iteration
             import queue
             import threading
             
-            chunk_queue = queue.Queue()
-            error_holder = []
+            chunk_queue: queue.Queue = queue.Queue()
+            error_holder: list = []
             
             def _consume_stream():
-                """Consume stream in background thread and put chunks in queue"""
                 try:
-                    logger.debug(f"[STREAM] Creating stream for agent {agent_id}")
-                    stream = self.client.agents.messages.stream(
-                        agent_id=agent_id,
-                        input=message,
-                        streaming=True,
-                        stream_tokens=False,  # Step streaming only
-                        include_pings=self.include_pings,
-                        background=background,
-                    )
+                    if conversation_id:
+                        logger.debug(f"[STREAM] Using Conversations API: {conversation_id}")
+                        stream = self.client.conversations.messages.create(
+                            conversation_id=conversation_id,
+                            input=message,
+                            streaming=True,
+                            stream_tokens=False,
+                            include_pings=self.include_pings,
+                            background=background,
+                        )
+                    else:
+                        logger.debug(f"[STREAM] Using Agents API: {agent_id}")
+                        stream = self.client.agents.messages.stream(
+                            agent_id=agent_id,
+                            input=message,
+                            streaming=True,
+                            stream_tokens=False,
+                            include_pings=self.include_pings,
+                            background=background,
+                        )
                     logger.debug("[STREAM] Stream created, consuming chunks...")
                     chunk_count = 0
                     for chunk in stream:

@@ -254,6 +254,8 @@ class Config:
     # Streaming configuration
     letta_streaming_enabled: bool = False  # Feature flag for step streaming
     letta_streaming_timeout: float = 120.0  # Streaming timeout in seconds
+    # Conversations API configuration (context isolation per room)
+    letta_conversations_enabled: bool = False  # Feature flag for Conversations API
     
     @classmethod
     def from_env(cls) -> "Config":
@@ -279,7 +281,8 @@ class Config:
                 letta_streaming_enabled=os.getenv("LETTA_STREAMING_ENABLED", "false").lower() == "true",
                 letta_streaming_timeout=float(os.getenv("LETTA_STREAMING_TIMEOUT", "120.0")),
                 letta_code_api_url=os.getenv("LETTA_CODE_API_URL", "http://192.168.50.90:3099"),
-                letta_code_enabled=os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true"
+                letta_code_enabled=os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true",
+                letta_conversations_enabled=os.getenv("LETTA_CONVERSATIONS_ENABLED", "false").lower() == "true",
             )
         except Exception as e:
             raise ConfigurationError(f"Failed to load configuration: {e}")
@@ -732,26 +735,12 @@ async def send_to_letta_api_streaming(
     room_id: str,
     reply_to_event_id: Optional[str] = None,
     reply_to_sender: Optional[str] = None,
-    opencode_sender: Optional[str] = None
+    opencode_sender: Optional[str] = None,
+    room_member_count: int = 3,
 ) -> str:
-    """
-    Sends a message to the Letta API using step streaming with progress display.
-    Shows tool calls as progress messages that get deleted when replaced.
-    
-    Args:
-        message_body: The message to send to the agent
-        sender_id: Matrix sender ID
-        config: Application configuration
-        logger: Logger instance
-        room_id: Matrix room ID
-        reply_to_event_id: Optional event ID to reply to for the final response
-        reply_to_sender: Optional sender to mention in the reply
-        opencode_sender: Optional OpenCode sender MXID to ensure @mention in response
-    """
     from src.matrix.streaming import StepStreamReader, StreamingMessageHandler, StreamEventType
     from src.letta.client import get_letta_client, LettaConfig
     
-    # Determine which agent to use based on room_id
     agent_id_to_use = config.letta_agent_id
     agent_name_found = "DEFAULT"
     
@@ -773,7 +762,6 @@ async def send_to_letta_api_streaming(
     
     logger.info(f"[STREAMING] Sending message with streaming to agent {agent_name_found}")
     
-    # Create Letta SDK client
     sdk_config = LettaConfig(
         base_url=config.letta_api_url,
         api_key=config.letta_token,
@@ -782,10 +770,25 @@ async def send_to_letta_api_streaming(
     )
     letta_client = get_letta_client(sdk_config)
     
-    # Create stream reader
+    conversation_id: Optional[str] = None
+    if config.letta_conversations_enabled:
+        try:
+            from src.core.conversation_service import get_conversation_service
+            conv_service = get_conversation_service(letta_client)
+            conversation_id, created = await conv_service.get_or_create_room_conversation(
+                room_id=room_id,
+                agent_id=agent_id_to_use,
+                room_member_count=room_member_count,
+                user_mxid=sender_id if room_member_count == 2 else None,
+            )
+            logger.info(f"[CONVERSATIONS] Using conversation {conversation_id} (created={created})")
+        except Exception as e:
+            logger.warning(f"[CONVERSATIONS] Failed to get conversation, falling back to agents API: {e}")
+            conversation_id = None
+    
     stream_reader = StepStreamReader(
         letta_client=letta_client,
-        include_reasoning=False,  # Don't show internal reasoning
+        include_reasoning=False,
         include_pings=True,
         timeout=config.letta_streaming_timeout
     )
@@ -851,8 +854,11 @@ async def send_to_letta_api_streaming(
     # typing_manager = TypingIndicatorManager(room_id, config, logger)
     
     try:
-        # Stream the message and handle events
-        async for event in stream_reader.stream_message(agent_id_to_use, message_body):
+        async for event in stream_reader.stream_message(
+            agent_id=agent_id_to_use,
+            message=message_body,
+            conversation_id=conversation_id,
+        ):
             logger.debug(f"[STREAMING] Event: {event.type.value}")
             
             # Handle the event (sends progress messages to Matrix)
@@ -882,28 +888,28 @@ async def send_to_letta_api_streaming(
     return final_response
 
 
-async def send_to_letta_api(message_body: str, sender_id: str, config: Config, logger: logging.Logger, room_id: Optional[str] = None) -> str:
-    """
-    Sends a message to the Letta API using the letta-client SDK and returns the response.
-    """
-    # Extract just the username from the Matrix user ID (remove @ and domain)
+async def send_to_letta_api(
+    message_body: str,
+    sender_id: str,
+    config: Config,
+    logger: logging.Logger,
+    room_id: Optional[str] = None,
+    room_member_count: int = 3,
+) -> str:
     if sender_id.startswith('@'):
-        username = sender_id[1:].split(':')[0]  # Remove @ and take part before :
+        username = sender_id[1:].split(':')[0]
     else:
         username = sender_id
     
-    # Determine which agent to use based on room_id
-    agent_id_to_use = config.letta_agent_id  # Default to configured agent
+    agent_id_to_use = config.letta_agent_id
     agent_name_found = "DEFAULT"
     routing_method = "default"
 
-    # Multi-strategy routing: Try multiple methods to find the correct agent
     if room_id:
         try:
             from src.models.agent_mapping import AgentMappingDB
             db = AgentMappingDB()
             
-            # Strategy 1: Direct room_id lookup in database
             mapping = db.get_by_room_id(room_id)
             if mapping:
                 agent_id_to_use = str(mapping.agent_id)
@@ -911,7 +917,6 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
                 routing_method = "database_room_id"
                 logger.info(f"Found agent mapping in DB for room {room_id}: {agent_name_found} ({agent_id_to_use})")
             else:
-                # Strategy 2: Extract agent ID from room members (self-healing fallback)
                 logger.info(f"No direct mapping for room {room_id}, checking room members...")
                 
                 member_result = await get_agent_from_room_members(room_id, config, logger)
@@ -920,7 +925,6 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
                     routing_method = "room_members"
                     logger.info(f"Resolved agent via room members: {agent_name_found} ({agent_id_to_use})")
                 else:
-                    # Get all agent mappings for debugging
                     all_mappings = db.get_all()
                     logger.warning(f"No agent mapping found for room {room_id}, using default agent")
                     logger.info(f"Room has no mapping. Total mappings in DB: {len(all_mappings)}")
@@ -928,7 +932,6 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
         except Exception as e:
             logger.warning(f"Could not query agent mappings database: {e}")
     
-    # CRITICAL DEBUG: Log the exact agent ID being used
     logger.warning(f"[DEBUG] AGENT ROUTING: Room {room_id} -> Agent {agent_id_to_use}")
     logger.warning(f"[DEBUG] Agent Name: {agent_name_found}")
     logger.warning(f"[DEBUG] Routing Method: {routing_method}")
@@ -940,41 +943,60 @@ async def send_to_letta_api(message_body: str, sender_id: str, config: Config, l
         "room_id": room_id
     })
 
+    from src.letta.client import get_letta_client, LettaConfig
+    
+    sdk_config = LettaConfig(
+        base_url=config.letta_api_url,
+        api_key=config.letta_token,
+        timeout=300.0,
+        max_retries=3
+    )
+    letta_client = get_letta_client(sdk_config)
+    
+    conversation_id: Optional[str] = None
+    if config.letta_conversations_enabled and room_id:
+        try:
+            from src.core.conversation_service import get_conversation_service
+            conv_service = get_conversation_service(letta_client)
+            conversation_id, created = await conv_service.get_or_create_room_conversation(
+                room_id=room_id,
+                agent_id=agent_id_to_use,
+                room_member_count=room_member_count,
+                user_mxid=sender_id if room_member_count == 2 else None,
+            )
+            logger.info(f"[CONVERSATIONS] Using conversation {conversation_id} (created={created})")
+        except Exception as e:
+            logger.warning(f"[CONVERSATIONS] Failed to get conversation, falling back to agents API: {e}")
+            conversation_id = None
+
     async def _send_to_letta():
-        """Inner function to handle the actual API call with retry logic - Using SDK"""
-        from src.letta.client import get_letta_client, LettaConfig
-        from concurrent.futures import ThreadPoolExecutor
-        import asyncio
-        
-        current_agent_id = agent_id_to_use  # Use the agent ID we determined from room mapping
+        current_agent_id = agent_id_to_use
         
         logger.warning(f"[DEBUG] SENDING TO LETTA API (SDK) - Agent ID: {current_agent_id}")
         
-        # Configure SDK client with extended timeout for long-running agents
-        sdk_config = LettaConfig(
-            base_url=config.letta_api_url,
-            api_key=config.letta_token,
-            timeout=300.0,  # 5 minutes (increased from 180s for agents doing work)
-            max_retries=3
-        )
-        client = get_letta_client(sdk_config)
-        
-        # Run sync SDK call in thread (SDK is synchronous)
-        # Use asyncio.to_thread which properly manages the thread pool
         def _sync_send():
-            return client.agents.messages.create(
-                agent_id=current_agent_id,
-                messages=[{"role": "user", "content": message_body}]
-            )
+            if conversation_id:
+                logger.debug(f"[API] Using Conversations API: {conversation_id}")
+                stream = letta_client.conversations.messages.create(
+                    conversation_id=conversation_id,
+                    input=message_body,
+                    streaming=False,
+                )
+                messages = list(stream)
+                return type('Response', (), {'messages': messages})()
+            else:
+                logger.debug(f"[API] Using Agents API: {current_agent_id}")
+                return letta_client.agents.messages.create(
+                    agent_id=current_agent_id,
+                    messages=[{"role": "user", "content": message_body}]
+                )
         response = await asyncio.to_thread(_sync_send)
         
-        # Convert SDK response to dict for compatibility with existing code
         if hasattr(response, 'model_dump'):
             result = response.model_dump()
         elif hasattr(response, 'dict'):
             result = response.dict()
         else:
-            # Fallback: manually extract messages
             result = {"messages": []}
             if hasattr(response, 'messages'):
                 for msg in response.messages:
