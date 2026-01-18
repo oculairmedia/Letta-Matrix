@@ -28,108 +28,37 @@ export async function ensureClaudeCodeIdentity(config: MatrixConfig, cwd: string
 
   const apiBase = getApiBaseUrl(config);
   
-  // Derive identity ID and localpart from cwd
-  const identityId = `claude_code_${Buffer.from(cwd)
-    .toString("base64")
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")}`;
-  
-  const projectName = cwd.split("/").filter(Boolean).pop() || "project";
-  const localpart = `cc_${projectName.toLowerCase().replace(/[^a-z0-9_]/g, "_")}`;
-  const displayName = `Claude Code: ${projectName}`;
-  const mxid = `@${localpart}:matrix.oculair.ca`;
-
-  // Check if identity already exists
-  try {
-    const existingResponse = await fetch(
-      `${apiBase}/api/v1/internal/identities/${encodeURIComponent(identityId)}`,
-      {
-        headers: {
-          "X-Internal-Key": getInternalApiKey(),
-        },
-      }
-    );
-
-    if (existingResponse.ok) {
-      const existing = await existingResponse.json();
-      if (existing?.access_token && existing?.mxid) {
-        return {
-          identity_id: identityId,
-          mxid: String(existing.mxid),
-          access_token: String(existing.access_token),
-        };
-      }
-    }
-  } catch (error) {
-    // Identity doesn't exist, will create below
-  }
-
-  // Create new identity via internal API
-  const createResponse = await fetch(`${apiBase}/api/v1/internal/identities`, {
+  const response = await fetch(`${apiBase}/api/v1/internal/identities/provision`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Internal-Key": getInternalApiKey(),
     },
     body: JSON.stringify({
-      id: identityId,
-      identity_type: "custom",
-      mxid: mxid,
-      display_name: displayName,
+      directory: cwd,
+      identity_type: "claudecode",
     }),
   });
 
-  if (!createResponse.ok) {
-    const errorText = await createResponse.text().catch(() => "");
-    // If 409 conflict, identity exists - try to fetch it
-    if (createResponse.status === 409) {
-      const fetchResponse = await fetch(
-        `${apiBase}/api/v1/internal/identities/${encodeURIComponent(identityId)}`,
-        {
-          headers: {
-            "X-Internal-Key": getInternalApiKey(),
-          },
-        }
-      );
-      if (fetchResponse.ok) {
-        const existing = await fetchResponse.json();
-        if (existing?.access_token && existing?.mxid) {
-          return {
-            identity_id: identityId,
-            mxid: String(existing.mxid),
-            access_token: String(existing.access_token),
-          };
-        }
-      }
-    }
-    throw new Error(`Failed to create identity: ${createResponse.status} ${errorText}`);
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`Failed to provision identity: ${response.status} ${errorText}`);
   }
 
-  // Fetch full identity with access_token
-  const fullResponse = await fetch(
-    `${apiBase}/api/v1/internal/identities/${encodeURIComponent(identityId)}`,
-    {
-      headers: {
-        "X-Internal-Key": getInternalApiKey(),
-      },
-    }
-  );
+  const result = await response.json();
 
-  if (!fullResponse.ok) {
-    throw new Error(`Failed to fetch identity details: ${fullResponse.status}`);
+  if (!result?.success) {
+    throw new Error(`Provision failed: ${result?.error || "Unknown error"}`);
   }
 
-  const full = await fullResponse.json();
-
-  if (!full?.access_token || !full?.mxid) {
-    throw new Error("Identity details missing access_token or mxid");
+  if (!result?.access_token || !result?.mxid) {
+    throw new Error("Provision response missing access_token or mxid");
   }
 
   return {
-    identity_id: identityId,
-    mxid: String(full.mxid),
-    access_token: String(full.access_token),
+    identity_id: String(result.identity_id),
+    mxid: String(result.mxid),
+    access_token: String(result.access_token),
   };
 }
 

@@ -5,7 +5,8 @@ import yaml from "yaml";
 import type { MatrixConfig, MatrixFilters } from "./types";
 
 const CONFIG_PATH = ".claude/matrix-context.yaml";
-const GLOBAL_CONFIG_PATH = path.join(homedir(), ".claude/matrix-context.yaml");
+const GLOBAL_CONFIG_PATH = path.join(homedir(), ".config/claude-code-matrix/config.yaml");
+const LEGACY_GLOBAL_CONFIG_PATH = path.join(homedir(), ".claude/matrix-context.yaml");
 
 function expandEnv(value: string): string {
   return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_match, name: string) => {
@@ -38,9 +39,19 @@ export async function loadConfig(cwd: string): Promise<MatrixConfig | null> {
     await readFile(localConfigPath, "utf-8");
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      // Local config doesn't exist, try global
-      configPath = GLOBAL_CONFIG_PATH;
-      isGlobal = true;
+      try {
+        await readFile(GLOBAL_CONFIG_PATH, "utf-8");
+        configPath = GLOBAL_CONFIG_PATH;
+        isGlobal = true;
+      } catch {
+        try {
+          await readFile(LEGACY_GLOBAL_CONFIG_PATH, "utf-8");
+          configPath = LEGACY_GLOBAL_CONFIG_PATH;
+          isGlobal = true;
+        } catch {
+          return null;
+        }
+      }
     } else {
       console.error("Failed to read local Matrix config", error);
       return null;

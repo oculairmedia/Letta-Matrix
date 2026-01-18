@@ -157,3 +157,20 @@ class SendAsIdentityResponse(BaseModel):
     identity_id: str
     room_id: str
     error: Optional[str] = None
+
+
+class IdentityProvisionRequest(BaseModel):
+    """Request to provision a new Matrix user and create identity"""
+    directory: str = Field(..., description="Working directory path (e.g., /opt/stacks/my-project)")
+    identity_type: str = Field("claudecode", description="Type: claudecode, opencode, custom")
+    display_name: Optional[str] = Field(None, description="Display name override (auto-generated if not provided)")
+
+
+class IdentityProvisionResponse(BaseModel):
+    """Response with provisioned identity including access token"""
+    success: bool
+    identity_id: str
+    mxid: str
+    access_token: str
+    display_name: str
+    error: Optional[str] = None

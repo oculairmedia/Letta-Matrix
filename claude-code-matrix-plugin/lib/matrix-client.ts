@@ -136,7 +136,7 @@ export class MatrixClient {
 
 export function getStatePath(cwd: string, isGlobal?: boolean): string {
   if (isGlobal) {
-    return path.join(homedir(), ".claude", "matrix-context-state.json");
+    return path.join(homedir(), ".config/claude-code-matrix", "state.json");
   }
   return path.join(cwd, ".claude", "matrix-context-state.json");
 }

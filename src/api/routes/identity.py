@@ -16,6 +16,8 @@ from src.api.schemas.identity import (
     SendAsIdentityRequest,
     SendAsIdentityResponse,
     SendAsAgentRequest,
+    IdentityProvisionRequest,
+    IdentityProvisionResponse,
 )
 from src.core.identity_storage import get_identity_service, get_dm_room_service
 from src.matrix.identity_client_pool import get_identity_client_pool
@@ -331,4 +333,159 @@ async def list_full_identities(
         success=True,
         count=len(identities),
         identities=[FullIdentityResponse.from_identity(i) for i in identities]
+    )
+
+
+@internal_router.post("/identities/provision", response_model=IdentityProvisionResponse)
+async def provision_identity(
+    request: IdentityProvisionRequest,
+    x_internal_key: str = Header(...)
+):
+    verify_internal_key(x_internal_key)
+    
+    import base64
+    import hashlib
+    from src.core.user_manager import MatrixUserManager
+    
+    homeserver_url = os.getenv("MATRIX_HOMESERVER_URL", "https://matrix.oculair.ca")
+    server_name = os.getenv("MATRIX_SERVER_NAME", "matrix.oculair.ca")
+    admin_username = os.getenv("MATRIX_ADMIN_USERNAME", "admin")
+    admin_password = os.getenv("MATRIX_ADMIN_PASSWORD", "")
+    password_secret = os.getenv("MATRIX_PASSWORD_SECRET", "mcp_identity_bridge_2024")
+    
+    encoded = base64.b64encode(request.directory.encode()).decode()
+    encoded = encoded.rstrip("=").replace("+", "-").replace("/", "_")
+    identity_id = f"{request.identity_type}_{encoded}"
+    
+    project_name = request.directory.rstrip("/").split("/")[-1] or "project"
+    localpart = f"cc_{project_name.lower()}"
+    import re
+    localpart = re.sub(r"[^a-z0-9_]", "_", localpart)
+    
+    if request.display_name:
+        display_name = request.display_name
+    else:
+        formatted = " ".join(
+            word.capitalize() for word in project_name.replace("-", " ").replace("_", " ").split()
+        )
+        display_name = f"Claude Code: {formatted}"
+    
+    mxid = f"@{localpart}:{server_name}"
+    
+    service = get_identity_service()
+    existing = service.get(identity_id)
+    if existing and existing.access_token:
+        return IdentityProvisionResponse(
+            success=True,
+            identity_id=identity_id,
+            mxid=existing.mxid,
+            access_token=existing.access_token,
+            display_name=existing.display_name or display_name
+        )
+    
+    existing_mxid = service.get_by_mxid(mxid)
+    if existing_mxid and existing_mxid.access_token:
+        return IdentityProvisionResponse(
+            success=True,
+            identity_id=existing_mxid.id,
+            mxid=existing_mxid.mxid,
+            access_token=existing_mxid.access_token,
+            display_name=existing_mxid.display_name or display_name
+        )
+    
+    hash_input = f"{localpart}:{password_secret}"
+    hash_val = hashlib.sha256(hash_input.encode()).hexdigest()[:24]
+    password = f"MCP_{hash_val}"
+    
+    user_manager = MatrixUserManager(homeserver_url, admin_username, admin_password)
+    
+    import aiohttp
+    try:
+        login_url = f"{homeserver_url}/_matrix/client/v3/login"
+        login_data = {
+            "type": "m.login.password",
+            "identifier": {"type": "m.id.user", "user": localpart},
+            "password": password
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(login_url, json=login_data) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    access_token = result.get("access_token")
+                    if access_token:
+                        identity = service.create(
+                            identity_id=identity_id,
+                            identity_type=request.identity_type,
+                            mxid=mxid,
+                            access_token=access_token,
+                            display_name=display_name,
+                            password_hash=password
+                        )
+                        return IdentityProvisionResponse(
+                            success=True,
+                            identity_id=identity.id,
+                            mxid=identity.mxid,
+                            access_token=access_token,
+                            display_name=display_name
+                        )
+    except Exception as e:
+        logger.debug(f"Login attempt failed: {e}")
+    
+    created = await user_manager.create_matrix_user(localpart, password, display_name)
+    if not created:
+        return IdentityProvisionResponse(
+            success=False,
+            identity_id=identity_id,
+            mxid=mxid,
+            access_token="",
+            display_name=display_name,
+            error=f"Failed to create Matrix user {mxid}"
+        )
+    
+    try:
+        login_url = f"{homeserver_url}/_matrix/client/v3/login"
+        login_data = {
+            "type": "m.login.password",
+            "identifier": {"type": "m.id.user", "user": localpart},
+            "password": password
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(login_url, json=login_data) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    return IdentityProvisionResponse(
+                        success=False,
+                        identity_id=identity_id,
+                        mxid=mxid,
+                        access_token="",
+                        display_name=display_name,
+                        error=f"Failed to login after user creation: {error_text}"
+                    )
+                result = await resp.json()
+                access_token = result.get("access_token")
+    except Exception as e:
+        return IdentityProvisionResponse(
+            success=False,
+            identity_id=identity_id,
+            mxid=mxid,
+            access_token="",
+            display_name=display_name,
+            error=f"Login error: {str(e)}"
+        )
+    
+    identity = service.create(
+        identity_id=identity_id,
+        identity_type=request.identity_type,
+        mxid=mxid,
+        access_token=access_token,
+        display_name=display_name,
+        password_hash=password
+    )
+    
+    return IdentityProvisionResponse(
+        success=True,
+        identity_id=identity.id,
+        mxid=identity.mxid,
+        access_token=access_token,
+        display_name=display_name
     )
