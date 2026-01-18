@@ -71,9 +71,7 @@ async function main(): Promise<void> {
     const cwd = input.cwd ?? process.cwd();
     try {
       await writeTelemetry(input, cwd);
-    } catch (error) {
-      console.error("Failed to write Claude Code telemetry", error);
-    }
+    } catch {}
 
     const config = await loadConfig(cwd);
     if (!config) {
@@ -92,7 +90,7 @@ async function main(): Promise<void> {
 
     const client = new MatrixClient(config, {
       statePath: getStatePath(cwd, config.isGlobal),
-      timeoutMs: 10000,
+      timeoutMs: 4000,
     });
 
     const messages = await client.getNewMessages();
@@ -105,9 +103,7 @@ async function main(): Promise<void> {
     };
 
     console.log(JSON.stringify(output));
-  } catch (error) {
-    console.error("Matrix hook error", error);
-  }
+  } catch {}
 }
 
 await main();

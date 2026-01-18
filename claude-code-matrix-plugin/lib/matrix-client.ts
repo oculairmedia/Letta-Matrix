@@ -35,8 +35,18 @@ export class MatrixClient {
 
   async getNewMessages(): Promise<MatrixMessage[]> {
     const since = await this.loadSyncToken();
+    
+    if (!since) {
+      const initToken = await this.initializeSyncToken();
+      if (initToken) {
+        await this.saveSyncToken(initToken);
+      }
+      return [];
+    }
+    
     const url = new URL(`${this.config.homeserver}/_matrix/client/v3/sync`);
     url.searchParams.set("timeout", "0");
+    url.searchParams.set("since", since);
     url.searchParams.set(
       "filter",
       JSON.stringify({
@@ -47,10 +57,6 @@ export class MatrixClient {
         },
       }),
     );
-
-    if (since) {
-      url.searchParams.set("since", since);
-    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -74,6 +80,15 @@ export class MatrixClient {
       }
 
       return this.extractMessages(data);
+    } catch (error: unknown) {
+      if ((error as Error).name === "AbortError") {
+        const freshToken = await this.initializeSyncToken();
+        if (freshToken) {
+          await this.saveSyncToken(freshToken);
+        }
+        return [];
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
     }
@@ -113,6 +128,31 @@ export class MatrixClient {
     }
 
     return messages.sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  private async initializeSyncToken(): Promise<string | null> {
+    const url = new URL(`${this.config.homeserver}/_matrix/client/v3/sync`);
+    url.searchParams.set("timeout", "0");
+    url.searchParams.set("filter", JSON.stringify({ room: { timeline: { limit: 1 } } }));
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: { Authorization: `Bearer ${this.config.accessToken}` },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) return null;
+      const data = (await response.json()) as MatrixSyncResponse;
+      return data.next_batch || null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async loadSyncToken(): Promise<string | null> {
