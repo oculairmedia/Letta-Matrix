@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { existsSync } from "fs";
-import { readFile, unlink, writeFile } from "fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "fs/promises";
 import path from "path";
 import { loadMatrixConfig } from "./lib/matrix-config";
 import { resolveMatrixCredentials } from "./lib/matrix-credentials";
@@ -215,7 +215,13 @@ async function unregisterFromBridge(registrationId: string): Promise<void> {
 
 export const MatrixContextInjector: Plugin = async ({ client, directory, worktree }) => {
   const baseDir = worktree || directory;
-  const lockPath = path.join(baseDir, ".opencode", "matrix.lock");
+  const opencodeDirPath = path.join(baseDir, ".opencode");
+  const lockPath = path.join(opencodeDirPath, "matrix.lock");
+  
+  if (!existsSync(opencodeDirPath)) {
+    await mkdir(opencodeDirPath, { recursive: true });
+  }
+  
   const dedupe = new DedupeCache(DEDUPE_TTL_MS, DEDUPE_CLEANUP_MS);
 
   const log = (level: "debug" | "info" | "warn" | "error", message: string, extra?: any) => {
