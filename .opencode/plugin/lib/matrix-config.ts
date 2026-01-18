@@ -79,9 +79,28 @@ function normalizeFilters(value: unknown): { msgtypes: string[] } {
   return { msgtypes };
 }
 
-export async function loadMatrixConfig(worktree: string): Promise<MatrixConfig> {
+async function findConfigPath(worktree: string): Promise<string> {
   const overridePath = process.env.OPENCODE_MATRIX_CONFIG;
-  const configPath = overridePath || path.join(worktree, ".opencode", "matrix.yaml");
+  if (overridePath) return overridePath;
+
+  const localPath = path.join(worktree, ".opencode", "matrix.yaml");
+  try {
+    await readFile(localPath, "utf-8");
+    return localPath;
+  } catch {}
+
+  const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
+  const globalPath = path.join(homeDir, ".config", "opencode", "matrix.yaml");
+  try {
+    await readFile(globalPath, "utf-8");
+    return globalPath;
+  } catch {}
+
+  return localPath;
+}
+
+export async function loadMatrixConfig(worktree: string): Promise<MatrixConfig> {
+  const configPath = await findConfigPath(worktree);
 
   const raw = await readFile(configPath, "utf-8");
   const parsed = parse(raw) as Record<string, unknown>;

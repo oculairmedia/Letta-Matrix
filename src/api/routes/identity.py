@@ -353,14 +353,20 @@ async def provision_identity(
     admin_password = os.getenv("MATRIX_ADMIN_PASSWORD", "")
     password_secret = os.getenv("MATRIX_PASSWORD_SECRET", "mcp_identity_bridge_2024")
     
+    import re
     encoded = base64.b64encode(request.directory.encode()).decode()
     encoded = encoded.rstrip("=").replace("+", "-").replace("/", "_")
     identity_id = f"{request.identity_type}_{encoded}"
     
     project_name = request.directory.rstrip("/").split("/")[-1] or "project"
-    localpart = f"cc_{project_name.lower()}"
-    import re
-    localpart = re.sub(r"[^a-z0-9_]", "_", localpart)
+    project_name_clean = re.sub(r"[^a-z0-9_]", "_", project_name.lower())
+    
+    if request.identity_type == "opencode":
+        localpart = f"oc_{project_name_clean}_v2"
+        display_prefix = "OpenCode"
+    else:
+        localpart = f"cc_{project_name_clean}"
+        display_prefix = "Claude Code"
     
     if request.display_name:
         display_name = request.display_name
@@ -368,7 +374,7 @@ async def provision_identity(
         formatted = " ".join(
             word.capitalize() for word in project_name.replace("-", " ").replace("_", " ").split()
         )
-        display_name = f"Claude Code: {formatted}"
+        display_name = f"{display_prefix}: {formatted}"
     
     mxid = f"@{localpart}:{server_name}"
     
