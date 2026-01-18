@@ -86,10 +86,8 @@ async function main(): Promise<void> {
       config.userId = derivedIdentity.mxid;
 
       try {
-        await ensureJoinedRooms(derivedIdentity.identity_id, config.rooms, config);
-      } catch (error) {
-        console.error("Failed to join rooms via identity bridge", error);
-      }
+        await ensureJoinedRooms(derivedIdentity.access_token, config.rooms, config);
+      } catch {}
     }
 
     const client = new MatrixClient(config, {

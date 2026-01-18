@@ -62,33 +62,29 @@ export async function ensureClaudeCodeIdentity(config: MatrixConfig, cwd: string
   };
 }
 
-export async function ensureJoinedRooms(identityId: string, rooms: string[], config: MatrixConfig): Promise<void> {
-  const enabled = (config as any)?.identityBridge?.enabled;
-  if (!enabled) return;
-
-  const apiBase = getApiBaseUrl(config);
+export async function ensureJoinedRooms(accessToken: string, rooms: string[], config: MatrixConfig): Promise<void> {
+  if (!accessToken || rooms.length === 0) return;
+  
+  const acceptAllRooms = rooms.length === 1 && rooms[0] === "*";
+  if (acceptAllRooms) return;
 
   for (const roomId of rooms) {
     try {
-      const response = await fetch(`${apiBase}/api/v1/identities/${encodeURIComponent(identityId)}/join`, {
+      const response = await fetch(`${config.homeserver}/_matrix/client/v3/join/${encodeURIComponent(roomId)}`, {
         method: "POST",
         headers: {
+          "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
-          "X-Internal-Key": getInternalApiKey(),
         },
-        body: JSON.stringify({ room_id: roomId }),
+        body: "{}",
       });
 
-      if (response.ok || response.status === 404) continue;
-
+      if (response.ok) continue;
+      
       const errorText = await response.text().catch(() => "");
-      if (errorText.includes("M_FORBIDDEN") || 
-          errorText.includes("cannot join") ||
-          errorText.includes("already joined")) {
+      if (errorText.includes("M_FORBIDDEN") || errorText.includes("already in the room")) {
         continue;
       }
-    } catch (error) {
-      console.error(`Error joining room ${roomId}:`, error);
-    }
+    } catch {}
   }
 }
