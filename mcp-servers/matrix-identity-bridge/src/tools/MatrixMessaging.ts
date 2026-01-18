@@ -36,15 +36,15 @@ export const schema = {
     'room_list (list joined rooms)'
   ),
   
-  // === CALLER CONTEXT (auto-populated by OpenCode) ===
+  // === CALLER CONTEXT (REQUIRED for remote MCP) ===
   caller_directory: z.string().optional().describe(
-    'Your working directory path. OpenCode auto-populates this. Example: /opt/stacks/my-project'
+    'Working directory path for OpenCode operations. Example: /opt/stacks/my-project'
   ),
   caller_name: z.string().optional().describe(
     'Display name override. Example: "OpenCode - MyProject"'
   ),
   caller_source: z.enum(['opencode', 'claude-code']).optional().describe(
-    'Explicit caller source when both agents share a directory.'
+    'Explicit caller source. REQUIRED for remote MCP to identify correct identity type.'
   ),
   
   // === IDENTITY PARAMETERS ===

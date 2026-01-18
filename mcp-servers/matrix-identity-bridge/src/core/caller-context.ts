@@ -112,7 +112,8 @@ export const resolveCallerIdentity = async (
   callerDirectory: string | undefined,
   callerName: string | undefined,
   effectiveSource: CallerContext['source'],
-  identityId?: string
+  identityId?: string,
+  sourceOverride?: CallerContext['sourceOverride']
 ): Promise<MatrixIdentity> => {
   if (identityId) {
     const identity = await ctx.storage.getIdentityAsync(identityId);
@@ -126,7 +127,9 @@ export const resolveCallerIdentity = async (
     throw new Error('No caller directory available to derive identity');
   }
 
-  if (effectiveSource === 'claude-code') {
+  const resolvedSource = sourceOverride || effectiveSource;
+
+  if (resolvedSource === 'claude-code') {
     return await getOrCreateClaudeCodeIdentity(ctx, callerDirectory, callerName);
   }
 
@@ -138,14 +141,16 @@ export const resolveCallerIdentityId = async (
   callerDirectory: string | undefined,
   callerName: string | undefined,
   effectiveSource: CallerContext['source'],
-  identityId?: string
+  identityId?: string,
+  sourceOverride?: CallerContext['sourceOverride']
 ): Promise<string> => {
   const identity = await resolveCallerIdentity(
     ctx,
     callerDirectory,
     callerName,
     effectiveSource,
-    identityId
+    identityId,
+    sourceOverride
   );
   return identity.id;
 };
