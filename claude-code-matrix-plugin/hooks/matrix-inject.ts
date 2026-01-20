@@ -89,7 +89,7 @@ async function main(): Promise<void> {
     }
 
     const client = new MatrixClient(config, {
-      statePath: getStatePath(cwd, config.isGlobal),
+      statePath: getStatePath(cwd, config.isGlobal, config.userId),
       timeoutMs: 4000,
     });
 

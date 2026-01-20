@@ -174,7 +174,12 @@ export class MatrixClient {
   }
 }
 
-export function getStatePath(cwd: string, isGlobal?: boolean): string {
+export function getStatePath(cwd: string, isGlobal?: boolean, userId?: string): string {
+  if (isGlobal && userId) {
+    // Per-identity state file when using global config with per-project identities
+    const safeUserId = userId.replace(/[@:]/g, '_');
+    return path.join(homedir(), ".config/claude-code-matrix", `state-${safeUserId}.json`);
+  }
   if (isGlobal) {
     return path.join(homedir(), ".config/claude-code-matrix", "state.json");
   }

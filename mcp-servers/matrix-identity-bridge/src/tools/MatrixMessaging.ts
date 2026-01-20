@@ -135,12 +135,29 @@ export const metadata: ToolMetadata = {
   description: `Matrix messaging tool - talk to AI agents and send messages.
 
 ═══════════════════════════════════════════════════════════════════════════════
-★ EASIEST WAY TO TALK TO AN AGENT ★
+★ REQUIRED: ALWAYS INCLUDE caller_directory ★
+═══════════════════════════════════════════════════════════════════════════════
+
+You MUST include caller_directory (your working directory) in EVERY call.
+This identifies YOU to the agent so they can respond back to you.
+
+▶ CORRECT USAGE:
+  {
+    operation: "talk_to_agent",
+    agent: "Meridian",
+    message: "Hello!",
+    caller_directory: "/opt/stacks/my-project"  ← REQUIRED!
+  }
+
+▶ WITHOUT caller_directory: Agent cannot route response back to you!
+
+═══════════════════════════════════════════════════════════════════════════════
+★ TALKING TO AGENTS ★
 ═══════════════════════════════════════════════════════════════════════════════
 
 ▶ USE talk_to_agent (RECOMMENDED - supports names!):
-  {operation: "talk_to_agent", agent: "Meridian", message: "Hello!"}
-  {operation: "talk_to_agent", agent: "BMO", message: "What's up?"}
+  {operation: "talk_to_agent", agent: "Meridian", message: "Hello!", caller_directory: "/your/path"}
+  {operation: "talk_to_agent", agent: "BMO", message: "What's up?", caller_directory: "/your/path"}
   
   • Just use the agent's NAME - no need to look up UUIDs!
   • Supports fuzzy matching: "meridian", "MERIDIAN", "Merid" all work
