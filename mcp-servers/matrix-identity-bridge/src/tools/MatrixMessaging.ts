@@ -22,8 +22,8 @@ const operations = [
   'room_find', 'room_members',
   'identity_create', 'identity_get', 'identity_list', 'identity_derive',
   'letta_send', 'letta_chat', 'letta_lookup', 'letta_list', 'letta_identity',
-  'talk_to_agent',
-  'opencode_connect', 'opencode_send', 'opencode_notify', 'opencode_status'
+  'talk_to_agent', 'talk_to_opencode',
+  'opencode_connect', 'opencode_send', 'opencode_notify', 'opencode_status', 'opencode_list'
 ] as const;
 
 
@@ -119,6 +119,9 @@ export const schema = {
   agent: z.string().optional().describe(
     'Agent name OR ID - the simplest way to specify an agent. Examples: "Meridian", "BMO", or a full UUID.'
   ),
+  target: z.string().optional().describe(
+    'Target OpenCode instance for talk_to_opencode. Can be project name (e.g., "matrix-synapse-deployment") or full directory path.'
+  ),
   
   // === INTERNAL: Injected by proxy from X-Agent-Id header ===
   // This is NOT set by users - it's automatically injected by the HTTP proxy
@@ -192,6 +195,10 @@ LETTA AGENTS (PRIMARY):
   • letta_chat     - Send to agent's room (accepts agent_id OR agent_name)
   • letta_list     - List all agents with their rooms
   • letta_lookup   - Get agent details
+
+OPENCODE MESSAGING (for agents talking to OpenCode instances):
+  • opencode_list    - List active OpenCode instances
+  • talk_to_opencode - Send message to an active OpenCode instance by project name
 
 OTHER OPERATIONS:
   • Messaging: send, read, react, edit, typing
@@ -1128,6 +1135,131 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         });
       }
 
+      case 'opencode_list': {
+        const instances = await ctx.openCodeService.getActiveInstances();
+        
+        return result({
+          success: true,
+          instances: instances.map(inst => ({
+            directory: inst.directory,
+            project_name: inst.projectName,
+            identity: inst.identity.mxid,
+            display_name: inst.identity.displayName,
+            active: true,
+            last_seen: inst.lastSeen.toISOString(),
+            rooms: inst.rooms
+          })),
+          count: instances.length,
+          note: instances.length === 0 
+            ? 'No active OpenCode instances found. Instances must have activity within the last 120 seconds.'
+            : undefined
+        });
+      }
+
+      case 'talk_to_opencode': {
+        const target = requireParam(input.target, 'target');
+        const message = requireParam(input.message, 'message');
+        
+        const instance = await ctx.openCodeService.findActiveInstance(target);
+        if (!instance) {
+          const knownIdentity = await ctx.openCodeService.getIdentityByTarget(target);
+          if (knownIdentity) {
+            return result({
+              success: false,
+              error: `OpenCode instance '${target}' is not currently active`,
+              suggestion: 'The instance may have terminated. Use opencode_list to see active instances.',
+              last_known_identity: knownIdentity.mxid
+            });
+          }
+          return result({
+            success: false,
+            error: `OpenCode instance '${target}' not found`,
+            suggestion: 'Use opencode_list to see available instances.'
+          });
+        }
+        
+        let senderIdentity;
+        const callingAgentId = input.__injected_agent_id || getInjectedAgentId();
+        
+        if (input.sender_identity_id || input.identity_id) {
+          const identityId = input.sender_identity_id ?? input.identity_id;
+          if (!identityId) {
+            throw new Error('Identity id not provided');
+          }
+          senderIdentity = await ctx.storage.getIdentityAsync(identityId);
+          if (!senderIdentity) {
+            throw new Error(`Identity not found: ${identityId}`);
+          }
+        } else if (callingAgentId && ctx.lettaService) {
+          const identityId = await ctx.lettaService.getOrCreateAgentIdentity(callingAgentId);
+          senderIdentity = await ctx.storage.getIdentityAsync(identityId);
+          if (!senderIdentity) {
+            throw new Error(`Failed to get identity for calling agent: ${callingAgentId}`);
+          }
+        } else if (callerDirectory) {
+          senderIdentity = await resolveCallerIdentity(ctx, callerDirectory, callerName, effectiveSource);
+        } else {
+          senderIdentity = await ctx.openCodeService.getOrCreateDefaultIdentity();
+        }
+        
+        const targetRoomId = instance.rooms.length > 0 ? instance.rooms[0] : undefined;
+        if (!targetRoomId) {
+          return result({
+            success: false,
+            error: `OpenCode instance '${target}' has no associated rooms`,
+            suggestion: 'The instance needs to join a room first.'
+          });
+        }
+        
+        const senderClient = await ctx.clientPool.getClient(senderIdentity);
+        
+        try {
+          await senderClient.joinRoom(targetRoomId);
+        } catch (joinError: unknown) {
+          const { homeserverUrl } = getAdminConfig();
+          const token = await getAdminToken();
+          
+          try {
+            await fetch(
+              `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(targetRoomId)}/invite`,
+              {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ user_id: senderIdentity.mxid })
+              }
+            );
+            await senderClient.joinRoom(targetRoomId);
+          } catch (inviteError: unknown) {
+            const errMsg = inviteError instanceof Error ? inviteError.message : String(inviteError);
+            return result({
+              success: false,
+              error: `Could not join room ${targetRoomId}: ${errMsg}`,
+              suggestion: 'Ensure the sender has access to the target room.'
+            });
+          }
+        }
+        
+        const mentionMessage = `${instance.identity.mxid} ${message}`;
+        const eventId = await senderClient.sendMessage(targetRoomId, {
+          msgtype: 'm.text',
+          body: mentionMessage
+        });
+        
+        return result({
+          success: true,
+          target: instance.projectName,
+          target_identity: instance.identity.mxid,
+          room_id: targetRoomId,
+          event_id: eventId,
+          sender: senderIdentity.mxid,
+          message: message,
+          note: 'Message delivered to active OpenCode instance'
+        });
+      }
+
       default:
         throw new Error(
           `Unknown operation: "${input.operation}"\n\n` +
@@ -1135,8 +1267,8 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           `• Messaging: send, read, react, edit, typing\n` +
           `• Rooms: room_list, room_info, room_join, room_leave, room_create, room_invite, room_search\n` +
           `• Identity: identity_list, identity_get, identity_create, identity_derive\n` +
-          `• Letta: letta_list, letta_chat, letta_send, letta_lookup, letta_identity\n` +
-          `• OpenCode: opencode_connect, opencode_send, opencode_notify, opencode_status\n` +
+          `• Letta: letta_list, letta_chat, letta_send, letta_lookup, letta_identity, talk_to_agent\n` +
+          `• OpenCode: opencode_connect, opencode_send, opencode_notify, opencode_status, opencode_list, talk_to_opencode\n` +
           `• Subscriptions: subscribe, unsubscribe`
         );
     }

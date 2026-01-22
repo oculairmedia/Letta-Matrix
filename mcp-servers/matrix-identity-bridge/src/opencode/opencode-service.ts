@@ -16,11 +16,20 @@ export interface OpenCodeSession {
   lastActivityAt: number;
 }
 
+export interface ActiveOpenCodeInstance {
+  directory: string;
+  projectName: string;
+  identity: MatrixIdentity;
+  registration: OpenCodeBridgeRegistration;
+  lastSeen: Date;
+  rooms: string[];
+}
+
 export interface OpenCodeConfig {
   baseUrl?: string;  // OpenCode API URL (optional)
 }
 
-type OpenCodeBridgeRegistration = {
+export interface OpenCodeBridgeRegistration {
   id: string;
   port: number;
   hostname: string;
@@ -29,7 +38,7 @@ type OpenCodeBridgeRegistration = {
   rooms: string[];
   registeredAt: number;
   lastSeen: number;
-};
+}
 
 export class OpenCodeService {
   private storage: Storage;
@@ -399,5 +408,112 @@ export class OpenCodeService {
       activeSessions: latest.length,
       sessions
     };
+  }
+
+  /**
+   * Extract project name from directory path
+   */
+  extractProjectName(directory: string): string {
+    return directory.split('/').filter(Boolean).pop() || 'unknown';
+  }
+
+  /**
+   * Match target string to directory
+   * Supports: full path, project name, partial match
+   */
+  matchTarget(target: string, directory: string): boolean {
+    // Exact directory match
+    if (target === directory) return true;
+    
+    // Project name match
+    const projectName = this.extractProjectName(directory);
+    if (target.toLowerCase() === projectName.toLowerCase()) return true;
+    
+    // Partial match (contains)
+    if (directory.toLowerCase().includes(target.toLowerCase())) return true;
+    
+    return false;
+  }
+
+  /**
+   * Get active OpenCode instances from bridge registrations
+   * Only returns instances that have been seen within the threshold
+   */
+  async getActiveInstances(thresholdSeconds: number = 120): Promise<ActiveOpenCodeInstance[]> {
+    await this.triggerBridgeDiscovery();
+
+    let registrations: OpenCodeBridgeRegistration[] = [];
+    try {
+      registrations = await this.fetchBridgeRegistrations();
+    } catch {
+      registrations = [];
+    }
+
+    const now = Date.now();
+    const thresholdMs = thresholdSeconds * 1000;
+
+    // Filter to only active registrations (within threshold)
+    const activeRegs = registrations.filter(reg => {
+      const age = now - (reg.lastSeen || 0);
+      return age < thresholdMs;
+    });
+
+    // Pick latest per directory
+    const latest = this.pickLatestRegistrationPerDirectory(activeRegs);
+
+    const instances: ActiveOpenCodeInstance[] = [];
+    for (const reg of latest) {
+      try {
+        const identity = await this.getOrCreateIdentity(reg.directory);
+        instances.push({
+          directory: reg.directory,
+          projectName: this.extractProjectName(reg.directory),
+          identity,
+          registration: reg,
+          lastSeen: new Date(reg.lastSeen || Date.now()),
+          rooms: reg.rooms || []
+        });
+      } catch {
+        continue;
+      }
+    }
+
+    return instances;
+  }
+
+  /**
+   * Find an active instance by project name or directory
+   */
+  async findActiveInstance(target: string): Promise<ActiveOpenCodeInstance | undefined> {
+    const instances = await this.getActiveInstances();
+    return instances.find(inst => this.matchTarget(target, inst.directory));
+  }
+
+  /**
+   * Check if an instance is currently active
+   */
+  async isInstanceActive(directory: string, thresholdSeconds: number = 120): Promise<boolean> {
+    const instances = await this.getActiveInstances(thresholdSeconds);
+    return instances.some(inst => inst.directory === directory);
+  }
+
+  /**
+   * Get identity by target (project name or directory)
+   * Used to check if an identity exists even if instance is not active
+   */
+  async getIdentityByTarget(target: string): Promise<MatrixIdentity | undefined> {
+    // If target looks like a full path, use it directly
+    if (target.startsWith('/')) {
+      return this.getIdentity(target);
+    }
+
+    // Otherwise, search through known identities
+    const identities = await this.listIdentities();
+    const match = identities.find(i => this.matchTarget(target, i.directory));
+    if (match) {
+      return this.storage.getIdentityAsync(match.identityId);
+    }
+
+    return undefined;
   }
 }
