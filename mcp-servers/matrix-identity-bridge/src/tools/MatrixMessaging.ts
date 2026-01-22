@@ -785,10 +785,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
 
         const roomId = await getOrCreateAgentRoom(agent_id, agent_name, callerIdentity, ctx);
 
-        // Only the caller identity joins - no additional invitees needed
-        // (Previously added Claude Code identities alongside OpenCode, but that's redundant)
         const allInvitees = [{ identityId: callerIdentity.id, mxid: callerIdentity.mxid }];
-        console.log(`[MatrixMessaging] talk_to_agent: allInvitees count=${allInvitees.length}, invitees=${JSON.stringify(allInvitees.map(i => i.mxid))}`);
 
         const { homeserverUrl } = getAdminConfig();
 
