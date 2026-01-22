@@ -466,27 +466,25 @@ export class LettaWebhookHandler {
     const agentIdentityId = `letta_${agentId}`;
     let client = await this.clientPool.getClientById(agentIdentityId);
 
-    // Fallback to finding any client in the room
+    // Fallback to using existing clients in the pool (don't create new ones)
     if (!client) {
-      const identities = await this.storage.getAllIdentitiesAsync();
-      for (const identity of identities) {
-        const testClient = await this.clientPool.getClientById(identity.id);
-        if (testClient) {
-          try {
-            const joinedRooms = await testClient.getJoinedRooms();
-            if (joinedRooms.includes(roomId)) {
-              client = testClient;
-              break;
-            }
-          } catch {
-            // Continue to next identity
+      const activeClients = this.clientPool.getActiveClients();
+      for (const [, testClient] of activeClients) {
+        try {
+          const joinedRooms = await testClient.getJoinedRooms();
+          if (joinedRooms.includes(roomId)) {
+            client = testClient;
+            break;
           }
+        } catch {
+          // Continue to next client
         }
       }
     }
 
     if (!client) {
-      throw new Error(`No Matrix client available for room ${roomId}`);
+      console.warn(`[LettaWebhook] No Matrix client available for audit in room ${roomId}, skipping`);
+      return;
     }
 
     const maxRequestLen = 200;
@@ -551,19 +549,16 @@ export class LettaWebhookHandler {
 
     // Fallback to finding any client in the room
     if (!client) {
-      const identities = await this.storage.getAllIdentitiesAsync();
-      for (const identity of identities) {
-        const testClient = await this.clientPool.getClientById(identity.id);
-        if (testClient) {
-          try {
-            const joinedRooms = await testClient.getJoinedRooms();
-            if (joinedRooms.includes(roomId)) {
-              client = testClient;
-              break;
-            }
-          } catch {
-            // Continue to next identity
+      const activeClients = this.clientPool.getActiveClients();
+      for (const [, testClient] of activeClients) {
+        try {
+          const joinedRooms = await testClient.getJoinedRooms();
+          if (joinedRooms.includes(roomId)) {
+            client = testClient;
+            break;
           }
+        } catch {
+          // Skip unavailable clients
         }
       }
     }
@@ -572,7 +567,10 @@ export class LettaWebhookHandler {
       throw new Error(`No Matrix client available for room ${roomId}`);
     }
 
-    // Build message content
+    const messageContent: Record<string, unknown> = {
+      msgtype: 'm.text',
+      body: content
+    };
     const messageContent: Record<string, unknown> = {
       msgtype: 'm.text',
       body: content

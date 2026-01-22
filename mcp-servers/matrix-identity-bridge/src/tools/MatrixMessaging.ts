@@ -785,21 +785,9 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
 
         const roomId = await getOrCreateAgentRoom(agent_id, agent_name, callerIdentity, ctx);
 
-        const additionalInvitees: Array<{ identityId: string; mxid: string }> = [];
-        if (callerDirectory && effectiveSource !== 'claude-code') {
-          const encoded = Buffer.from(callerDirectory)
-            .toString('base64')
-            .replace(/=/g, '')
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_');
-          const claudeIdentityId = `claude_code_${encoded}`;
-          const claudeIdentity = await ctx.storage.getIdentityAsync(claudeIdentityId);
-          if (claudeIdentity) {
-            additionalInvitees.push({ identityId: claudeIdentityId, mxid: claudeIdentity.mxid });
-          }
-        }
-
-        const allInvitees = [{ identityId: callerIdentity.id, mxid: callerIdentity.mxid }, ...additionalInvitees];
+        // Only the caller identity joins - no additional invitees needed
+        // (Previously added Claude Code identities alongside OpenCode, but that's redundant)
+        const allInvitees = [{ identityId: callerIdentity.id, mxid: callerIdentity.mxid }];
 
         const { homeserverUrl } = getAdminConfig();
 

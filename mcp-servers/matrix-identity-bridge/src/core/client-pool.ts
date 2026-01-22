@@ -32,12 +32,10 @@ export class MatrixClientPool {
    * Get or create Matrix client for identity
    */
   async getClient(identity: MatrixIdentity): Promise<MatrixClient> {
-    // Return existing client if already created
     if (this.clients.has(identity.id)) {
       return this.clients.get(identity.id)!;
     }
 
-    // Create new client
     const client = await this.createClient(identity);
     this.clients.set(identity.id, client);
 

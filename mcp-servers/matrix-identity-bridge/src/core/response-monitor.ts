@@ -178,24 +178,18 @@ export class ResponseMonitor {
       console.log(`[ResponseMonitor] Looking for identity: ${agentIdentityId}`);
       let client = await this.clientPool.getClientById(agentIdentityId);
       
-      // If no agent identity, try to get any identity that's in the room
       if (!client) {
-        // Fall back to admin or first available identity
-        const identities = await this.storage.getAllIdentitiesAsync();
-        for (const identity of identities) {
-          client = await this.clientPool.getClientById(identity.id);
-          if (client) {
-            // Check if client is in the room
-            try {
-              const joinedRooms = await client.getJoinedRooms();
-              if (joinedRooms.includes(matrix_room_id)) {
-                break;
-              }
-            } catch {
-              // Continue to next identity
+        const activeClients = this.clientPool.getActiveClients();
+        for (const [, testClient] of activeClients) {
+          try {
+            const joinedRooms = await testClient.getJoinedRooms();
+            if (joinedRooms.includes(matrix_room_id)) {
+              client = testClient;
+              break;
             }
+          } catch {
+            // Skip unavailable clients
           }
-          client = undefined;
         }
       }
 

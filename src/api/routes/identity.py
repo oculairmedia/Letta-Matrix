@@ -356,7 +356,7 @@ async def provision_identity(
     import re
     encoded = base64.b64encode(request.directory.encode()).decode()
     encoded = encoded.rstrip("=").replace("+", "-").replace("/", "_")
-    identity_id = f"{request.identity_type}_{encoded}"
+    identity_id = f"{request.identity_type}_v2_{encoded}"
     
     project_name = request.directory.rstrip("/").split("/")[-1] or "project"
     project_name_clean = re.sub(r"[^a-z0-9_]", "_", project_name.lower())
