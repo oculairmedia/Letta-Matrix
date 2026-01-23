@@ -522,7 +522,11 @@ function handleWebSocketConnection(ws: WebSocket): void {
           registration.lastSeen = Date.now();
           authenticatedRegistration = registration;
           
-          console.log(`[Bridge] WebSocket authenticated for ${registration.id}`);
+          for (const roomId of registration.rooms) {
+            roomToRegistration.set(roomId, registration);
+          }
+          
+          console.log(`[Bridge] WebSocket authenticated for ${registration.id} (rooms: ${registration.rooms.join(", ") || "none"})`);
           ws.send(JSON.stringify({ type: "auth_success", registrationId: registration.id }));
         } else {
           console.log(`[Bridge] WebSocket auth failed - registration not found: ${authMsg.registrationId}`);
