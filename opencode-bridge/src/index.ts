@@ -63,6 +63,7 @@ const config = {
 
 const registrations = new Map<string, OpenCodeRegistration>();
 const identityToRegistration = new Map<string, OpenCodeRegistration>();
+const roomToRegistration = new Map<string, OpenCodeRegistration>();
 let matrixClient: sdk.MatrixClient | null = null;
 let agentMappings: Record<string, AgentMapping> = {};
 
@@ -124,6 +125,11 @@ function cleanupStaleRegistrations(): void {
           identityToRegistration.delete(identity);
         }
       }
+      for (const roomId of reg.rooms) {
+        if (roomToRegistration.get(roomId) === reg) {
+          roomToRegistration.delete(roomId);
+        }
+      }
     }
   }
 }
@@ -172,13 +178,21 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
   const senderMxid = event.getSender() || "unknown";
   const body = content.body || "";
 
+  const senderMember = room.getMember?.(senderMxid);
+  const senderName = senderMember?.name || getAgentForRoom(roomId)?.agent_name || senderMxid;
+  const eventId = event.getId() || "";
+
+  const roomRegistration = roomToRegistration.get(roomId);
+  if (roomRegistration) {
+    console.log(`[Bridge] Message in OpenCode room ${roomId} from ${senderName}`);
+    forwardToOpenCode(roomRegistration, roomId, senderName, senderMxid, body, eventId);
+    return;
+  }
+
   const mentions = extractOpenCodeMentions(body);
   if (mentions.length === 0) return;
 
   console.log(`[Bridge] Message with @mention(s): ${mentions.join(", ")} from ${senderMxid}`);
-
-  const senderMember = room.getMember?.(senderMxid);
-  const senderName = senderMember?.name || getAgentForRoom(roomId)?.agent_name || senderMxid;
 
   for (const mention of mentions) {
     const registration = identityToRegistration.get(mention);
@@ -189,7 +203,7 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
     }
 
     console.log(`[Bridge] Forwarding to ${registration.id} (${mention})`);
-    forwardToOpenCode(registration, roomId, senderName, senderMxid, body, event.getId() || "");
+    forwardToOpenCode(registration, roomId, senderName, senderMxid, body, eventId);
   }
 }
 
@@ -319,6 +333,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         for (const identity of matrixIdentities) {
           identityToRegistration.set(identity, registration);
         }
+        for (const roomId of registration.rooms) {
+          roomToRegistration.set(roomId, registration);
+        }
         
         console.log(`[Bridge] Registered: ${id} -> ${matrixIdentities.join(", ")}`);
 
@@ -398,6 +415,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           for (const identity of matrixIdentities) {
             identityToRegistration.delete(identity);
           }
+          for (const roomId of registration.rooms) {
+            roomToRegistration.delete(roomId);
+          }
           console.log(`[Bridge] Unregistered: ${id}`);
         }
         
@@ -441,7 +461,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         let updated = false;
         for (const reg of registrations.values()) {
           if (reg.directory === directory) {
+            for (const oldRoom of reg.rooms) {
+              roomToRegistration.delete(oldRoom);
+            }
             reg.rooms = rooms;
+            for (const newRoom of rooms) {
+              roomToRegistration.set(newRoom, reg);
+            }
             reg.lastSeen = Date.now();
             updated = true;
             console.log(`[Bridge] Updated rooms for ${directory}: ${rooms.join(", ")}`);
