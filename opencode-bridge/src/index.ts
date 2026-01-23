@@ -425,6 +425,39 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
+  if (url.pathname === "/update-rooms" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      try {
+        const { directory, rooms } = JSON.parse(body);
+
+        if (!directory || !Array.isArray(rooms)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing required fields: directory, rooms (array)" }));
+          return;
+        }
+
+        let updated = false;
+        for (const reg of registrations.values()) {
+          if (reg.directory === directory) {
+            reg.rooms = rooms;
+            reg.lastSeen = Date.now();
+            updated = true;
+            console.log(`[Bridge] Updated rooms for ${directory}: ${rooms.join(", ")}`);
+          }
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: updated, directory, rooms }));
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
+      }
+    });
+    return;
+  }
+
   res.writeHead(404, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ error: "Not found" }));
 }

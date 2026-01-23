@@ -12,6 +12,7 @@ import { getToolContext, result, requireParam, requireIdentity, requireLetta, To
 import { IdentityManager } from '../core/identity-manager';
 import { getCallerContext, resolveCallerIdentity, resolveCallerIdentityId, type CallerContext } from '../core/caller-context';
 import { getOrCreateAgentRoom } from '../core/agent-rooms';
+import { getOrCreateOpenCodeRoom, updateBridgeRegistration } from '../core/opencode-rooms.js';
 import { autoRegisterWithBridge } from '../core/opencode-bridge';
 import { getAdminToken, getAdminConfig } from '../core/admin-auth.js';
 
@@ -1202,13 +1203,16 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           senderIdentity = await ctx.openCodeService.getOrCreateDefaultIdentity();
         }
         
-        const targetRoomId = instance.rooms.length > 0 ? instance.rooms[0] : undefined;
+        let targetRoomId = instance.rooms.length > 0 ? instance.rooms[0] : undefined;
+        
         if (!targetRoomId) {
-          return result({
-            success: false,
-            error: `OpenCode instance '${target}' has no associated rooms`,
-            suggestion: 'The instance needs to join a room first.'
-          });
+          targetRoomId = await getOrCreateOpenCodeRoom(
+            instance.directory,
+            instance.identity,
+            senderIdentity,
+            ctx
+          );
+          await updateBridgeRegistration(instance.directory, targetRoomId);
         }
         
         const senderClient = await ctx.clientPool.getClient(senderIdentity);
