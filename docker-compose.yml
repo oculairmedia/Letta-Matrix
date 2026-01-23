@@ -139,9 +139,11 @@ services:
       - MATRIX_ACCESS_TOKEN=${OPENCODE_BRIDGE_ACCESS_TOKEN}
       - BRIDGE_PORT=3201
       - AGENT_MAPPINGS_PATH=/app/data/agent_user_mappings.json
+      - OPENCODE_ROOM_MAPPINGS_PATH=/app/mcp-data/opencode_room_mappings.json
     volumes:
       - ./matrix_client_data:/app/data
-      - ./opencode-bridge/dist:/app/dist:ro  # Mount local builds for development
+      - ./mcp-servers/matrix-identity-bridge/data:/app/mcp-data:ro
+      - ./opencode-bridge/dist:/app/dist:ro
     depends_on:
       tuwunel:
         condition: service_healthy

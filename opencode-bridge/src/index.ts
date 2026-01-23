@@ -15,6 +15,7 @@ import "dotenv/config";
 import * as sdk from "matrix-js-sdk";
 import { createServer, IncomingMessage, ServerResponse } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import { readFileSync } from "fs";
 import { fetchAgentMappings } from "./agent-mappings.js";
 
 interface OpenCodeRegistration {
@@ -46,6 +47,44 @@ interface WsMatrixMessage {
   roomId: string;
   body: string;
   eventId: string;
+}
+
+interface OpenCodeRoomMapping {
+  directory: string;
+  room_id: string;
+  identity_id: string;
+  identity_mxid: string;
+}
+
+let openCodeRoomMappings: Record<string, OpenCodeRoomMapping> = {};
+
+function loadOpenCodeRoomMappings(): void {
+  const mappingsPath = process.env.OPENCODE_ROOM_MAPPINGS_PATH;
+  if (!mappingsPath) {
+    console.log("[Bridge] No OPENCODE_ROOM_MAPPINGS_PATH configured, skipping room mappings load");
+    return;
+  }
+  
+  try {
+    const raw = readFileSync(mappingsPath, "utf-8");
+    openCodeRoomMappings = JSON.parse(raw);
+    console.log(`[Bridge] Loaded ${Object.keys(openCodeRoomMappings).length} OpenCode room mappings from disk`);
+  } catch (error: any) {
+    if (error?.code === "ENOENT") {
+      console.log("[Bridge] OpenCode room mappings file not found, starting fresh");
+    } else {
+      console.error("[Bridge] Failed to load OpenCode room mappings:", error);
+    }
+  }
+}
+
+function getRoomForDirectory(directory: string): string | undefined {
+  for (const mapping of Object.values(openCodeRoomMappings)) {
+    if (mapping.directory === directory) {
+      return mapping.room_id;
+    }
+  }
+  return undefined;
 }
 
 const config = {
@@ -307,10 +346,25 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
         const id = `${directory}:${sessionId}`;
         
+        let effectiveRooms = rooms || [];
+        if (effectiveRooms.length === 0) {
+          const persistedRoom = getRoomForDirectory(directory);
+          if (persistedRoom) {
+            effectiveRooms = [persistedRoom];
+            console.log(`[Bridge] Found persisted room for ${directory}: ${persistedRoom}`);
+          }
+        }
+        
         const existing = registrations.get(id);
         if (existing) {
           existing.lastSeen = Date.now();
-          existing.rooms = rooms || [];
+          for (const oldRoom of existing.rooms) {
+            roomToRegistration.delete(oldRoom);
+          }
+          existing.rooms = effectiveRooms;
+          for (const roomId of effectiveRooms) {
+            roomToRegistration.set(roomId, existing);
+          }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ 
             success: true, 
@@ -325,7 +379,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           id,
           directory,
           sessionId,
-          rooms: rooms || [],
+          rooms: effectiveRooms,
           registeredAt: Date.now(),
           lastSeen: Date.now(),
           ws: null,
@@ -341,7 +395,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           roomToRegistration.set(roomId, registration);
         }
         
-        console.log(`[Bridge] Registered: ${id} -> ${matrixIdentities.join(", ")}`);
+        console.log(`[Bridge] Registered: ${id} -> ${matrixIdentities.join(", ")} (rooms: ${effectiveRooms.join(", ") || "none"})`);
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ 
@@ -555,6 +609,7 @@ function handleWebSocketConnection(ws: WebSocket): void {
 async function main(): Promise<void> {
   console.log("[Bridge] Starting OpenCode Matrix Bridge with WebSocket support...");
 
+  loadOpenCodeRoomMappings();
   await loadAgentMappings();
 
   const server = createServer(handleRequest);
