@@ -49,6 +49,13 @@ interface WsMatrixMessage {
   eventId: string;
 }
 
+interface WsOutboundMessage {
+  type: "outbound_message";
+  role: "assistant" | "user";
+  content: string;
+  messageId: string;
+}
+
 interface OpenCodeRoomMapping {
   directory: string;
   room_id: string;
@@ -170,6 +177,31 @@ function cleanupStaleRegistrations(): void {
         }
       }
     }
+  }
+}
+
+async function handleOutboundMessage(
+  registration: OpenCodeRegistration,
+  outbound: WsOutboundMessage
+): Promise<void> {
+  if (registration.rooms.length === 0) {
+    console.log(`[Bridge] No room for outbound message from ${registration.directory}`);
+    return;
+  }
+  
+  const roomId = registration.rooms[0];
+  const mapping = Object.values(openCodeRoomMappings).find(m => m.directory === registration.directory);
+  
+  if (!matrixClient) {
+    console.error("[Bridge] Matrix client not initialized");
+    return;
+  }
+  
+  try {
+    await matrixClient.sendTextMessage(roomId, outbound.content);
+    console.log(`[Bridge] Sent outbound message to ${roomId} (${outbound.content.substring(0, 50)}...)`);
+  } catch (error) {
+    console.error(`[Bridge] Failed to send outbound message to ${roomId}:`, error);
   }
 }
 
@@ -586,6 +618,9 @@ function handleWebSocketConnection(ws: WebSocket): void {
           console.log(`[Bridge] WebSocket auth failed - registration not found: ${authMsg.registrationId}`);
           ws.send(JSON.stringify({ type: "auth_error", error: "Registration not found" }));
         }
+      } else if (message.type === "outbound_message" && authenticatedRegistration) {
+        const outbound = message as WsOutboundMessage;
+        handleOutboundMessage(authenticatedRegistration, outbound);
       }
     } catch (error) {
       console.error("[Bridge] Error processing WebSocket message:", error);
