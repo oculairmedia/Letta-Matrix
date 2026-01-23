@@ -142,9 +142,7 @@ async function unregisterFromBridge(registrationId: string): Promise<void> {
 }
 
 export const MatrixContextInjector: Plugin = async ({ client, directory, worktree }) => {
-  console.log("[Matrix-Plugin] ========== PLUGIN INITIALIZING ==========");
   const baseDir = worktree || directory;
-  console.log(`[Matrix-Plugin] baseDir=${baseDir}`);
   const opencodeDirPath = path.join(baseDir, ".opencode");
   const lockPath = path.join(opencodeDirPath, "matrix.lock");
 
@@ -152,17 +150,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     await mkdir(opencodeDirPath, { recursive: true });
   }
 
-  const log = (level: "debug" | "info" | "warn" | "error", message: string, extra?: any) => {
-    console.log(`[Matrix-Plugin] [${level}] ${message}`, extra || "");
-    client.app.log({
-      body: {
-        service: "matrix-bridge-plugin",
-        level,
-        message,
-        extra,
-      },
-    }).catch(() => undefined);
-  };
+
 
   let bridgeRegistrationId: string | null = null;
   let heartbeatInterval: NodeJS.Timeout | null = null;
@@ -185,9 +173,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     
     try {
       ws.send(JSON.stringify(outbound));
-      log("debug", "Sent outbound message", { role, messageId, length: content.length });
-    } catch (err) {
-      log("error", "Failed to send outbound message", { error: err });
+    } catch {
     }
   };
   
@@ -251,8 +237,6 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
 
     ws.on("open", () => {
       wsReconnectAttempts = 0;
-      log("info", "WebSocket connected to bridge", { wsUrl });
-      
       ws?.send(JSON.stringify({ type: "auth", registrationId }));
     });
 
@@ -260,74 +244,38 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       try {
         const message = JSON.parse(data.toString());
 
-        if (message.type === "auth_success") {
-          log("info", "WebSocket authenticated", { registrationId: message.registrationId });
-          return;
-        }
-
-        if (message.type === "auth_error") {
-          log("error", "WebSocket auth failed", { error: message.error });
+        if (message.type === "auth_success" || message.type === "auth_error") {
           return;
         }
 
         if (message.type === "matrix_message") {
           const matrixMsg = message as MatrixMessage;
-          console.log(`[Matrix-Plugin] Received message from ${matrixMsg.sender} in ${matrixMsg.roomId}`);
           
           if (matrixMsg.body.startsWith("**User:**") || matrixMsg.body.startsWith("**Emmanuel:**")) {
-            console.log(`[Matrix-Plugin] Skipping - echoed user message`);
             return;
           }
           
           const sessionId = await getActiveSessionId(client, baseDir);
-          console.log(`[Matrix-Plugin] Session lookup for ${baseDir}: ${sessionId || 'NOT FOUND'}`);
-          
-          if (!sessionId) {
-            log("warn", "No active session for Matrix message", {
-              sender: matrixMsg.sender,
-              roomId: matrixMsg.roomId,
-            });
-            return;
-          }
+          if (!sessionId) return;
 
           const injection = `[Matrix from ${matrixMsg.sender} in ${matrixMsg.roomId}]\n${matrixMsg.body}`;
 
           try {
-            console.log(`[Matrix-Plugin] Injecting message into session ${sessionId}`);
-            
-            // Use TUI API to append and submit the message
             await client.tui.appendPrompt({ body: { text: injection } });
             await client.tui.submitPrompt();
-            
-            console.log(`[Matrix-Plugin] Successfully injected message via TUI`);
-            log("info", "Injected Matrix message", {
-              sender: matrixMsg.sender,
-              eventId: matrixMsg.eventId,
-              sessionId,
-            });
-          } catch (err: any) {
-            console.error(`[Matrix-Plugin] Failed to inject: ${err?.message || err}`);
-            log("error", "Failed to inject Matrix message", {
-              error: err?.message || err,
-              sender: matrixMsg.sender,
-              eventId: matrixMsg.eventId,
-            });
+          } catch {
           }
         }
-      } catch (error) {
-        log("error", "Failed to process WebSocket message", { error });
+      } catch {
       }
     });
 
     ws.on("close", () => {
       if (shuttingDown) return;
-      
-      log("warn", "WebSocket disconnected, reconnecting...");
       scheduleReconnect(wsUrl, registrationId);
     });
 
-    ws.on("error", (error) => {
-      log("error", "WebSocket error", { error: error.message });
+    ws.on("error", () => {
     });
   };
 
@@ -339,8 +287,6 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       WS_RECONNECT_BASE_MS * Math.pow(2, wsReconnectAttempts - 1),
       WS_RECONNECT_MAX_MS
     );
-
-    log("info", `Reconnecting in ${delay}ms (attempt ${wsReconnectAttempts})`);
 
     wsReconnectTimeout = setTimeout(() => {
       wsReconnectTimeout = null;
@@ -361,8 +307,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   setTimeout(async () => {
     try {
       await acquireLock(lockPath);
-    } catch (error: any) {
-      log("error", error.message);
+    } catch {
       return;
     }
 
@@ -380,31 +325,17 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
         }, HEARTBEAT_INTERVAL_MS);
 
         connectWebSocket(result.wsUrl, result.id);
-
-        log("info", "Registered with opencode-bridge", {
-          registrationId: bridgeRegistrationId,
-          directory: baseDir,
-          wsUrl: result.wsUrl,
-        });
-      } else {
-        log("warn", "Failed to register with opencode-bridge", { directory: baseDir });
       }
-    } catch (error: any) {
-      log("error", "Matrix bridge plugin failed to start", {
-        error: error?.message || error,
-      });
+    } catch {
       shutdown();
     }
   }, 2000);
 
   const messagePartsMap = new Map<string, Map<string, string>>();
   const sentMessages = new Set<string>();
-  const sentUserMessages = new Set<string>(); // Track user messages sent to Matrix
-  
-  console.log("[Matrix-Plugin] ========== RETURNING HOOKS ==========");
+  const sentUserMessages = new Set<string>();
   
   return {
-    // Capture user messages and forward to Matrix
     "chat.message": async (input: any, output: any) => {
       const userMsg = input?.message;
       if (!userMsg) return;
@@ -423,23 +354,14 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       
       if (!content || !content.trim()) return;
       
-      // Skip messages that originated from Matrix (injected by us)
-      if (content.includes("[Matrix from ")) {
-        console.log("[Matrix-Plugin] Skipping user message - originated from Matrix");
-        return;
-      }
+      if (content.includes("[Matrix from ")) return;
       
-      // Generate a unique ID for this message to prevent echo loops
       const messageId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      
-      console.log(`[Matrix-Plugin] Sending user message: ${content.substring(0, 50)}...`);
       sendOutboundMessage("user", content, messageId);
       
-      // Track this message content hash to prevent re-injection if it comes back
       const contentHash = content.trim().substring(0, 100);
       sentUserMessages.add(contentHash);
       
-      // Cleanup old hashes
       if (sentUserMessages.size > 50) {
         const oldest = Array.from(sentUserMessages).slice(0, 25);
         oldest.forEach(h => sentUserMessages.delete(h));
@@ -463,20 +385,14 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       }
       
       if (event.type === "session.idle") {
-        console.log("[Matrix-Plugin] Session idle - sending pending messages");
-        
         for (const [messageID, parts] of messagePartsMap.entries()) {
           if (sentMessages.has(messageID)) continue;
           
           const fullContent = Array.from(parts.values()).join("\n");
           
-          if (fullContent.includes("[Matrix from ")) {
-            console.log(`[Matrix-Plugin] Skipping - originated from Matrix`);
-            continue;
-          }
+          if (fullContent.includes("[Matrix from ")) continue;
           
           if (fullContent.trim() && fullContent.length > 20) {
-            console.log(`[Matrix-Plugin] Sending: ${fullContent.substring(0, 50)}...`);
             sendOutboundMessage("assistant", fullContent, messageID);
             sentMessages.add(messageID);
           }
