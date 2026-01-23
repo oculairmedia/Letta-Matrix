@@ -79,6 +79,7 @@ export const getOrCreateOpenCodeRoom = async (
 
   const createNewRoom = async (): Promise<string> => {
     const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_synapse_deployment:matrix.oculair.ca';
+    const adminMxid = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
     
     // Build invite list - skip room creator (they auto-join) and duplicates
     const inviteList = new Set<string>();
@@ -87,6 +88,9 @@ export const getOrCreateOpenCodeRoom = async (
     }
     if (bridgeUserMxid !== opencodeIdentity.mxid) {
       inviteList.add(bridgeUserMxid);
+    }
+    if (adminMxid !== opencodeIdentity.mxid) {
+      inviteList.add(adminMxid);
     }
     
     const roomId = await client.createRoom({
@@ -129,6 +133,7 @@ export const getOrCreateOpenCodeRoom = async (
     }
 
     const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_synapse_deployment:matrix.oculair.ca';
+    const adminMxid = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
     let needsSave = false;
     
     const toInvite: string[] = [];
@@ -137,6 +142,9 @@ export const getOrCreateOpenCodeRoom = async (
     }
     if (bridgeUserMxid !== opencodeIdentity.mxid && !existing.invitation_status?.[bridgeUserMxid]) {
       toInvite.push(bridgeUserMxid);
+    }
+    if (adminMxid !== opencodeIdentity.mxid && !existing.invitation_status?.[adminMxid]) {
+      toInvite.push(adminMxid);
     }
     
     for (const mxid of toInvite) {
