@@ -195,6 +195,7 @@ services:
       - OPENCODE_BRIDGE_URL=${OPENCODE_BRIDGE_URL:-http://host.docker.internal:3201}
     volumes:
       - ./mcp-servers/matrix-identity-bridge/data:/app/data
+      - ./mcp-servers/matrix-identity-bridge/dist:/app/dist:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

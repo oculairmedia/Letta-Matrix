@@ -78,43 +78,44 @@ export const getOrCreateOpenCodeRoom = async (
   const roomName = `OpenCode: ${projectName}`;
 
   const createNewRoom = async (): Promise<string> => {
+    const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_synapse_deployment:matrix.oculair.ca';
+    
+    // Build invite list - skip room creator (they auto-join) and duplicates
+    const inviteList = new Set<string>();
+    if (callerIdentity.mxid !== opencodeIdentity.mxid) {
+      inviteList.add(callerIdentity.mxid);
+    }
+    if (bridgeUserMxid !== opencodeIdentity.mxid) {
+      inviteList.add(bridgeUserMxid);
+    }
+    
     const roomId = await client.createRoom({
       name: roomName,
       topic: `Room for OpenCode instance: ${directory}`,
       preset: 'private_chat',
+      invite: Array.from(inviteList),  // Invite at creation time
       initial_state: [
         { type: 'm.room.history_visibility', content: { history_visibility: 'shared' } },
       ],
     });
+    
+    console.log(`[OpenCodeRooms] Created room ${roomId} with invites: ${Array.from(inviteList).join(', ')}`);
 
-    try {
-      await ctx.roomManager.inviteUser(opencodeIdentity.id, roomId, callerIdentity.mxid);
-    } catch (error) {
-      console.error('[OpenCodeRooms] Failed to invite caller to room:', error);
+    const invitationStatus: Record<string, string> = {};
+    for (const mxid of inviteList) {
+      invitationStatus[mxid] = 'invited';
     }
-
-    const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_synapse_deployment_v2:matrix.oculair.ca';
-    try {
-      await ctx.roomManager.inviteUser(opencodeIdentity.id, roomId, bridgeUserMxid);
-      console.log(`[OpenCodeRooms] Invited bridge user ${bridgeUserMxid} to room ${roomId}`);
-    } catch (error) {
-      console.error('[OpenCodeRooms] Failed to invite bridge to room:', error);
-    }
-
-    // Save mapping
+    
     mappings[roomKey] = {
       directory,
       room_id: roomId,
       identity_id: opencodeIdentity.id,
       identity_mxid: opencodeIdentity.mxid,
       created_at: Date.now(),
-      invitation_status: {
-        [callerIdentity.mxid]: 'invited',
-      },
+      invitation_status: invitationStatus,
     };
     await saveOpenCodeRoomMappings(mappings);
 
-    console.log(`[OpenCodeRooms] Created room ${roomId} for ${directory}`);
     return roomId;
   };
 
@@ -127,32 +128,27 @@ export const getOrCreateOpenCodeRoom = async (
       return await createNewRoom();
     }
 
-    const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_synapse_deployment_v2:matrix.oculair.ca';
+    const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_synapse_deployment:matrix.oculair.ca';
     let needsSave = false;
-
-    if (!existing.invitation_status?.[callerIdentity.mxid]) {
-      try {
-        await ctx.roomManager.inviteUser(opencodeIdentity.id, existing.room_id, callerIdentity.mxid);
-        existing.invitation_status = { ...(existing.invitation_status ?? {}), [callerIdentity.mxid]: 'invited' };
-        needsSave = true;
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (!errorMessage.includes('M_FORBIDDEN')) {
-          console.warn('[OpenCodeRooms] Failed to invite caller:', errorMessage);
-        }
-      }
+    
+    const toInvite: string[] = [];
+    if (callerIdentity.mxid !== opencodeIdentity.mxid && !existing.invitation_status?.[callerIdentity.mxid]) {
+      toInvite.push(callerIdentity.mxid);
     }
-
-    if (!existing.invitation_status?.[bridgeUserMxid]) {
+    if (bridgeUserMxid !== opencodeIdentity.mxid && !existing.invitation_status?.[bridgeUserMxid]) {
+      toInvite.push(bridgeUserMxid);
+    }
+    
+    for (const mxid of toInvite) {
       try {
-        await ctx.roomManager.inviteUser(opencodeIdentity.id, existing.room_id, bridgeUserMxid);
-        existing.invitation_status = { ...(existing.invitation_status ?? {}), [bridgeUserMxid]: 'invited' };
+        await ctx.roomManager.inviteUser(opencodeIdentity.id, existing.room_id, mxid);
+        existing.invitation_status = { ...(existing.invitation_status ?? {}), [mxid]: 'invited' };
         needsSave = true;
-        console.log(`[OpenCodeRooms] Invited bridge user ${bridgeUserMxid} to existing room ${existing.room_id}`);
+        console.log(`[OpenCodeRooms] Invited ${mxid} to existing room ${existing.room_id}`);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         if (!errorMessage.includes('M_FORBIDDEN')) {
-          console.warn('[OpenCodeRooms] Failed to invite bridge:', errorMessage);
+          console.warn(`[OpenCodeRooms] Failed to invite ${mxid}:`, errorMessage);
         }
       }
     }
