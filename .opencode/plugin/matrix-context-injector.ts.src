@@ -210,8 +210,11 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
 
         if (message.type === "matrix_message") {
           const matrixMsg = message as MatrixMessage;
+          console.log(`[Matrix-Plugin] Received message from ${matrixMsg.sender} in ${matrixMsg.roomId}`);
           
           const sessionId = await getActiveSessionId(client, baseDir);
+          console.log(`[Matrix-Plugin] Session lookup for ${baseDir}: ${sessionId || 'NOT FOUND'}`);
+          
           if (!sessionId) {
             log("warn", "No active session for Matrix message", {
               sender: matrixMsg.sender,
@@ -223,18 +226,20 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
           const injection = `[Matrix from ${matrixMsg.sender} in ${matrixMsg.roomId}]\n${matrixMsg.body}`;
 
           try {
-            await client.session.prompt({
-              path: { id: sessionId },
-              body: {
-                parts: [{ type: "text", text: injection }],
-              },
-            });
+            console.log(`[Matrix-Plugin] Injecting message into session ${sessionId}`);
+            
+            // Use TUI API to append and submit the message
+            await client.tui.appendPrompt({ body: { text: injection } });
+            await client.tui.submitPrompt();
+            
+            console.log(`[Matrix-Plugin] Successfully injected message via TUI`);
             log("info", "Injected Matrix message", {
               sender: matrixMsg.sender,
               eventId: matrixMsg.eventId,
               sessionId,
             });
           } catch (err: any) {
+            console.error(`[Matrix-Plugin] Failed to inject: ${err?.message || err}`);
             log("error", "Failed to inject Matrix message", {
               error: err?.message || err,
               sender: matrixMsg.sender,
