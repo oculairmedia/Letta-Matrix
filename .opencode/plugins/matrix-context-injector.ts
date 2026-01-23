@@ -142,7 +142,9 @@ async function unregisterFromBridge(registrationId: string): Promise<void> {
 }
 
 export const MatrixContextInjector: Plugin = async ({ client, directory, worktree }) => {
+  console.log("[Matrix-Plugin] ========== PLUGIN INITIALIZING ==========");
   const baseDir = worktree || directory;
+  console.log(`[Matrix-Plugin] baseDir=${baseDir}`);
   const opencodeDirPath = path.join(baseDir, ".opencode");
   const lockPath = path.join(opencodeDirPath, "matrix.lock");
 
@@ -151,6 +153,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   }
 
   const log = (level: "debug" | "info" | "warn" | "error", message: string, extra?: any) => {
+    console.log(`[Matrix-Plugin] [${level}] ${message}`, extra || "");
     client.app.log({
       body: {
         service: "matrix-bridge-plugin",
@@ -167,11 +170,11 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   let wsReconnectAttempts = 0;
   let wsReconnectTimeout: NodeJS.Timeout | null = null;
   let shuttingDown = false;
-  const sentMessageIds = new Set<string>();
+  const pendingMessages = new Map<string, { content: string; sentLength: number; timer: NodeJS.Timeout | null }>();
+  const STREAM_SETTLE_MS = 500;
   
   const sendOutboundMessage = (role: "assistant" | "user", content: string, messageId: string) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (sentMessageIds.has(messageId)) return;
     
     const outbound: OutboundMessage = {
       type: "outbound_message",
@@ -182,13 +185,41 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     
     try {
       ws.send(JSON.stringify(outbound));
-      sentMessageIds.add(messageId);
-      if (sentMessageIds.size > 1000) {
-        const oldest = Array.from(sentMessageIds).slice(0, 500);
-        oldest.forEach(id => sentMessageIds.delete(id));
-      }
+      log("debug", "Sent outbound message", { role, messageId, length: content.length });
     } catch (err) {
       log("error", "Failed to send outbound message", { error: err });
+    }
+  };
+  
+  const scheduleOutboundSend = (messageId: string, content: string, role: "assistant" | "user") => {
+    let entry = pendingMessages.get(messageId);
+    
+    if (!entry) {
+      entry = { content: "", sentLength: 0, timer: null };
+      pendingMessages.set(messageId, entry);
+    }
+    
+    entry.content = content;
+    
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+    
+    entry.timer = setTimeout(() => {
+      const e = pendingMessages.get(messageId);
+      if (e && e.content.length > e.sentLength) {
+        sendOutboundMessage(role, e.content, messageId);
+        e.sentLength = e.content.length;
+      }
+    }, STREAM_SETTLE_MS);
+    
+    if (pendingMessages.size > 100) {
+      const staleKeys = Array.from(pendingMessages.keys()).slice(0, 50);
+      staleKeys.forEach(k => {
+        const e = pendingMessages.get(k);
+        if (e?.timer) clearTimeout(e.timer);
+        pendingMessages.delete(k);
+      });
     }
   };
 
@@ -361,29 +392,23 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     }
   }, 2000);
 
+  console.log("[Matrix-Plugin] ========== RETURNING HOOKS ==========");
+  
   return {
-    event: async ({ event }) => {
-      if (event.type === "message.updated") {
-        const msg = event.properties?.message;
-        if (!msg) return;
-        
-        const role = msg.role as string;
-        const messageId = msg.id as string;
-        
-        if (role !== "assistant" || !messageId) return;
-        
-        const parts = msg.parts as any[];
-        if (!Array.isArray(parts)) return;
-        
-        const textParts = parts
-          .filter((p: any) => p.type === "text" && typeof p.text === "string")
-          .map((p: any) => p.text)
-          .join("\n");
-        
-        if (textParts.trim()) {
-          sendOutboundMessage("assistant", textParts, messageId);
-        }
+    "assistant.message": async ({ message }: { message: any }) => {
+      console.log("[Matrix-Plugin] ASSISTANT MESSAGE HOOK FIRED");
+      if (!message?.content) {
+        console.log("[Matrix-Plugin] No content in message");
+        return;
       }
+      
+      const messageId = message.id || `msg-${Date.now()}`;
+      console.log(`[Matrix-Plugin] Sending assistant message: ${message.content.substring(0, 50)}...`);
+      sendOutboundMessage("assistant", message.content, messageId);
+    },
+    
+    event: async ({ event }: { event: any }) => {
+      console.log(`[Matrix-Plugin] EVENT: ${event.type}`);
     },
   };
 };

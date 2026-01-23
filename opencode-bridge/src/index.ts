@@ -184,13 +184,16 @@ async function handleOutboundMessage(
   registration: OpenCodeRegistration,
   outbound: WsOutboundMessage
 ): Promise<void> {
-  if (registration.rooms.length === 0) {
+  let roomId = registration.rooms[0];
+  
+  if (!roomId) {
+    roomId = getRoomForDirectory(registration.directory) || "";
+  }
+  
+  if (!roomId) {
     console.log(`[Bridge] No room for outbound message from ${registration.directory}`);
     return;
   }
-  
-  const roomId = registration.rooms[0];
-  const mapping = Object.values(openCodeRoomMappings).find(m => m.directory === registration.directory);
   
   if (!matrixClient) {
     console.error("[Bridge] Matrix client not initialized");
