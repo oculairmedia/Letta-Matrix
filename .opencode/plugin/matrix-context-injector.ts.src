@@ -2,47 +2,21 @@ import type { Plugin } from "@opencode-ai/plugin";
 import { existsSync } from "fs";
 import { mkdir, readFile, unlink, writeFile } from "fs/promises";
 import path from "path";
-import { loadMatrixConfig } from "./lib/matrix-config";
-import { resolveMatrixCredentials } from "./lib/matrix-credentials";
-import { MatrixSyncClient, type MatrixMessage } from "./lib/matrix-sync-client";
+import WebSocket from "ws";
 
-const DEDUPE_TTL_MS = 60 * 60 * 1000;
-const DEDUPE_CLEANUP_MS = 60 * 1000;
+const BRIDGE_URL = process.env.OPENCODE_BRIDGE_URL || "http://127.0.0.1:3201";
+const BRIDGE_WS_URL = process.env.OPENCODE_BRIDGE_WS_URL || "ws://127.0.0.1:3201/ws";
+const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
+const WS_RECONNECT_BASE_MS = 1000;
+const WS_RECONNECT_MAX_MS = 30000;
 
-class DedupeCache {
-  private entries = new Map<string, number>();
-  private interval: NodeJS.Timeout;
-
-  constructor(private ttlMs: number, cleanupMs: number) {
-    this.interval = setInterval(() => this.cleanup(), cleanupMs);
-  }
-
-  has(key: string): boolean {
-    const expiresAt = this.entries.get(key);
-    if (!expiresAt) return false;
-    if (expiresAt <= Date.now()) {
-      this.entries.delete(key);
-      return false;
-    }
-    return true;
-  }
-
-  add(key: string): void {
-    this.entries.set(key, Date.now() + this.ttlMs);
-  }
-
-  stop(): void {
-    clearInterval(this.interval);
-  }
-
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [key, expiresAt] of this.entries.entries()) {
-      if (expiresAt <= now) {
-        this.entries.delete(key);
-      }
-    }
-  }
+interface MatrixMessage {
+  type: "matrix_message";
+  sender: string;
+  senderMxid: string;
+  roomId: string;
+  body: string;
+  eventId: string;
 }
 
 function getSessionUpdatedAtMs(session: any): number {
@@ -96,7 +70,7 @@ async function acquireLock(lockPath: string): Promise<void> {
 
     if (existsSync(lockPath)) {
       throw new Error(
-        `Matrix injector already running. Remove lock at ${lockPath}. ${contents ? `Details: ${contents}` : ""}`
+        `Matrix bridge plugin already running. Remove lock at ${lockPath}. ${contents ? `Details: ${contents}` : ""}`
       );
     }
   }
@@ -113,76 +87,24 @@ async function releaseLock(lockPath: string): Promise<void> {
   await unlink(lockPath).catch(() => undefined);
 }
 
-function formatInjection(message: MatrixMessage, label: string): string {
-  return `[Matrix from ${message.displayName} in ${label}]
-${message.body}`;
-}
-
-function stripReplyFallback(body: string): string {
-  const lines = body.split("\n");
-  if (lines.length === 0) return body;
-  if (!lines[0].startsWith(">")) return body;
-
-  for (let idx = 1; idx < lines.length; idx++) {
-    if (lines[idx] === "" && lines[idx - 1].startsWith(">")) {
-      const remainder = lines.slice(idx + 1).join("\n").trim();
-      return remainder.length > 0 ? remainder : body;
-    }
-  }
-
-  return body;
-}
-
-function extractOpenCodeMentions(body: string): string[] {
-  const mentions = new Set<string>();
-
-  const cleaned = stripReplyFallback(body);
-
-  const fullMatches = cleaned.match(/@oc_[a-z0-9_]+(?:_v2)?:[a-z0-9._-]+/gi) ?? [];
-  for (const match of fullMatches) mentions.add(match);
-
-  const localMatches = cleaned.match(/@oc_[a-z0-9_]+(?:_v2)?/gi) ?? [];
-  for (const match of localMatches) mentions.add(match);
-
-  return [...mentions];
-}
-
-function messageMentionsIdentity(body: string, userId: string): boolean {
-  const mentions = extractOpenCodeMentions(body);
-  if (mentions.length === 0) return false;
-
-  const normalizedUserId = userId.toLowerCase();
-  const localpart = userId.split(":")[0]?.toLowerCase();
-
-  return mentions.some((mention) => {
-    const normalized = mention.toLowerCase();
-    return normalized === normalizedUserId || (localpart ? normalized === localpart : false);
-  });
-}
-
-const BRIDGE_URL = process.env.OPENCODE_BRIDGE_URL || "http://127.0.0.1:3201";
-const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
-
 async function registerWithBridge(
   directory: string,
-  rooms: string[],
   sessionId: string
-): Promise<string | null> {
+): Promise<{ id: string; wsUrl: string } | null> {
   try {
     const response = await fetch(`${BRIDGE_URL}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        port: 0,
-        hostname: "127.0.0.1",
         sessionId,
         directory,
-        rooms,
+        rooms: [],
       }),
     });
     if (!response.ok) return null;
-    const data = (await response.json()) as { id?: string };
-    return data.id || null;
+    const data = (await response.json()) as { id?: string; wsUrl?: string };
+    if (!data.id) return null;
+    return { id: data.id, wsUrl: data.wsUrl || BRIDGE_WS_URL };
   } catch {
     return null;
   }
@@ -209,7 +131,6 @@ async function unregisterFromBridge(registrationId: string): Promise<void> {
       body: JSON.stringify({ id: registrationId }),
     });
   } catch {
-    return;
   }
 }
 
@@ -217,17 +138,15 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   const baseDir = worktree || directory;
   const opencodeDirPath = path.join(baseDir, ".opencode");
   const lockPath = path.join(opencodeDirPath, "matrix.lock");
-  
+
   if (!existsSync(opencodeDirPath)) {
     await mkdir(opencodeDirPath, { recursive: true });
   }
-  
-  const dedupe = new DedupeCache(DEDUPE_TTL_MS, DEDUPE_CLEANUP_MS);
 
   const log = (level: "debug" | "info" | "warn" | "error", message: string, extra?: any) => {
     client.app.log({
       body: {
-        service: "matrix-context-injector",
+        service: "matrix-bridge-plugin",
         level,
         message,
         extra,
@@ -235,12 +154,23 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     }).catch(() => undefined);
   };
 
-  let syncClient: MatrixSyncClient | null = null;
   let bridgeRegistrationId: string | null = null;
   let heartbeatInterval: NodeJS.Timeout | null = null;
+  let ws: WebSocket | null = null;
+  let wsReconnectAttempts = 0;
+  let wsReconnectTimeout: NodeJS.Timeout | null = null;
+  let shuttingDown = false;
 
   const shutdown = () => {
-    dedupe.stop();
+    shuttingDown = true;
+    if (wsReconnectTimeout) {
+      clearTimeout(wsReconnectTimeout);
+      wsReconnectTimeout = null;
+    }
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
     if (heartbeatInterval) {
       clearInterval(heartbeatInterval);
       heartbeatInterval = null;
@@ -249,10 +179,101 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       unregisterFromBridge(bridgeRegistrationId).catch(() => undefined);
       bridgeRegistrationId = null;
     }
-    if (syncClient) {
-      syncClient.stop().catch(() => undefined);
-    }
     releaseLock(lockPath).catch(() => undefined);
+  };
+
+  const connectWebSocket = (wsUrl: string, registrationId: string) => {
+    if (shuttingDown) return;
+
+    ws = new WebSocket(wsUrl);
+
+    ws.on("open", () => {
+      wsReconnectAttempts = 0;
+      log("info", "WebSocket connected to bridge", { wsUrl });
+      
+      ws?.send(JSON.stringify({ type: "auth", registrationId }));
+    });
+
+    ws.on("message", async (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+
+        if (message.type === "auth_success") {
+          log("info", "WebSocket authenticated", { registrationId: message.registrationId });
+          return;
+        }
+
+        if (message.type === "auth_error") {
+          log("error", "WebSocket auth failed", { error: message.error });
+          return;
+        }
+
+        if (message.type === "matrix_message") {
+          const matrixMsg = message as MatrixMessage;
+          
+          const sessionId = await getActiveSessionId(client, baseDir);
+          if (!sessionId) {
+            log("warn", "No active session for Matrix message", {
+              sender: matrixMsg.sender,
+              roomId: matrixMsg.roomId,
+            });
+            return;
+          }
+
+          const injection = `[Matrix from ${matrixMsg.sender} in ${matrixMsg.roomId}]\n${matrixMsg.body}`;
+
+          try {
+            await client.session.prompt({
+              path: { id: sessionId },
+              body: {
+                parts: [{ type: "text", text: injection }],
+              },
+            });
+            log("info", "Injected Matrix message", {
+              sender: matrixMsg.sender,
+              eventId: matrixMsg.eventId,
+              sessionId,
+            });
+          } catch (err: any) {
+            log("error", "Failed to inject Matrix message", {
+              error: err?.message || err,
+              sender: matrixMsg.sender,
+              eventId: matrixMsg.eventId,
+            });
+          }
+        }
+      } catch (error) {
+        log("error", "Failed to process WebSocket message", { error });
+      }
+    });
+
+    ws.on("close", () => {
+      if (shuttingDown) return;
+      
+      log("warn", "WebSocket disconnected, reconnecting...");
+      scheduleReconnect(wsUrl, registrationId);
+    });
+
+    ws.on("error", (error) => {
+      log("error", "WebSocket error", { error: error.message });
+    });
+  };
+
+  const scheduleReconnect = (wsUrl: string, registrationId: string) => {
+    if (shuttingDown || wsReconnectTimeout) return;
+
+    wsReconnectAttempts++;
+    const delay = Math.min(
+      WS_RECONNECT_BASE_MS * Math.pow(2, wsReconnectAttempts - 1),
+      WS_RECONNECT_MAX_MS
+    );
+
+    log("info", `Reconnecting in ${delay}ms (attempt ${wsReconnectAttempts})`);
+
+    wsReconnectTimeout = setTimeout(() => {
+      wsReconnectTimeout = null;
+      connectWebSocket(wsUrl, registrationId);
+    }, delay);
   };
 
   process.on("exit", shutdown);
@@ -265,116 +286,46 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     process.exit(0);
   });
 
-  // Initialize in background - don't block plugin loading
   setTimeout(async () => {
     try {
       await acquireLock(lockPath);
     } catch (error: any) {
       log("error", error.message);
-      client.tui.showToast({
-        body: { message: error.message, variant: "error" },
-      }).catch(() => undefined);
       return;
     }
 
     try {
-      const config = await loadMatrixConfig(baseDir);
-      const credentials = await resolveMatrixCredentials({
-        directory,
-        worktree: baseDir,
-        homeserver: config.homeserver,
-        userIdOverride: config.userId,
-      });
-
-      syncClient = new MatrixSyncClient({
-        homeserver: config.homeserver,
-        accessToken: credentials.accessToken,
-        userId: credentials.userId,
-        subscribeRooms: config.subscribeRooms,
-        msgtypes: config.filters.msgtypes,
-      });
-
-      syncClient.on("message", async (message: MatrixMessage) => {
-        if (dedupe.has(message.eventId)) return;
-        dedupe.add(message.eventId);
-
-        const roomLabel = config.roomLabels[message.roomId];
-        const label = roomLabel || message.roomId;
-
-        if (!message.isDirect && !messageMentionsIdentity(message.body, credentials.userId)) {
-          return;
-        }
-
-        const injection = formatInjection(message, label);
-        const sessionId = await getActiveSessionId(client, baseDir);
-
-        if (!sessionId) {
-          log("warn", "No active session available for Matrix injection", {
-            roomId: message.roomId,
-            sender: message.sender,
-          });
-          client.tui.showToast({
-            body: { message: "Matrix: no active session", variant: "warning" },
-          }).catch(() => undefined);
-          return;
-        }
-
-        try {
-          await client.session.prompt({
-            path: { id: sessionId },
-            body: {
-              noReply: config.noReply,
-              parts: [{ type: "text", text: injection }],
-            },
-          });
-          log("info", "Injected Matrix message", {
-            roomId: message.roomId,
-            eventId: message.eventId,
-            sessionId,
-          });
-        } catch (err: any) {
-          log("error", "Failed to inject Matrix message", {
-            error: err?.message || err,
-            roomId: message.roomId,
-            eventId: message.eventId,
-          });
-          client.tui.showToast({
-            body: { message: `Matrix inject failed: ${err?.message || err}`, variant: "error" },
-          }).catch(() => undefined);
-        }
-      });
-
-      await syncClient.start();
-      await syncClient.joinRooms();
-
       const sessionId = `opencode-${process.pid}-${Date.now()}`;
-      bridgeRegistrationId = await registerWithBridge(baseDir, config.subscribeRooms, sessionId);
-      if (bridgeRegistrationId) {
+      const result = await registerWithBridge(baseDir, sessionId);
+
+      if (result) {
+        bridgeRegistrationId = result.id;
+
         heartbeatInterval = setInterval(() => {
           if (bridgeRegistrationId) {
             sendHeartbeat(bridgeRegistrationId).catch(() => undefined);
           }
         }, HEARTBEAT_INTERVAL_MS);
-        log("info", "Registered with opencode-bridge", { registrationId: bridgeRegistrationId });
-      }
 
-      log("info", "Matrix context injector started", {
-        userId: credentials.userId,
-        rooms: config.subscribeRooms,
-        configPath: config.configPath,
-        credentialsOrigin: credentials.origin,
-        bridgeRegistrationId,
-      });
+        connectWebSocket(result.wsUrl, result.id);
+
+        log("info", "Registered with opencode-bridge", {
+          registrationId: bridgeRegistrationId,
+          directory: baseDir,
+          wsUrl: result.wsUrl,
+        });
+      } else {
+        log("warn", "Failed to register with opencode-bridge", { directory: baseDir });
+      }
     } catch (error: any) {
-      log("error", "Matrix context injector failed to start", {
+      log("error", "Matrix bridge plugin failed to start", {
         error: error?.message || error,
       });
-      client.tui.showToast({
-        body: { message: `Matrix injector error: ${error?.message || error}`, variant: "error" },
-      }).catch(() => undefined);
       shutdown();
     }
   }, 2000);
 
   return {};
 };
+
+export default MatrixContextInjector;
