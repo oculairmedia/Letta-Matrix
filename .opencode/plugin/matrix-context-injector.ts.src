@@ -421,6 +421,12 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
           if (sentMessages.has(messageID)) continue;
           
           const fullContent = Array.from(parts.values()).join("\n");
+          
+          if (fullContent.includes("[Matrix from ")) {
+            console.log(`[Matrix-Plugin] Skipping - originated from Matrix`);
+            continue;
+          }
+          
           if (fullContent.trim() && fullContent.length > 20) {
             console.log(`[Matrix-Plugin] Sending: ${fullContent.substring(0, 50)}...`);
             sendOutboundMessage("assistant", fullContent, messageID);
