@@ -184,6 +184,10 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
 
   const roomRegistration = roomToRegistration.get(roomId);
   if (roomRegistration) {
+    const roomOwnerIdentities = deriveMatrixIdentities(roomRegistration.directory);
+    if (roomOwnerIdentities.includes(senderMxid)) {
+      return;
+    }
     console.log(`[Bridge] Message in OpenCode room ${roomId} from ${senderName}`);
     forwardToOpenCode(roomRegistration, roomId, senderName, senderMxid, body, eventId);
     return;
