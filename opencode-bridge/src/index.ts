@@ -94,6 +94,34 @@ function getRoomForDirectory(directory: string): string | undefined {
   return undefined;
 }
 
+function getMappingForDirectory(directory: string): OpenCodeRoomMapping | undefined {
+  for (const mapping of Object.values(openCodeRoomMappings)) {
+    if (mapping.directory === directory) {
+      return mapping;
+    }
+  }
+  return undefined;
+}
+
+// Track message IDs we've sent to Matrix to prevent echo loops
+const sentOutboundMessageIds = new Set<string>();
+const OUTBOUND_CACHE_TTL_MS = 60000; // 1 minute
+
+function trackOutboundMessage(messageId: string): void {
+  sentOutboundMessageIds.add(messageId);
+  setTimeout(() => sentOutboundMessageIds.delete(messageId), OUTBOUND_CACHE_TTL_MS);
+  
+  // Cleanup if too many
+  if (sentOutboundMessageIds.size > 1000) {
+    const toDelete = Array.from(sentOutboundMessageIds).slice(0, 500);
+    toDelete.forEach(id => sentOutboundMessageIds.delete(id));
+  }
+}
+
+function wasMessageSentByUs(messageId: string): boolean {
+  return sentOutboundMessageIds.has(messageId);
+}
+
 const config = {
   matrix: {
     homeserverUrl: process.env.MATRIX_HOMESERVER_URL || "https://matrix.oculair.ca",
@@ -180,29 +208,36 @@ function cleanupStaleRegistrations(): void {
   }
 }
 
+const USER_DISPLAY_NAME = process.env.OPENCODE_USER_NAME || "Emmanuel";
+
 async function handleOutboundMessage(
   registration: OpenCodeRegistration,
   outbound: WsOutboundMessage
 ): Promise<void> {
-  let roomId = registration.rooms[0];
-  
-  if (!roomId) {
-    roomId = getRoomForDirectory(registration.directory) || "";
-  }
+  const mapping = getMappingForDirectory(registration.directory);
+  let roomId = registration.rooms[0] || mapping?.room_id || "";
   
   if (!roomId) {
     console.log(`[Bridge] No room for outbound message from ${registration.directory}`);
     return;
   }
   
+  trackOutboundMessage(outbound.messageId);
+  
   if (!matrixClient) {
     console.error("[Bridge] Matrix client not initialized");
     return;
   }
   
+  let messageContent = outbound.content;
+  
+  if (outbound.role === "user") {
+    messageContent = `**${USER_DISPLAY_NAME}:** ${outbound.content}`;
+  }
+  
   try {
-    await matrixClient.sendTextMessage(roomId, outbound.content);
-    console.log(`[Bridge] Sent outbound message to ${roomId} (${outbound.content.substring(0, 50)}...)`);
+    await matrixClient.sendTextMessage(roomId, messageContent);
+    console.log(`[Bridge] Sent ${outbound.role} message to ${roomId} (${messageContent.substring(0, 50)}...)`);
   } catch (error) {
     console.error(`[Bridge] Failed to send outbound message to ${roomId}:`, error);
   }
@@ -241,6 +276,13 @@ function forwardToOpenCode(
   }
 }
 
+function isOpenCodeIdentity(mxid: string): boolean {
+  return mxid.includes(":matrix.oculair.ca") && (
+    mxid.startsWith("@oc_") || 
+    mxid.startsWith("@opencode_")
+  );
+}
+
 async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Promise<void> {
   if (event.getSender() === matrixClient?.getUserId()) return;
   if (event.getType() !== "m.room.message") return;
@@ -251,10 +293,15 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
   const roomId = room.roomId;
   const senderMxid = event.getSender() || "unknown";
   const body = content.body || "";
+  const eventId = event.getId() || "";
+
+  if (isOpenCodeIdentity(senderMxid)) {
+    console.log(`[Bridge] Skipping message from OpenCode identity: ${senderMxid}`);
+    return;
+  }
 
   const senderMember = room.getMember?.(senderMxid);
   const senderName = senderMember?.name || getAgentForRoom(roomId)?.agent_name || senderMxid;
-  const eventId = event.getId() || "";
 
   const roomRegistration = roomToRegistration.get(roomId);
   if (roomRegistration) {

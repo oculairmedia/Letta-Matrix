@@ -274,6 +274,11 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
           const matrixMsg = message as MatrixMessage;
           console.log(`[Matrix-Plugin] Received message from ${matrixMsg.sender} in ${matrixMsg.roomId}`);
           
+          if (matrixMsg.body.startsWith("**User:**") || matrixMsg.body.startsWith("**Emmanuel:**")) {
+            console.log(`[Matrix-Plugin] Skipping - echoed user message`);
+            return;
+          }
+          
           const sessionId = await getActiveSessionId(client, baseDir);
           console.log(`[Matrix-Plugin] Session lookup for ${baseDir}: ${sessionId || 'NOT FOUND'}`);
           
@@ -394,10 +399,53 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
 
   const messagePartsMap = new Map<string, Map<string, string>>();
   const sentMessages = new Set<string>();
+  const sentUserMessages = new Set<string>(); // Track user messages sent to Matrix
   
   console.log("[Matrix-Plugin] ========== RETURNING HOOKS ==========");
   
   return {
+    // Capture user messages and forward to Matrix
+    "chat.message": async (input: any, output: any) => {
+      const userMsg = input?.message;
+      if (!userMsg) return;
+      
+      let content: string | null = null;
+      if (typeof userMsg === 'string') {
+        content = userMsg;
+      } else if (userMsg.content && typeof userMsg.content === 'string') {
+        content = userMsg.content;
+      } else if (userMsg.parts && Array.isArray(userMsg.parts)) {
+        content = userMsg.parts
+          .filter((p: any) => p.type === 'text' && p.text)
+          .map((p: any) => p.text)
+          .join('\n');
+      }
+      
+      if (!content || !content.trim()) return;
+      
+      // Skip messages that originated from Matrix (injected by us)
+      if (content.includes("[Matrix from ")) {
+        console.log("[Matrix-Plugin] Skipping user message - originated from Matrix");
+        return;
+      }
+      
+      // Generate a unique ID for this message to prevent echo loops
+      const messageId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      
+      console.log(`[Matrix-Plugin] Sending user message: ${content.substring(0, 50)}...`);
+      sendOutboundMessage("user", content, messageId);
+      
+      // Track this message content hash to prevent re-injection if it comes back
+      const contentHash = content.trim().substring(0, 100);
+      sentUserMessages.add(contentHash);
+      
+      // Cleanup old hashes
+      if (sentUserMessages.size > 50) {
+        const oldest = Array.from(sentUserMessages).slice(0, 25);
+        oldest.forEach(h => sentUserMessages.delete(h));
+      }
+    },
+    
     event: async ({ event }: { event: any }) => {
       if (event.type === "message.part.updated") {
         const part = event.properties?.part;
