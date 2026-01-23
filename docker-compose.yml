@@ -192,9 +192,11 @@ services:
       - USE_IDENTITY_API=true
       - MATRIX_API_URL=http://matrix-api:8000
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-matrix-identity-internal-key}
-      - OPENCODE_BRIDGE_URL=${OPENCODE_BRIDGE_URL:-http://127.0.0.1:3201}
+      - OPENCODE_BRIDGE_URL=${OPENCODE_BRIDGE_URL:-http://host.docker.internal:3201}
     volumes:
       - ./mcp-servers/matrix-identity-bridge/data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - matrix-internal
     depends_on:
