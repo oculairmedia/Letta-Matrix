@@ -192,6 +192,7 @@ services:
       - RESPONSE_POLL_INTERVAL=${RESPONSE_POLL_INTERVAL:-2}
       # Python Identity API Integration
       - USE_IDENTITY_API=true
+      - USE_DM_ROOM_API=true
       - MATRIX_API_URL=http://matrix-api:8000
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-matrix-identity-internal-key}
       - OPENCODE_BRIDGE_URL=${OPENCODE_BRIDGE_URL:-http://host.docker.internal:3201}

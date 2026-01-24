@@ -328,17 +328,70 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         }
         
         console.log(`[MatrixMessaging] Sending content:`, JSON.stringify(content));
-        // Use doRequest directly to bypass SDK membership checks (avoids sync race conditions)
-        const txnId = `m${Date.now()}`;
-        const sendResult = await client.doRequest(
-          'PUT',
-          `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
-          {},
-          content
-        ) as { event_id: string };
-        const eventId = sendResult.event_id;
-        console.log(`[MatrixMessaging] Sent event: ${eventId}`);
         
+        const doSend = async (): Promise<{ event_id: string }> => {
+          const txnId = `m${Date.now()}`;
+          return await client.doRequest(
+            'PUT',
+            `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
+            {},
+            content
+          ) as { event_id: string };
+        };
+        
+        let eventId: string;
+        try {
+          const sendResult = await doSend();
+          eventId = sendResult.event_id;
+        } catch (sendError: unknown) {
+          const errStr = sendError instanceof Error ? sendError.message : String(sendError);
+          const isForbidden = errStr.includes('M_FORBIDDEN') || errStr.includes('not in room') || errStr.includes('membership');
+          
+          if (!isForbidden) {
+            throw sendError;
+          }
+          
+          console.log(`[MatrixMessaging] Send failed with membership error, attempting auto-join to ${roomId}`);
+          
+          try {
+            await client.joinRoom(roomId);
+            console.log(`[MatrixMessaging] Successfully joined ${roomId}`);
+          } catch (joinError: unknown) {
+            console.log(`[MatrixMessaging] Direct join failed, trying admin invite fallback`);
+            const { homeserverUrl } = getAdminConfig();
+            const token = await getAdminToken();
+            
+            try {
+              await fetch(
+                `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`,
+                {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ user_id: identity.mxid })
+                }
+              );
+              await client.joinRoom(roomId);
+              console.log(`[MatrixMessaging] Successfully joined ${roomId} via admin invite`);
+            } catch (inviteError: unknown) {
+              const inviteErrMsg = inviteError instanceof Error ? inviteError.message : String(inviteError);
+              throw new Error(
+                `Cannot send to room ${roomId}: not a member and auto-join failed.\n` +
+                `Original error: ${errStr}\n` +
+                `Join error: ${inviteErrMsg}\n` +
+                `Tip: Use room_join first, or ensure you have permission to join this room.`
+              );
+            }
+          }
+          
+          console.log(`[MatrixMessaging] Retrying send after join`);
+          const retryResult = await doSend();
+          eventId = retryResult.event_id;
+        }
+        
+        console.log(`[MatrixMessaging] Sent event: ${eventId}`);
         return result({ event_id: eventId, room_id: roomId, from: identity.mxid, identity_id: identity.id });
       }
 
@@ -1062,9 +1115,23 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
       case 'opencode_connect': {
         const directory = requireParam(input.directory, 'directory');
         const session = await ctx.openCodeService.connect(directory, input.display_name, input.session_id);
+        
+        const identity = await ctx.storage.getIdentityAsync(session.identityId);
+        if (!identity) {
+          throw new Error(`Identity not found after connect: ${session.identityId}`);
+        }
+        
+        const ownerMxid = process.env.OPENCODE_OWNER_MXID || '@oculair:matrix.oculair.ca';
+        const ownerIdentity = await ctx.storage.getIdentityByMXIDAsync(ownerMxid);
+        const callerIdentity = ownerIdentity || identity;
+        
+        const roomId = await getOrCreateOpenCodeRoom(directory, identity, callerIdentity, ctx);
+        await updateBridgeRegistration(directory, roomId);
+        
         return result({
           directory: session.directory, identity_id: session.identityId, mxid: session.mxid,
-          display_name: session.displayName, connected_at: session.connectedAt
+          display_name: session.displayName, connected_at: session.connectedAt,
+          room_id: roomId
         });
       }
 

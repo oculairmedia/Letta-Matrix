@@ -96,16 +96,18 @@ async function releaseLock(lockPath: string): Promise<void> {
 
 async function registerWithBridge(
   directory: string,
-  sessionId: string
+  sessionId: string,
+  roomId?: string | null
 ): Promise<{ id: string; wsUrl: string } | null> {
   try {
+    const rooms = roomId ? [roomId] : [];
     const response = await fetch(`${BRIDGE_URL}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId,
         directory,
-        rooms: [],
+        rooms,
       }),
     });
     if (!response.ok) return null;
@@ -138,6 +140,52 @@ async function unregisterFromBridge(registrationId: string): Promise<void> {
       body: JSON.stringify({ id: registrationId }),
     });
   } catch {
+  }
+}
+
+async function ensureMatrixRoom(directory: string): Promise<string | null> {
+  const MCP_URL = process.env.MATRIX_MCP_URL || "http://127.0.0.1:3103";
+  try {
+    const response = await fetch(`${MCP_URL}/mcp`, {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+          name: "matrix_messaging",
+          arguments: {
+            operation: "opencode_connect",
+            directory,
+            caller_directory: directory,
+          }
+        },
+        id: Date.now()
+      }),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { 
+      result?: { content?: Array<{ text?: string }> };
+      error?: { message?: string };
+    };
+    if (data.error) {
+      console.error(`[MatrixPlugin] ensureMatrixRoom error: ${data.error.message}`);
+      return null;
+    }
+    const text = data.result?.content?.[0]?.text;
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text) as { room_id?: string };
+      return parsed.room_id || null;
+    } catch {
+      return null;
+    }
+  } catch (err) {
+    console.error(`[MatrixPlugin] ensureMatrixRoom failed:`, err);
+    return null;
   }
 }
 
@@ -313,7 +361,13 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
 
     try {
       const sessionId = `opencode-${process.pid}-${Date.now()}`;
-      const result = await registerWithBridge(baseDir, sessionId);
+      
+      const roomId = await ensureMatrixRoom(baseDir);
+      if (roomId) {
+        console.log(`[MatrixPlugin] Room ensured: ${roomId}`);
+      }
+      
+      const result = await registerWithBridge(baseDir, sessionId, roomId);
 
       if (result) {
         bridgeRegistrationId = result.id;

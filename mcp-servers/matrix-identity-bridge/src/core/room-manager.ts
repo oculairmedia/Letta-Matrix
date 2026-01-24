@@ -34,14 +34,12 @@ export class RoomManager {
     fromMxid: string,
     toMxid: string
   ): Promise<string> {
-    // Check if DM room already exists
-    const existing = this.storage.getDMRoom(fromMxid, toMxid);
+    const existing = await this.storage.getDMRoomAsync(fromMxid, toMxid);
     if (existing) {
       console.log('[RoomManager] Using existing DM room:', existing.roomId);
       return existing.roomId;
     }
 
-    // Create new DM room
     console.log('[RoomManager] Creating new DM room:', fromMxid, '<->', toMxid);
     return await this.createDMRoom(fromMxid, toMxid);
   }
@@ -166,9 +164,11 @@ export class RoomManager {
     ]);
 
     const identity = await this.storage.getIdentityAsync(identityId);
-    const isDirect = identity
-      ? this.storage.getDMRoomsForUser(identity.mxid).some(dm => dm.roomId === roomId)
-      : false;
+    let isDirect = false;
+    if (identity) {
+      const dmRooms = await this.storage.getDMRoomsForUserAsync(identity.mxid);
+      isDirect = dmRooms.some(dm => dm.roomId === roomId);
+    }
 
     return {
       roomId,

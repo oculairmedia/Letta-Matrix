@@ -14,6 +14,7 @@ import type {
   StorageMetadata
 } from '../types/index.js';
 import { IdentityApiClient } from './identity-api-client.js';
+import { DMRoomApiClient } from './dm-room-api-client.js';
 
 export class Storage {
   private dataDir: string;
@@ -30,7 +31,9 @@ export class Storage {
   
   private initialized = false;
   private useIdentityApi: boolean;
+  private useDMRoomApi: boolean;
   private identityApiClient: IdentityApiClient | null = null;
+  private dmRoomApiClient: DMRoomApiClient | null = null;
 
   constructor(dataDir: string = './data') {
     this.dataDir = dataDir;
@@ -38,10 +41,15 @@ export class Storage {
     this.dmRoomsFile = path.join(dataDir, 'dm_rooms.json');
     this.metadataFile = path.join(dataDir, 'metadata.json');
     this.useIdentityApi = process.env.USE_IDENTITY_API === 'true';
+    this.useDMRoomApi = process.env.USE_DM_ROOM_API === 'true';
     
     if (this.useIdentityApi) {
       this.identityApiClient = new IdentityApiClient();
       console.log('[Storage] Using Python Identity API for identity operations');
+    }
+    if (this.useDMRoomApi) {
+      this.dmRoomApiClient = new DMRoomApiClient();
+      console.log('[Storage] Using Python DM Room API for DM room operations');
     }
   }
 
@@ -232,43 +240,73 @@ export class Storage {
     return [mxid1, mxid2].sort().join('<->');
   }
 
-  /**
-   * Get DM room for two users
-   */
   getDMRoom(mxid1: string, mxid2: string): DMRoomMapping | undefined {
+    if (this.useDMRoomApi && this.dmRoomApiClient) {
+      console.warn('[Storage] Sync getDMRoom called with API mode - use getDMRoomAsync');
+      return undefined;
+    }
     const key = this.createDMKey(mxid1, mxid2);
     return this.dmRooms.get(key);
   }
 
-  /**
-   * Get all DM rooms
-   */
+  async getDMRoomAsync(mxid1: string, mxid2: string): Promise<DMRoomMapping | undefined> {
+    if (this.useDMRoomApi && this.dmRoomApiClient) {
+      return await this.dmRoomApiClient.getDMRoom(mxid1, mxid2);
+    }
+    const key = this.createDMKey(mxid1, mxid2);
+    return this.dmRooms.get(key);
+  }
+
   getAllDMRooms(): DMRoomMapping[] {
+    if (this.useDMRoomApi && this.dmRoomApiClient) {
+      console.warn('[Storage] Sync getAllDMRooms called with API mode - use getAllDMRoomsAsync');
+      return [];
+    }
     return Array.from(this.dmRooms.values());
   }
 
-  /**
-   * Get DM rooms for a specific user
-   */
+  async getAllDMRoomsAsync(): Promise<DMRoomMapping[]> {
+    if (this.useDMRoomApi && this.dmRoomApiClient) {
+      return await this.dmRoomApiClient.getAllDMRooms();
+    }
+    return Array.from(this.dmRooms.values());
+  }
+
   getDMRoomsForUser(mxid: string): DMRoomMapping[] {
+    if (this.useDMRoomApi && this.dmRoomApiClient) {
+      console.warn('[Storage] Sync getDMRoomsForUser called with API mode - use getDMRoomsForUserAsync');
+      return [];
+    }
     return this.getAllDMRooms().filter(dm => 
       dm.participants.includes(mxid)
     );
   }
 
-  /**
-   * Save or update DM room mapping
-   */
+  async getDMRoomsForUserAsync(mxid: string): Promise<DMRoomMapping[]> {
+    if (this.useDMRoomApi && this.dmRoomApiClient) {
+      return await this.dmRoomApiClient.getDMRoomsForUser(mxid);
+    }
+    return this.getAllDMRooms().filter(dm => 
+      dm.participants.includes(mxid)
+    );
+  }
+
   async saveDMRoom(mapping: DMRoomMapping): Promise<void> {
+    if (this.useDMRoomApi && this.dmRoomApiClient) {
+      await this.dmRoomApiClient.saveDMRoom(mapping);
+      console.log('[Storage] Saved DM room via API:', mapping.key, '->', mapping.roomId);
+      return;
+    }
     this.dmRooms.set(mapping.key, mapping);
     await this.saveDMRooms();
     console.log('[Storage] Saved DM room:', mapping.key, '->', mapping.roomId);
   }
 
-  /**
-   * Delete DM room mapping
-   */
   async deleteDMRoom(mxid1: string, mxid2: string): Promise<boolean> {
+    if (this.useDMRoomApi && this.dmRoomApiClient) {
+      console.log('[Storage] Delete DM room via API not implemented');
+      return false;
+    }
     const key = this.createDMKey(mxid1, mxid2);
     const deleted = this.dmRooms.delete(key);
     if (deleted) {
@@ -278,10 +316,11 @@ export class Storage {
     return deleted;
   }
 
-  /**
-   * Update last activity timestamp for a DM room
-   */
   async updateDMActivity(mxid1: string, mxid2: string): Promise<void> {
+    if (this.useDMRoomApi && this.dmRoomApiClient) {
+      await this.dmRoomApiClient.updateActivity(mxid1, mxid2);
+      return;
+    }
     const key = this.createDMKey(mxid1, mxid2);
     const mapping = this.dmRooms.get(key);
     if (mapping) {
