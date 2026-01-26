@@ -77,3 +77,58 @@ When working on this project, you should:
 
 <!-- END-HULY-PROJECT-INFO -->
 
+## OOM Recovery Runbook
+
+If the host runs out of memory, Tuwunel's RocksDB can get corrupted, causing authentication failures for critical users (`admin`, `letta`, `oc_letta_v2`, etc.).
+
+### Symptoms
+- Matrix client bootlooping with `M_FORBIDDEN: Wrong username or password`
+- Messages not being forwarded to Letta
+- OpenCode identity routing failures
+
+### Detection
+
+Run the health check script:
+```bash
+./scripts/health-check-auth.sh
+```
+
+### Recovery Steps
+
+1. **Stop Tuwunel**:
+   ```bash
+   docker compose stop tuwunel
+   ```
+
+2. **Reset failed user passwords** (run for each failed user):
+   ```bash
+   timeout 60 docker run --rm --entrypoint "" \
+     -e TUWUNEL_SERVER_NAME=matrix.oculair.ca \
+     -v ./tuwunel-data:/var/lib/tuwunel \
+     ghcr.io/oculairmedia/tuwunel-docker2010:latest \
+     /usr/local/bin/tuwunel -c /var/lib/tuwunel/tuwunel.toml \
+     -O 'server_name="matrix.oculair.ca"' \
+     --execute "users reset-password <username> <password>"
+   ```
+
+   Common users to reset:
+   - `admin` / `$MATRIX_ADMIN_PASSWORD`
+   - `letta` / `letta`
+   - `oc_letta_v2` / `oc_letta_v2`
+   - `oc_matrix_synapse_deployment_v2` / `oc_matrix_synapse_deployment_v2`
+
+3. **Restart services**:
+   ```bash
+   docker compose up -d
+   ```
+
+4. **Verify recovery**:
+   ```bash
+   ./scripts/health-check-auth.sh
+   ```
+
+### Prevention
+- Monitor host memory usage
+- Set resource limits on memory-hungry processes (e.g., OpenCode sessions)
+- Run health check periodically via cron
+

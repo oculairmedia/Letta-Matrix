@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "@opencode-ai/plugin": "1.1.34",
+    "@opencode-ai/plugin": "1.1.36",
     "matrix-js-sdk": "^34.13.0",
     "yaml": "^2.8.0"
   }
