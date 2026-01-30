@@ -1752,7 +1752,7 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
             logger.info(f"[OPENCODE] Injected @mention instruction for response routing")
         elif not is_inter_agent_message:
             room_display = room_display_name or room_id
-            message_to_send = f"[Matrix: {event_sender} in {room_display}]\n\n{event_body}"
+            message_to_send = f"[Matrix: {event_sender} in {room_display} | Format: markdown+html]\n\n{event_body}"
             logger.debug(f"[MATRIX-CONTEXT] Added context for sender {event_sender}")
 
         if original_event_id and room_agent_id:
@@ -2073,7 +2073,7 @@ Example: "{opencode_mxid} Here is my response..."
                 logger.info(f"[OPENCODE-FS] Detected message from OpenCode identity: {opencode_mxid}")
             else:
                 room_display = room.display_name or room.room_id
-                fs_prompt = f"[Matrix: {event.sender} in {room_display}]\n\n{event.body}"
+                fs_prompt = f"[Matrix: {event.sender} in {room_display} | Format: markdown+html]\n\n{event.body}"
                 logger.debug(f"[MATRIX-FS] Added context for sender {event.sender}")
             
             event_id_str = getattr(event, 'event_id', '') or ''
