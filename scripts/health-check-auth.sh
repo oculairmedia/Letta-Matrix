@@ -94,11 +94,13 @@ else
     done
     echo "  docker compose up -d"
     
-    # Alert if requested
-    if [[ "$ALERT_MODE" == "--alert" ]]; then
-        echo ""
-        echo "Sending alert..."
-        # Could integrate with alerting system here (e.g., webhook, email)
+    # Send push notification via ntfy
+    if [[ -x "$SCRIPT_DIR/alert.sh" ]]; then
+        "$SCRIPT_DIR/alert.sh" \
+            "Health check FAILED for ${#FAILED_USERS[@]} users: ${FAILED_USERS[*]}. Possible RocksDB corruption. See OOM Recovery Runbook." \
+            --priority urgent \
+            --tags "rotating_light,skull" \
+            --title "Matrix Auth FAILED"
     fi
     
     exit 1

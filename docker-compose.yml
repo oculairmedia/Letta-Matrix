@@ -233,6 +233,32 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
+    command: serve
+    ports:
+      - "2586:80"
+    volumes:
+      - ./ntfy-data/cache:/var/cache/ntfy
+      - ./ntfy-data/etc:/etc/ntfy
+    networks:
+      - matrix-internal
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - homepage.group=Monitoring
+      - homepage.name=ntfy
+      - homepage.icon=si-ntfy
+      - homepage.href=http://192.168.50.90:2586
+      - homepage.description=Push notification service for alerts
+
 networks:
   matrix-internal:
     driver: bridge

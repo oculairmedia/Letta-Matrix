@@ -46,6 +46,14 @@ def _on_letta_task_done(key: Tuple[str, str], task: asyncio.Task) -> None:
             f"[BG-TASK] Background Letta task failed for {key}: {exc}",
             exc_info=exc
         )
+        try:
+            from src.matrix.alerting import alert_letta_error
+            room_id, agent_id = key
+            asyncio.get_event_loop().create_task(
+                alert_letta_error(agent_id, room_id, str(exc))
+            )
+        except Exception:
+            pass
 
 async def cancel_all_letta_tasks() -> None:
     if not _active_letta_tasks:
@@ -1493,6 +1501,14 @@ async def send_as_agent_with_event_id(
                 if response.status != 200:
                     error_text = await response.text()
                     logger.error(f"Failed to login as agent {agent_username}: {response.status} - {error_text}")
+                    if "M_FORBIDDEN" in error_text or response.status == 403:
+                        try:
+                            from src.matrix.alerting import alert_auth_failure
+                            asyncio.get_event_loop().create_task(
+                                alert_auth_failure(agent_username, room_id)
+                            )
+                        except Exception:
+                            pass
                     return None
                 
                 auth_data = await response.json()
@@ -1502,7 +1518,6 @@ async def send_as_agent_with_event_id(
                     logger.error(f"No token received for agent {agent_username}")
                     return None
             
-            # Send message as the agent
             txn_id = str(uuid.uuid4())
             message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
             headers = {
@@ -1892,6 +1907,14 @@ Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response...
             "status_code": e.status_code,
             "sender": event_sender
         })
+        try:
+            from src.matrix.alerting import alert_streaming_timeout, alert_letta_error
+            if "timeout" in str(e).lower() or "Timeout" in str(e):
+                await alert_streaming_timeout(room_agent_id or "unknown", room_id, "streaming", config.letta_streaming_timeout)
+            else:
+                await alert_letta_error(room_agent_id or "unknown", room_id, str(e))
+        except Exception:
+            pass
         error_message = f"Sorry, I encountered an error while processing your message: {str(e)[:100]}"
         try:
             sent_as_agent = await send_as_agent(
