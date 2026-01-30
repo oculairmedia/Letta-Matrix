@@ -281,6 +281,7 @@ class Config:
     letta_streaming_enabled: bool = False  # Feature flag for step streaming
     letta_streaming_timeout: float = 120.0  # Streaming timeout in seconds
     letta_streaming_idle_timeout: float = 120.0  # Kill stream if no real data (only pings) for this long
+    letta_streaming_live_edit: bool = False  # Edit single message in-place instead of sending separate messages
     # Conversations API configuration (context isolation per room)
     letta_conversations_enabled: bool = False  # Feature flag for Conversations API
     
@@ -308,6 +309,7 @@ class Config:
                 letta_streaming_enabled=os.getenv("LETTA_STREAMING_ENABLED", "false").lower() == "true",
                 letta_streaming_timeout=float(os.getenv("LETTA_STREAMING_TIMEOUT", "120.0")),
                 letta_streaming_idle_timeout=float(os.getenv("LETTA_STREAMING_IDLE_TIMEOUT", "120.0")),
+                letta_streaming_live_edit=os.getenv("LETTA_STREAMING_LIVE_EDIT", "false").lower() == "true",
                 letta_code_api_url=os.getenv("LETTA_CODE_API_URL", "http://192.168.50.90:3099"),
                 letta_code_enabled=os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true",
                 letta_conversations_enabled=os.getenv("LETTA_CONVERSATIONS_ENABLED", "false").lower() == "true",
@@ -863,16 +865,28 @@ async def send_to_letta_api_streaming(
         return event_id or ""
     
     async def delete_message(rid: str, event_id: str) -> None:
-        """Delete a message"""
         await delete_message_as_agent(rid, event_id, config, logger)
-    
-    handler = StreamingMessageHandler(
-        send_message=send_message,
-        delete_message=delete_message,
-        room_id=room_id,
-        delete_progress=False,  # Keep progress messages visible
-        send_final_message=send_final_message  # Use separate handler for final with reply
-    )
+
+    async def edit_message(rid: str, event_id: str, new_body: str) -> None:
+        await edit_message_as_agent(rid, event_id, new_body, config, logger)
+
+    if config.letta_streaming_live_edit:
+        from src.matrix.streaming import LiveEditStreamingHandler
+        logger.info("[STREAMING] Using live-edit mode (single message, edited in-place)")
+        handler = LiveEditStreamingHandler(
+            send_message=send_message,
+            edit_message=edit_message,
+            room_id=room_id,
+            send_final_message=send_final_message,
+        )
+    else:
+        handler = StreamingMessageHandler(
+            send_message=send_message,
+            delete_message=delete_message,
+            room_id=room_id,
+            delete_progress=False,
+            send_final_message=send_final_message,
+        )
     
     # Track the final response
     final_response = ""
@@ -1214,6 +1228,68 @@ async def delete_message_as_agent(room_id: str, event_id: str, config: Config, l
                     
     except Exception as e:
         logger.error(f"[DELETE_AS_AGENT] Exception occurred: {e}", exc_info=True)
+        return False
+
+
+async def edit_message_as_agent(
+    room_id: str,
+    event_id: str,
+    new_body: str,
+    config: Config,
+    logger: logging.Logger,
+) -> bool:
+    try:
+        from src.core.mapping_service import get_mapping_by_room_id
+        agent_mapping = get_mapping_by_room_id(room_id)
+
+        if not agent_mapping:
+            logger.warning(f"[EDIT_AS_AGENT] No agent mapping for room {room_id}")
+            return False
+
+        agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
+        agent_password = agent_mapping["matrix_password"]
+
+        login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
+        login_data = {"type": "m.login.password", "user": agent_username, "password": agent_password}
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(login_url, json=login_data) as response:
+                if response.status != 200:
+                    logger.error(f"[EDIT_AS_AGENT] Login failed: {response.status}")
+                    return False
+                auth_data = await response.json()
+                agent_token = auth_data.get("access_token")
+                if not agent_token:
+                    return False
+
+            txn_id = str(uuid.uuid4())
+            msg_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
+            headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
+
+            message_data = {
+                "msgtype": "m.text",
+                "body": f"* {new_body}",
+                "m.new_content": {
+                    "msgtype": "m.text",
+                    "body": new_body,
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": event_id,
+                },
+            }
+
+            async with session.put(msg_url, headers=headers, json=message_data) as response:
+                if response.status == 200:
+                    logger.debug(f"[EDIT_AS_AGENT] Edited message {event_id}")
+                    return True
+                else:
+                    resp_text = await response.text()
+                    logger.warning(f"[EDIT_AS_AGENT] Edit failed: {response.status} - {resp_text}")
+                    return False
+
+    except Exception as e:
+        logger.error(f"[EDIT_AS_AGENT] Exception: {e}", exc_info=True)
         return False
 
 

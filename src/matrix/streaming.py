@@ -547,3 +547,100 @@ class StreamingMessageHandler:
             except Exception as e:
                 logger.warning(f"Failed to cleanup progress message: {e}")
             self._progress_event_id = None
+
+
+class LiveEditStreamingHandler:
+    """
+    Streams agent activity into a single Matrix message that is edited in-place.
+
+    First meaningful event creates the message.  Subsequent events append to a
+    running log and edit the same message (debounced to avoid rate-limits).
+    The final assistant response replaces the entire message body.
+    """
+
+    EDIT_DEBOUNCE_S = 0.5
+
+    def __init__(
+        self,
+        send_message: Callable[[str, str], Any],
+        edit_message: Callable[[str, str, str], Any],
+        room_id: str,
+        send_final_message: Optional[Callable[[str, str], Any]] = None,
+    ):
+        self.send_message = send_message
+        self.edit_message = edit_message
+        self.room_id = room_id
+        self.send_final_message = send_final_message or send_message
+
+        self._event_id: Optional[str] = None
+        self._lines: List[str] = []
+        self._last_edit_time: float = 0
+
+    async def handle_event(self, event: StreamEvent) -> Optional[str]:
+        import time
+
+        if event.type == StreamEventType.PING:
+            return None
+
+        if event.type in (StreamEventType.STOP, StreamEventType.USAGE):
+            return None
+
+        if event.type == StreamEventType.REASONING:
+            return None
+
+        if event.is_final:
+            return await self._send_final(event.content or "")
+
+        if event.is_error:
+            error_text = f"⚠️ {event.content}"
+            if self._event_id:
+                self._lines.append(error_text)
+                await self._do_edit()
+                return self._event_id
+            return await self.send_message(self.room_id, error_text)
+
+        if event.is_progress or event.is_approval_request:
+            line = event.format_progress()
+            self._lines.append(line)
+
+            if self._event_id is None:
+                body = self._build_body()
+                eid = await self.send_message(self.room_id, body)
+                self._event_id = eid
+                self._last_edit_time = time.monotonic()
+                return eid
+
+            now = time.monotonic()
+            if now - self._last_edit_time >= self.EDIT_DEBOUNCE_S:
+                await self._do_edit()
+            return self._event_id
+
+        return None
+
+    async def _send_final(self, content: str) -> str:
+        if self._event_id and self._lines:
+            final_body = "\n".join(self._lines) + "\n\n" + content
+            await self.edit_message(self.room_id, self._event_id, final_body)
+            self._event_id = None
+            self._lines.clear()
+            return ""
+
+        eid = await self.send_final_message(self.room_id, content)
+        self._event_id = None
+        self._lines.clear()
+        return eid
+
+    async def _do_edit(self) -> None:
+        import time
+        if not self._event_id:
+            return
+        body = self._build_body()
+        await self.edit_message(self.room_id, self._event_id, body)
+        self._last_edit_time = time.monotonic()
+
+    def _build_body(self) -> str:
+        return "\n".join(self._lines)
+
+    async def cleanup(self) -> None:
+        if self._event_id and self._lines:
+            await self._do_edit()
