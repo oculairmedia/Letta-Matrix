@@ -283,8 +283,26 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
 
   for (const mention of mentions) {
     const registration = identityToRegistration.get(mention);
-    if (!registration) continue;
-    forwardToOpenCode(registration, roomId, senderName, senderMxid, body, eventId);
+    if (registration && forwardToOpenCode(registration, roomId, senderName, senderMxid, body, eventId)) {
+      continue;
+    }
+    console.log(`[Bridge] No active WebSocket for ${registration?.id || mention}, scanning all registrations...`);
+    let forwarded = false;
+    for (const [, reg] of registrations) {
+      if (!reg.ws || reg.ws.readyState !== WebSocket.OPEN) continue;
+      const identities = deriveMatrixIdentities(reg.directory);
+      if (identities.includes(mention)) {
+        console.log(`[Bridge] Found active WebSocket via ${reg.id} for ${mention}`);
+        if (forwardToOpenCode(reg, roomId, senderName, senderMxid, body, eventId)) {
+          identityToRegistration.set(mention, reg);
+          forwarded = true;
+          break;
+        }
+      }
+    }
+    if (!forwarded) {
+      console.log(`[Bridge] No active WebSocket for ${mention} in any registration`);
+    }
   }
 }
 

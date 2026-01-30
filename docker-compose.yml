@@ -5,6 +5,8 @@ services:
     entrypoint: ["/entrypoint.sh"]
     command: ["-c", "/var/lib/tuwunel/tuwunel.toml", "-O", "address=\"0.0.0.0\"", "-O", "port=6167"]
     stop_grace_period: 30s
+    mem_limit: 2g
+    memswap_limit: 2g
     environment:
       - TUWUNEL_SERVER_NAME=${MATRIX_SERVER_NAME:-matrix.oculair.ca}
       - TUWUNEL_DATABASE_PATH=/var/lib/tuwunel
@@ -36,6 +38,8 @@ services:
   element:
     image: vectorim/element-web:latest
     restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
     volumes:
       - ${ELEMENT_CONFIG_PATH}:/app/config.json:ro
     networks:
@@ -46,6 +50,8 @@ services:
   nginx:
     image: nginx:alpine
     restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
     ports:
       - ${NGINX_HTTP_PORT}:80
     volumes:
@@ -66,6 +72,8 @@ services:
   matrix-client:
     image: ghcr.io/oculairmedia/letta-matrix-client:latest
     restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
     env_file:
       - .env
     environment:
@@ -73,6 +81,7 @@ services:
       - DATABASE_URL=postgresql://letta:letta@192.168.50.90:5432/matrix_letta
       - CONVERSATION_TRACKER_URL=http://192.168.50.90:3101
       - MATRIX_API_URL=http://matrix-api:8000
+      - LETTA_CODE_ENABLED=false
     volumes:
       - ./matrix_store:/app/matrix_store
       - ./matrix_client_data:/app/data
@@ -104,6 +113,8 @@ services:
       dockerfile: docker/Dockerfile.matrix-api
     image: letta-matrix-api:local
     restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
     env_file:
       - .env
     environment:
@@ -131,6 +142,8 @@ services:
   opencode-bridge:
     image: ghcr.io/oculairmedia/letta-matrix-opencode-bridge:latest
     restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 512m
     ports:
       - 3201:3201
     network_mode: host
@@ -169,6 +182,8 @@ services:
     image: ghcr.io/oculairmedia/letta-matrix-identity-bridge:latest
     container_name: matrix-messaging-mcp
     restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 512m
     ports:
       - "3103:3100"
       - "3101:3101"

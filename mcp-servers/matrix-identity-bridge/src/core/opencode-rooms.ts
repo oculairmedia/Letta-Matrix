@@ -197,11 +197,21 @@ export const updateBridgeRegistration = async (
 ): Promise<void> => {
   const bridgeUrl = process.env.OPENCODE_BRIDGE_URL || 'http://127.0.0.1:3201';
   try {
-    await fetch(`${bridgeUrl}/update-rooms`, {
+    const updateRes = await fetch(`${bridgeUrl}/update-rooms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ directory, rooms: [roomId] }),
     });
+    const updateData = await updateRes.json() as { success?: boolean };
+    if (!updateData.success) {
+      const sessionId = `opencode-${Date.now()}`;
+      await fetch(`${bridgeUrl}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, directory, rooms: [roomId] }),
+      });
+      console.log(`[OpenCodeRooms] Created new bridge registration for ${directory}`);
+    }
   } catch (error) {
     console.warn('[OpenCodeRooms] Failed to update bridge registration:', error);
   }

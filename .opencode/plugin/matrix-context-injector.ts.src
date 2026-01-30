@@ -278,6 +278,22 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     releaseLock(lockPath).catch(() => undefined);
   };
 
+  const reRegisterAndReconnect = async (wsUrl: string) => {
+    if (shuttingDown) return;
+    console.log("[MatrixPlugin] Re-registering with bridge after auth failure...");
+    const roomId = await ensureMatrixRoom(baseDir).catch(() => null);
+    const newSessionId = `opencode-${process.pid}-${Date.now()}`;
+    const result = await registerWithBridge(baseDir, newSessionId, roomId);
+    if (result) {
+      bridgeRegistrationId = result.id;
+      console.log(`[MatrixPlugin] Re-registered as ${result.id}, reconnecting WebSocket...`);
+      connectWebSocket(result.wsUrl || wsUrl, result.id);
+    } else {
+      console.log("[MatrixPlugin] Re-registration failed, scheduling retry...");
+      scheduleReconnect(wsUrl, bridgeRegistrationId || "");
+    }
+  };
+
   const connectWebSocket = (wsUrl: string, registrationId: string) => {
     if (shuttingDown) return;
 
@@ -292,7 +308,14 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       try {
         const message = JSON.parse(data.toString());
 
-        if (message.type === "auth_success" || message.type === "auth_error") {
+        if (message.type === "auth_success") {
+          console.log("[MatrixPlugin] WebSocket authenticated");
+          return;
+        }
+        if (message.type === "auth_error") {
+          console.log("[MatrixPlugin] WebSocket auth failed, re-registering...");
+          ws?.close();
+          reRegisterAndReconnect(wsUrl);
           return;
         }
 
@@ -336,9 +359,10 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       WS_RECONNECT_MAX_MS
     );
 
+    console.log(`[MatrixPlugin] Scheduling reconnect in ${delay}ms (attempt ${wsReconnectAttempts})`);
     wsReconnectTimeout = setTimeout(() => {
       wsReconnectTimeout = null;
-      connectWebSocket(wsUrl, registrationId);
+      reRegisterAndReconnect(wsUrl);
     }, delay);
   };
 

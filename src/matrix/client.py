@@ -1,11 +1,12 @@
 import asyncio
+import asyncio
 import os
 import logging
 import json
 import time
 import uuid
 import aiohttp
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset, RoomMessageMedia, UnknownEvent
 from nio.responses import JoinError
@@ -30,6 +31,31 @@ MATRIX_API_URL = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
 
 # Agent Mail MCP server URL for reverse bridge
 AGENT_MAIL_URL = os.getenv("AGENT_MAIL_URL", "http://192.168.50.90:8766/mcp/")
+
+# Background Letta task tracking — keyed by (room_id, agent_id)
+# Prevents sync loop blocking when streaming calls hang
+_active_letta_tasks: Dict[Tuple[str, str], asyncio.Task] = {}
+
+def _on_letta_task_done(key: Tuple[str, str], task: asyncio.Task) -> None:
+    _active_letta_tasks.pop(key, None)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logging.getLogger("matrix_client").error(
+            f"[BG-TASK] Background Letta task failed for {key}: {exc}",
+            exc_info=exc
+        )
+
+async def cancel_all_letta_tasks() -> None:
+    if not _active_letta_tasks:
+        return
+    logger = logging.getLogger("matrix_client")
+    logger.info(f"[BG-TASK] Cancelling {len(_active_letta_tasks)} active Letta tasks...")
+    for task in _active_letta_tasks.values():
+        task.cancel()
+    await asyncio.gather(*_active_letta_tasks.values(), return_exceptions=True)
+    _active_letta_tasks.clear()
 
 async def register_conversation_for_tracking(
     matrix_event_id: str,
@@ -1557,6 +1583,280 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
     except Exception as e:
         logger.error(f"Unexpected error in file callback: {e}", exc_info=True)
 
+async def _process_letta_message(
+    event_body: str,
+    event_sender: str,
+    event_source: Optional[Dict],
+    original_event_id: Optional[str],
+    room_id: str,
+    room_display_name: str,
+    room_agent_id: Optional[str],
+    config: Config,
+    logger: logging.Logger,
+    client: Optional[AsyncClient] = None,
+) -> None:
+    try:
+        from src.core.mapping_service import get_mapping_by_matrix_user
+        
+        if client and 'auth_manager_global' in globals() and auth_manager_global is not None:
+            await auth_manager_global.ensure_valid_token(client)
+        
+        message_to_send = event_body
+        is_inter_agent_message = False
+        from_agent_id = None
+        from_agent_name = None
+        
+        is_agent_mail_message = False
+        agent_mail_metadata = None
+        
+        if event_source and isinstance(event_source, dict):
+            content = event_source.get("content", {})
+            from_agent_id = content.get("m.letta.from_agent_id")
+            from_agent_name = content.get("m.letta.from_agent_name")
+            
+            if from_agent_id and from_agent_name:
+                is_inter_agent_message = True
+                logger.info(f"Detected inter-agent message (via metadata) from {from_agent_name} ({from_agent_id})")
+            
+            agent_mail_metadata = content.get("m.agent_mail")
+            if agent_mail_metadata:
+                is_agent_mail_message = True
+                logger.info(f"[REVERSE-BRIDGE] Detected Agent Mail message from {agent_mail_metadata.get('sender_friendly_name', 'Unknown')}")
+        
+        if not is_inter_agent_message:
+            sender_agent_mapping = get_mapping_by_matrix_user(event_sender)
+            if sender_agent_mapping:
+                from_agent_id = sender_agent_mapping.get("agent_id")
+                from_agent_name = sender_agent_mapping.get("agent_name", "Unknown Agent")
+                is_inter_agent_message = True
+                logger.info(f"Detected inter-agent message (via sender check) from {from_agent_name} ({from_agent_id})")
+        
+        if is_inter_agent_message and from_agent_id and from_agent_name:
+            raw_body = event_body or ""
+            payload_lines = raw_body.splitlines()
+            if payload_lines and payload_lines[0].startswith("[Inter-Agent Message from"):
+                payload = "\n".join(payload_lines[1:]).lstrip("\n")
+            else:
+                payload = raw_body
+
+            message_to_send = f"""[INTER-AGENT MESSAGE from {from_agent_name}]
+
+{payload}
+
+---
+SYSTEM NOTE (INTER-AGENT COMMUNICATION)
+The message above is from another Letta agent: {from_agent_name} (ID: {from_agent_id}).
+Treat this as your MAIN task for this turn; the other agent is trying to
+collaborate with you.
+"""
+            logger.info(f"[INTER-AGENT CONTEXT] Enhanced message for receiving agent:")
+            logger.info(f"[INTER-AGENT CONTEXT] Sender: {from_agent_name} ({from_agent_id})")
+            logger.info(f"[INTER-AGENT CONTEXT] Full enhanced message:\n{message_to_send}")
+
+        is_opencode_sender = event_sender.startswith("@oc_")
+        opencode_mxid: Optional[str] = None
+        if is_opencode_sender and not is_inter_agent_message:
+            opencode_mxid = event_sender
+            message_to_send = f"""[MESSAGE FROM OPENCODE USER]
+
+{event_body}
+
+---
+RESPONSE INSTRUCTION (OPENCODE BRIDGE):
+This message is from an OpenCode user: {opencode_mxid}
+When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
+in your response so the OpenCode bridge can route your reply to them.
+
+Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response..."
+"""
+            logger.info(f"[OPENCODE] Detected message from OpenCode identity: {opencode_mxid}")
+            logger.info(f"[OPENCODE] Injected @mention instruction for response routing")
+        elif not is_inter_agent_message:
+            room_display = room_display_name or room_id
+            message_to_send = f"[Matrix: {event_sender} in {room_display}]\n\n{event_body}"
+            logger.debug(f"[MATRIX-CONTEXT] Added context for sender {event_sender}")
+
+        if original_event_id and room_agent_id:
+            await register_conversation_for_tracking(
+                matrix_event_id=original_event_id,
+                matrix_room_id=room_id,
+                agent_id=room_agent_id,
+                original_query=message_to_send,
+                logger=logger
+            )
+
+        if config.letta_streaming_enabled:
+            logger.info("[STREAMING] Using streaming mode for Letta API call")
+            letta_response = await send_to_letta_api_streaming(
+                message_to_send, event_sender, config, logger, room_id,
+                reply_to_event_id=original_event_id,
+                reply_to_sender=event_sender,
+                opencode_sender=opencode_mxid
+            )
+            logger.info("Successfully processed streaming response", extra={
+                "response_length": len(letta_response),
+                "room_id": room_id,
+                "streaming": True,
+                "reply_to": original_event_id
+            })
+            
+            if is_agent_mail_message and agent_mail_metadata and room_agent_id:
+                try:
+                    responder_code_name = get_agent_code_name(room_agent_id, logger)
+                    sender_code_name = agent_mail_metadata.get('sender_code_name')
+                    
+                    if responder_code_name and sender_code_name:
+                        original_subject = agent_mail_metadata.get('subject', 'No subject')
+                        original_msg_id = agent_mail_metadata.get('message_id')
+                        thread_id = agent_mail_metadata.get('thread_id')
+                        
+                        await forward_to_agent_mail(
+                            sender_code_name=responder_code_name,
+                            recipient_code_name=sender_code_name,
+                            subject=f"Re: {original_subject}",
+                            body_md=letta_response,
+                            thread_id=thread_id,
+                            original_message_id=original_msg_id,
+                            logger=logger
+                        )
+                    else:
+                        logger.warning(f"[REVERSE-BRIDGE] Could not get code names: responder={responder_code_name}, sender={sender_code_name}")
+                except Exception as bridge_error:
+                    logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
+        else:
+            letta_response = await send_to_letta_api(message_to_send, event_sender, config, logger, room_id)
+            
+            if opencode_mxid and opencode_mxid not in letta_response:
+                logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_mxid}")
+                letta_response = f"{opencode_mxid} {letta_response}"
+            
+            sent_as_agent = False
+            
+            poll_handled, remaining_text, poll_event_id = await process_agent_response(
+                room_id=room_id,
+                response_text=letta_response,
+                config=config,
+                logger_instance=logger,
+                reply_to_event_id=original_event_id,
+                reply_to_sender=event_sender
+            )
+            
+            if poll_handled:
+                logger.info(f"[POLL] Poll command handled, event_id: {poll_event_id}")
+                if remaining_text:
+                    letta_response = remaining_text
+                else:
+                    sent_as_agent = True
+                    letta_response = ""
+            
+            if not poll_handled or remaining_text:
+                sent_as_agent = await send_as_agent(
+                    room_id, 
+                    letta_response, 
+                    config, 
+                    logger,
+                    reply_to_event_id=original_event_id,
+                    reply_to_sender=event_sender
+                )
+            
+            if not sent_as_agent:
+                if client:
+                    logger.warning("Failed to send as agent, falling back to main client")
+                    message_content: Dict[str, Any] = {"msgtype": "m.text", "body": letta_response}
+                    if original_event_id:
+                        message_content["m.relates_to"] = {
+                            "m.in_reply_to": {"event_id": original_event_id}
+                        }
+                        message_content["m.mentions"] = {"user_ids": [event_sender]}
+                    await client.room_send(
+                        room_id,
+                        "m.room.message",
+                        message_content
+                    )
+                else:
+                    logger.error("No client available and agent send failed")
+            
+            logger.info("Successfully sent response to Matrix", extra={
+                "response_length": len(letta_response),
+                "room_id": room_id,
+                "sent_as_agent": sent_as_agent,
+                "reply_to": original_event_id
+            })
+        
+        if is_agent_mail_message and agent_mail_metadata and room_agent_id:
+            try:
+                responder_code_name = get_agent_code_name(room_agent_id, logger)
+                sender_code_name = agent_mail_metadata.get('sender_code_name')
+                
+                if responder_code_name and sender_code_name:
+                    original_subject = agent_mail_metadata.get('subject', 'No subject')
+                    original_msg_id = agent_mail_metadata.get('message_id')
+                    thread_id = agent_mail_metadata.get('thread_id')
+                    
+                    await forward_to_agent_mail(
+                        sender_code_name=responder_code_name,
+                        recipient_code_name=sender_code_name,
+                        subject=f"Re: {original_subject}",
+                        body_md=letta_response,
+                        thread_id=thread_id,
+                        original_message_id=original_msg_id,
+                        logger=logger
+                    )
+                else:
+                    logger.warning(f"[REVERSE-BRIDGE] Could not get code names: responder={responder_code_name}, sender={sender_code_name}")
+            except Exception as bridge_error:
+                logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
+        
+    except LettaApiError as e:
+        logger.error("Letta API error in background task", extra={
+            "error": str(e),
+            "status_code": e.status_code,
+            "sender": event_sender
+        })
+        error_message = f"Sorry, I encountered an error while processing your message: {str(e)[:100]}"
+        try:
+            sent_as_agent = await send_as_agent(
+                room_id, error_message, config, logger,
+                reply_to_event_id=original_event_id,
+                reply_to_sender=event_sender
+            )
+            if not sent_as_agent and client:
+                error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_message}
+                if original_event_id:
+                    error_content["m.relates_to"] = {"m.in_reply_to": {"event_id": original_event_id}}
+                await client.room_send(
+                    room_id,
+                    "m.room.message",
+                    error_content
+                )
+        except Exception as send_error:
+            logger.error("Failed to send error message", extra={"error": str(send_error)})
+            
+    except Exception as e:
+        logger.error("Unexpected error in background Letta task", extra={
+            "error": str(e),
+            "sender": event_sender
+        }, exc_info=True)
+        
+        try:
+            error_msg = f"Sorry, I encountered an unexpected error: {str(e)[:100]}"
+            sent_as_agent = await send_as_agent(
+                room_id, error_msg, config, logger,
+                reply_to_event_id=original_event_id,
+                reply_to_sender=event_sender
+            )
+            if not sent_as_agent and client:
+                error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_msg}
+                if original_event_id:
+                    error_content["m.relates_to"] = {"m.in_reply_to": {"event_id": original_event_id}}
+                await client.room_send(
+                    room_id,
+                    "m.room.message",
+                    error_content
+                )
+        except Exception as send_error:
+            logger.error("Failed to send error message", extra={"error": str(send_error)})
+
 async def message_callback(room, event, config: Config, logger: logging.Logger, client: Optional[AsyncClient] = None):
     """Callback function for handling new text messages."""
     if isinstance(event, RoomMessageText):
@@ -1707,326 +2007,66 @@ Example: "{opencode_mxid} Here is my response..."
                     logger=logger
                 )
             
-            await run_letta_code_task(
-                room_id=room.room_id,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                project_dir=project_dir,
-                prompt=fs_prompt,
-                config=config,
-                logger=logger,
-                wrap_response=False,
-            )
-            return
+            if config.letta_code_enabled:
+                try:
+                    await run_letta_code_task(
+                        room_id=room.room_id,
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        project_dir=project_dir,
+                        prompt=fs_prompt,
+                        config=config,
+                        logger=logger,
+                        wrap_response=False,
+                    )
+                    return
+                except Exception as fs_err:
+                    logger.warning(f"[FS-FALLBACK] letta-code task failed ({fs_err}), falling back to streaming Letta API")
+                    # Fall through to the normal streaming path below
+            else:
+                logger.info(f"[FS-SKIP] letta_code_enabled=false, using streaming Letta API for fs-mode room")
+                # Fall through to the normal streaming path below
  
         logger.info("Received message from user", extra={
-
             "sender": event.sender,
             "room_name": room.display_name,
             "room_id": room.room_id,
             "message_preview": event.body[:100] + "..." if len(event.body) > 100 else event.body
         })
 
-        try:
-            # Ensure we have a valid token before making API calls
-            if client and 'auth_manager_global' in globals() and auth_manager_global is not None:
-                await auth_manager_global.ensure_valid_token(client)
-            
-            # Check if this is an inter-agent message
-            message_to_send = event.body
-            is_inter_agent_message = False
-            from_agent_id = None
-            from_agent_name = None
-            
-            # Check if this is a message from Agent Mail bridge (for reverse bridge)
-            is_agent_mail_message = False
-            agent_mail_metadata = None
-            
-            # Method 1: Check for metadata (from MCP tool or Agent Mail bridge)
-            if hasattr(event, 'source') and isinstance(event.source, dict):
-                content = event.source.get("content", {})
-                from_agent_id = content.get("m.letta.from_agent_id")
-                from_agent_name = content.get("m.letta.from_agent_name")
-                
-                if from_agent_id and from_agent_name:
-                    is_inter_agent_message = True
-                    logger.info(f"Detected inter-agent message (via metadata) from {from_agent_name} ({from_agent_id})")
-                
-                # Check for Agent Mail bridge metadata
-                agent_mail_metadata = content.get("m.agent_mail")
-                if agent_mail_metadata:
-                    is_agent_mail_message = True
-                    logger.info(f"[REVERSE-BRIDGE] Detected Agent Mail message from {agent_mail_metadata.get('sender_friendly_name', 'Unknown')}")
-            
-            # Method 2: Check if sender is an agent user (even without metadata)
-            if not is_inter_agent_message:
-                sender_agent_mapping = get_mapping_by_matrix_user(event.sender)
-                if sender_agent_mapping:
-                    # This is an agent user sending to another agent's room
-                    # (We already filtered out self-messages above)
-                    from_agent_id = sender_agent_mapping.get("agent_id")
-                    from_agent_name = sender_agent_mapping.get("agent_name", "Unknown Agent")
-                    is_inter_agent_message = True
-                    logger.info(f"Detected inter-agent message (via sender check) from {from_agent_name} ({from_agent_id})")
-            
-            # If this is an inter-agent message, enhance it with context
-            if is_inter_agent_message and from_agent_id and from_agent_name:
-                # Format message with context for the receiving agent.
-                # IMPORTANT: The receiving agent MAY reply back using the
-                # 'matrix_agent_message' tool, but must avoid open-ended loops.
-
-                # The original Matrix event body already includes a prefix like
-                # "[Inter-Agent Message from X]". Strip that inner prefix so we
-                # don't show duplicate headers to the receiving agent.
-                raw_body = event.body or ""
-                payload_lines = raw_body.splitlines()
-                if payload_lines and payload_lines[0].startswith("[Inter-Agent Message from"):
-                    # Drop the first line (the original prefix) and keep the rest
-                    payload = "\n".join(payload_lines[1:]).lstrip("\n")
-                else:
-                    payload = raw_body
-
-                message_to_send = f"""[INTER-AGENT MESSAGE from {from_agent_name}]
-
-{payload}
-
----
-SYSTEM NOTE (INTER-AGENT COMMUNICATION)
-The message above is from another Letta agent: {from_agent_name} (ID: {from_agent_id}).
-Treat this as your MAIN task for this turn; the other agent is trying to
-collaborate with you.
-"""
-                logger.info(f"[INTER-AGENT CONTEXT] Enhanced message for receiving agent:")
-                logger.info(f"[INTER-AGENT CONTEXT] Sender: {from_agent_name} ({from_agent_id})")
-                logger.info(f"[INTER-AGENT CONTEXT] Full enhanced message:\n{message_to_send}")
-
-            is_opencode_sender = event.sender.startswith("@oc_")
-            opencode_mxid: Optional[str] = None
-            if is_opencode_sender and not is_inter_agent_message:
-                opencode_mxid = event.sender
-                message_to_send = f"""[MESSAGE FROM OPENCODE USER]
-
-{event.body}
-
----
-RESPONSE INSTRUCTION (OPENCODE BRIDGE):
-This message is from an OpenCode user: {opencode_mxid}
-When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
-in your response so the OpenCode bridge can route your reply to them.
-
-Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response..."
-"""
-                logger.info(f"[OPENCODE] Detected message from OpenCode identity: {opencode_mxid}")
-                logger.info(f"[OPENCODE] Injected @mention instruction for response routing")
-            elif not is_inter_agent_message:
-                room_display = room.display_name or room.room_id
-                message_to_send = f"[Matrix: {event.sender} in {room_display}]\n\n{event.body}"
-                logger.debug(f"[MATRIX-CONTEXT] Added context for sender {event.sender}")
-
-            # Register this conversation for cross-run tracking
-            # This allows the webhook server to link responses from subsequent runs
-            # back to this original Matrix message
-            original_event_id = getattr(event, 'event_id', None)
-            if original_event_id and room_agent_id:
-                await register_conversation_for_tracking(
-                    matrix_event_id=original_event_id,
-                    matrix_room_id=room.room_id,
-                    agent_id=room_agent_id,
-                    original_query=message_to_send,
-                    logger=logger
-                )
-
-            # Send the message to Letta with room context
-            # Use streaming mode if enabled (shows progress messages for tool calls)
-            if config.letta_streaming_enabled:
-                logger.info("[STREAMING] Using streaming mode for Letta API call")
-                # Streaming mode handles sending messages directly (with progress updates)
-                letta_response = await send_to_letta_api_streaming(
-                    message_to_send, event.sender, config, logger, room.room_id,
-                    reply_to_event_id=original_event_id,
-                    reply_to_sender=event.sender,
-                    opencode_sender=opencode_mxid  # Pass OpenCode sender for @mention fallback
-                )
-                # In streaming mode, the final message is already sent by the handler
-                # We don't need to send it again, just log the result
-                logger.info("Successfully processed streaming response", extra={
-                    "response_length": len(letta_response),
-                    "room_id": room.room_id,
-                    "streaming": True,
-                    "reply_to": original_event_id
-                })
-                
-                # REVERSE BRIDGE (streaming mode): Forward response back to Agent Mail if original was from bridge
-                if is_agent_mail_message and agent_mail_metadata and room_agent_id:
-                    try:
-                        # Get the responding agent's code name
-                        responder_code_name = get_agent_code_name(room_agent_id, logger)
-                        sender_code_name = agent_mail_metadata.get('sender_code_name')
-                        
-                        if responder_code_name and sender_code_name:
-                            original_subject = agent_mail_metadata.get('subject', 'No subject')
-                            original_msg_id = agent_mail_metadata.get('message_id')
-                            thread_id = agent_mail_metadata.get('thread_id')
-                            
-                            # Forward the response back to Agent Mail
-                            await forward_to_agent_mail(
-                                sender_code_name=responder_code_name,
-                                recipient_code_name=sender_code_name,
-                                subject=f"Re: {original_subject}",
-                                body_md=letta_response,
-                                thread_id=thread_id,
-                                original_message_id=original_msg_id,
-                                logger=logger
-                            )
-                        else:
-                            logger.warning(f"[REVERSE-BRIDGE] Could not get code names: responder={responder_code_name}, sender={sender_code_name}")
-                    except Exception as bridge_error:
-                        logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
-            else:
-                # Non-streaming mode (original behavior)
-                letta_response = await send_to_letta_api(message_to_send, event.sender, config, logger, room.room_id)
-                
-                # If this is a response to an OpenCode user, ensure @mention is included
-                if opencode_mxid and opencode_mxid not in letta_response:
-                    logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_mxid}")
-                    letta_response = f"{opencode_mxid} {letta_response}"
-                
-                original_event_id = getattr(event, 'event_id', None)
-                sent_as_agent = False
-                
-                poll_handled, remaining_text, poll_event_id = await process_agent_response(
-                    room_id=room.room_id,
-                    response_text=letta_response,
-                    config=config,
-                    logger_instance=logger,
-                    reply_to_event_id=original_event_id,
-                    reply_to_sender=event.sender
-                )
-                
-                if poll_handled:
-                    logger.info(f"[POLL] Poll command handled, event_id: {poll_event_id}")
-                    if remaining_text:
-                        letta_response = remaining_text
-                    else:
-                        sent_as_agent = True
-                        letta_response = ""
-                
-                if not poll_handled or remaining_text:
-                    sent_as_agent = await send_as_agent(
-                        room.room_id, 
-                        letta_response, 
-                        config, 
-                        logger,
-                        reply_to_event_id=original_event_id,
-                        reply_to_sender=event.sender
-                    )
-                
-                if not sent_as_agent:
-                    # Fallback to sending as the main letta client if agent send fails
-                    # Include rich reply in fallback too
-                    if client:
-                        logger.warning("Failed to send as agent, falling back to main client")
-                        message_content: Dict[str, Any] = {"msgtype": "m.text", "body": letta_response}
-                        if original_event_id:
-                            message_content["m.relates_to"] = {
-                                "m.in_reply_to": {"event_id": original_event_id}
-                            }
-                            message_content["m.mentions"] = {"user_ids": [event.sender]}
-                        await client.room_send(
-                            room.room_id,
-                            "m.room.message",
-                            message_content
-                        )
-                    else:
-                        logger.error("No client available and agent send failed")
-                
-                logger.info("Successfully sent response to Matrix", extra={
-                    "response_length": len(letta_response),
-                    "room_id": room.room_id,
-                    "sent_as_agent": sent_as_agent,
-                    "reply_to": original_event_id
-                })
-            
-            # REVERSE BRIDGE: Forward response back to Agent Mail if original was from bridge
-            if is_agent_mail_message and agent_mail_metadata and room_agent_id:
-                try:
-                    # Get the responding agent's code name
-                    responder_code_name = get_agent_code_name(room_agent_id, logger)
-                    sender_code_name = agent_mail_metadata.get('sender_code_name')
-                    
-                    if responder_code_name and sender_code_name:
-                        original_subject = agent_mail_metadata.get('subject', 'No subject')
-                        original_msg_id = agent_mail_metadata.get('message_id')
-                        thread_id = agent_mail_metadata.get('thread_id')
-                        
-                        # Forward the response back to Agent Mail
-                        await forward_to_agent_mail(
-                            sender_code_name=responder_code_name,
-                            recipient_code_name=sender_code_name,
-                            subject=f"Re: {original_subject}",
-                            body_md=letta_response,
-                            thread_id=thread_id,
-                            original_message_id=original_msg_id,
-                            logger=logger
-                        )
-                    else:
-                        logger.warning(f"[REVERSE-BRIDGE] Could not get code names: responder={responder_code_name}, sender={sender_code_name}")
-                except Exception as bridge_error:
-                    logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
-            
-        except LettaApiError as e:
-            logger.error("Letta API error in message callback", extra={
-                "error": str(e),
-                "status_code": e.status_code,
-                "sender": event.sender
-            })
-            error_message = f"Sorry, I encountered an error while processing your message: {str(e)[:100]}"
-            original_event_id = getattr(event, 'event_id', None)
+        task_key = (room.room_id, room_agent_id or "unknown")
+        existing_task = _active_letta_tasks.get(task_key)
+        if existing_task and not existing_task.done():
+            logger.warning(f"[BG-TASK] Agent still processing previous message for {task_key}, sending notice")
             try:
-                # Try to send error as agent first - use rich reply
-                sent_as_agent = await send_as_agent(
-                    room.room_id, error_message, config, logger,
-                    reply_to_event_id=original_event_id,
-                    reply_to_sender=event.sender
+                await send_as_agent(
+                    room.room_id, "⏳ Still processing previous message...", config, logger
                 )
-                if not sent_as_agent and client:
-                    error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_message}
-                    if original_event_id:
-                        error_content["m.relates_to"] = {"m.in_reply_to": {"event_id": original_event_id}}
-                    await client.room_send(
-                        room.room_id,
-                        "m.room.message",
-                        error_content
-                    )
-            except Exception as send_error:
-                logger.error("Failed to send error message", extra={"error": str(send_error)})
-                
-        except Exception as e:
-            logger.error("Unexpected error in message callback", extra={
-                "error": str(e),
-                "sender": event.sender
-            }, exc_info=True)
-            
-            # Try to send an error message if possible
-            original_event_id = getattr(event, 'event_id', None)
-            try:
-                error_msg = f"Sorry, I encountered an unexpected error: {str(e)[:100]}"
-                sent_as_agent = await send_as_agent(
-                    room.room_id, error_msg, config, logger,
-                    reply_to_event_id=original_event_id,
-                    reply_to_sender=event.sender
-                )
-                if not sent_as_agent and client:
-                    error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_msg}
-                    if original_event_id:
-                        error_content["m.relates_to"] = {"m.in_reply_to": {"event_id": original_event_id}}
-                    await client.room_send(
-                        room.room_id,
-                        "m.room.message",
-                        error_content
-                    )
-            except Exception as send_error:
-                logger.error("Failed to send error message", extra={"error": str(send_error)})
+            except Exception:
+                pass
+            return
+
+        event_source = None
+        if hasattr(event, 'source') and isinstance(event.source, dict):
+            event_source = event.source
+
+        task = asyncio.create_task(
+            _process_letta_message(
+                event_body=event.body,
+                event_sender=event.sender,
+                event_source=event_source,
+                original_event_id=getattr(event, 'event_id', None),
+                room_id=room.room_id,
+                room_display_name=room.display_name or room.room_id,
+                room_agent_id=room_agent_id,
+                config=config,
+                logger=logger,
+                client=client,
+            )
+        )
+        task.add_done_callback(lambda t: _on_letta_task_done(task_key, t))
+        _active_letta_tasks[task_key] = task
+        logger.info(f"[BG-TASK] Dispatched background Letta task for {task_key}")
 
 async def create_room_if_needed(client_instance, logger: logging.Logger, room_name="Letta Bot Room"):
     """Create a new room and return its ID"""
@@ -2341,6 +2381,7 @@ async def main():
     except Exception as e:
         logger.error("Error during sync", extra={"error": str(e)}, exc_info=True)
     finally:
+        await cancel_all_letta_tasks()
         logger.info("Closing client session")
         await client.close()
 
