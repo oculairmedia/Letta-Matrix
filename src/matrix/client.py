@@ -280,6 +280,7 @@ class Config:
     # Streaming configuration
     letta_streaming_enabled: bool = False  # Feature flag for step streaming
     letta_streaming_timeout: float = 120.0  # Streaming timeout in seconds
+    letta_streaming_idle_timeout: float = 120.0  # Kill stream if no real data (only pings) for this long
     # Conversations API configuration (context isolation per room)
     letta_conversations_enabled: bool = False  # Feature flag for Conversations API
     
@@ -306,6 +307,7 @@ class Config:
                 # Streaming configuration
                 letta_streaming_enabled=os.getenv("LETTA_STREAMING_ENABLED", "false").lower() == "true",
                 letta_streaming_timeout=float(os.getenv("LETTA_STREAMING_TIMEOUT", "120.0")),
+                letta_streaming_idle_timeout=float(os.getenv("LETTA_STREAMING_IDLE_TIMEOUT", "120.0")),
                 letta_code_api_url=os.getenv("LETTA_CODE_API_URL", "http://192.168.50.90:3099"),
                 letta_code_enabled=os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true",
                 letta_conversations_enabled=os.getenv("LETTA_CONVERSATIONS_ENABLED", "false").lower() == "true",
@@ -816,7 +818,8 @@ async def send_to_letta_api_streaming(
         letta_client=letta_client,
         include_reasoning=False,
         include_pings=True,
-        timeout=config.letta_streaming_timeout
+        timeout=config.letta_streaming_timeout,
+        idle_data_timeout=config.letta_streaming_idle_timeout,
     )
     
     # Create message handlers for Matrix

@@ -102,6 +102,7 @@ class StepStreamReader:
         include_reasoning: bool = False,
         include_pings: bool = True,
         timeout: float = 120.0,
+        idle_data_timeout: float = 120.0,
     ):
         """
         Initialize the stream reader.
@@ -111,11 +112,14 @@ class StepStreamReader:
             include_reasoning: Whether to emit reasoning events
             include_pings: Whether to include keepalive pings in stream
             timeout: Maximum stream duration in seconds
+            idle_data_timeout: Max seconds to wait for real data (non-ping) before killing stream.
+                               Prevents hung streams that only send keepalive pings indefinitely.
         """
         self.client = letta_client
         self.include_reasoning = include_reasoning
         self.include_pings = include_pings
         self.timeout = timeout
+        self.idle_data_timeout = idle_data_timeout
         self._last_tool_name: Optional[str] = None
     
     def _create_stream_with_retry(
@@ -246,14 +250,20 @@ class StepStreamReader:
             # Consume from queue asynchronously
             loop = asyncio.get_running_loop()
             start_time = loop.time()
+            last_data_time = loop.time()
             
             while True:
-                # Check timeout
-                if loop.time() - start_time > self.timeout:
-                    logger.error(f"[STREAM] Timeout after {self.timeout}s")
+                now = loop.time()
+                
+                if now - start_time > self.timeout:
+                    logger.error(f"[STREAM] Total timeout after {self.timeout}s")
                     raise asyncio.TimeoutError()
                 
-                # Try to get chunk with timeout
+                idle_seconds = now - last_data_time
+                if idle_seconds > self.idle_data_timeout:
+                    logger.error(f"[STREAM] Idle data timeout: no real data for {idle_seconds:.0f}s (limit: {self.idle_data_timeout}s). Killing stale stream.")
+                    raise asyncio.TimeoutError()
+                
                 try:
                     item_type, item_data = await loop.run_in_executor(
                         None,
@@ -270,6 +280,8 @@ class StepStreamReader:
                 elif item_type == 'chunk':
                     event = self._parse_chunk(item_data)
                     if event:
+                        if event.type != StreamEventType.PING:
+                            last_data_time = loop.time()
                         logger.debug(f"[STREAM] Yielding event: {event.type.value}")
                         yield event
                     
