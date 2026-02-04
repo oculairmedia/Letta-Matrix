@@ -1,7 +1,8 @@
 import type { Plugin } from "@opencode-ai/plugin";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { mkdir, readFile, unlink, writeFile } from "fs/promises";
 import path from "path";
+import os from "os";
 import WebSocket from "ws";
 
 const BRIDGE_URL = process.env.OPENCODE_BRIDGE_URL || "http://127.0.0.1:3201";
@@ -9,6 +10,31 @@ const BRIDGE_WS_URL = process.env.OPENCODE_BRIDGE_WS_URL || "ws://127.0.0.1:3201
 const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
 const WS_RECONNECT_BASE_MS = 1000;
 const WS_RECONNECT_MAX_MS = 30000;
+
+// Debug logging to file since console.log doesn't appear in OpenCode logs
+const DEBUG_LOG_PATH = path.join(os.homedir(), ".local", "share", "opencode", "matrix-plugin-debug.log");
+function debugLog(message: string): void {
+  const timestamp = new Date().toISOString();
+  const line = `[${timestamp}] ${message}\n`;
+  try {
+    writeFileSync(DEBUG_LOG_PATH, line, { flag: 'a' });
+  } catch {
+    // Ignore write errors
+  }
+}
+
+// Storage paths - matching OpenCode's xdg-basedir behavior
+function getDataDir(): string {
+  return process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share");
+}
+
+function getOpenCodeStorageDir(): string {
+  return path.join(getDataDir(), "opencode", "storage");
+}
+
+const OPENCODE_STORAGE = getOpenCodeStorageDir();
+const MESSAGE_STORAGE = path.join(OPENCODE_STORAGE, "message");
+const PART_STORAGE = path.join(OPENCODE_STORAGE, "part");
 
 interface MatrixMessage {
   type: "matrix_message";
@@ -24,6 +50,145 @@ interface OutboundMessage {
   role: "assistant" | "user";
   content: string;
   messageId: string;
+}
+
+interface MessageMeta {
+  id: string;
+  sessionID: string;
+  role: "user" | "assistant";
+  time: { created: number; completed?: number };
+  agent?: string;
+  model?: { providerID: string; modelID: string };
+  path?: { cwd: string; root: string };
+}
+
+interface TextPart {
+  id: string;
+  type: "text";
+  text: string;
+  synthetic: boolean;
+  time: { start: number; end: number };
+  messageID: string;
+  sessionID: string;
+}
+
+function generateMessageId(): string {
+  const timestamp = Date.now().toString(16);
+  const random = Math.random().toString(36).substring(2, 14);
+  return `msg_${timestamp}${random}`;
+}
+
+function generatePartId(): string {
+  const timestamp = Date.now().toString(16);
+  const random = Math.random().toString(36).substring(2, 10);
+  return `prt_${timestamp}${random}`;
+}
+
+function getOrCreateMessageDir(sessionID: string): string {
+  if (!existsSync(MESSAGE_STORAGE)) {
+    mkdirSync(MESSAGE_STORAGE, { recursive: true });
+  }
+
+  const directPath = path.join(MESSAGE_STORAGE, sessionID);
+  if (existsSync(directPath)) {
+    return directPath;
+  }
+
+  // Check nested directories
+  try {
+    for (const dir of readdirSync(MESSAGE_STORAGE)) {
+      const sessionPath = path.join(MESSAGE_STORAGE, dir, sessionID);
+      if (existsSync(sessionPath)) {
+        return sessionPath;
+      }
+    }
+  } catch {
+    // Ignore errors
+  }
+
+  mkdirSync(directPath, { recursive: true });
+  return directPath;
+}
+
+interface StoredMessage {
+  agent?: string;
+  model?: { providerID?: string; modelID?: string };
+}
+
+function findNearestMessageWithFields(messageDir: string): StoredMessage | null {
+  try {
+    const files = readdirSync(messageDir)
+      .filter((f) => f.endsWith(".json"))
+      .sort()
+      .reverse();
+
+    for (const file of files) {
+      try {
+        const content = readFileSync(path.join(messageDir, file), "utf-8");
+        const msg = JSON.parse(content) as StoredMessage;
+        if (msg.agent || (msg.model?.providerID && msg.model?.modelID)) {
+          return msg;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function injectMessage(sessionID: string, text: string, cwd?: string): boolean {
+  if (!text || text.trim().length === 0) {
+    console.log("[MatrixPlugin] Attempted to inject empty message, skipping");
+    return false;
+  }
+
+  const messageDir = getOrCreateMessageDir(sessionID);
+  const fallback = findNearestMessageWithFields(messageDir);
+
+  const now = Date.now();
+  const messageID = generateMessageId();
+  const partID = generatePartId();
+
+  const messageMeta: MessageMeta = {
+    id: messageID,
+    sessionID,
+    role: "user",
+    time: { created: now },
+    agent: fallback?.agent ?? "general",
+    model: fallback?.model?.providerID && fallback?.model?.modelID
+      ? { providerID: fallback.model.providerID, modelID: fallback.model.modelID }
+      : undefined,
+    path: cwd ? { cwd, root: "/" } : undefined,
+  };
+
+  const textPart: TextPart = {
+    id: partID,
+    type: "text",
+    text,
+    synthetic: true,
+    time: { start: now, end: now },
+    messageID,
+    sessionID,
+  };
+
+  try {
+    writeFileSync(path.join(messageDir, `${messageID}.json`), JSON.stringify(messageMeta, null, 2));
+
+    const partDir = path.join(PART_STORAGE, messageID);
+    if (!existsSync(partDir)) {
+      mkdirSync(partDir, { recursive: true });
+    }
+    writeFileSync(path.join(partDir, `${partID}.json`), JSON.stringify(textPart, null, 2));
+
+    console.log(`[MatrixPlugin] Injected message ${messageID} into session ${sessionID}`);
+    return true;
+  } catch (err) {
+    console.error(`[MatrixPlugin] Failed to inject message:`, err);
+    return false;
+  }
 }
 
 function getSessionUpdatedAtMs(session: any): number {
@@ -194,6 +359,10 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   const opencodeDirPath = path.join(baseDir, ".opencode");
   const lockPath = path.join(opencodeDirPath, "matrix.lock");
 
+  debugLog(`=== MatrixContextInjector initializing ===`);
+  debugLog(`baseDir: ${baseDir}`);
+  debugLog(`PID: ${process.pid}`);
+
   if (!existsSync(opencodeDirPath)) {
     await mkdir(opencodeDirPath, { recursive: true });
   }
@@ -208,6 +377,17 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   let shuttingDown = false;
   const pendingMessages = new Map<string, { content: string; sentLength: number; timer: NodeJS.Timeout | null }>();
   const STREAM_SETTLE_MS = 500;
+  
+  // Queue for incoming Matrix messages - inject on session.idle
+  const pendingMatrixMessages: Array<{
+    sender: string;
+    senderMxid: string;
+    roomId: string;
+    body: string;
+    eventId: string;
+    receivedAt: number;
+  }> = [];
+  const processedEventIds = new Set<string>();
   
   const sendOutboundMessage = (role: "assistant" | "user", content: string, messageId: string) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -278,18 +458,21 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     releaseLock(lockPath).catch(() => undefined);
   };
 
+  // Store the initial session ID to reuse on reconnects (prevents bridge cleanup loop)
+  let currentSessionId = `opencode-${process.pid}-${Date.now()}`;
+  
   const reRegisterAndReconnect = async (wsUrl: string) => {
     if (shuttingDown) return;
-    console.log("[MatrixPlugin] Re-registering with bridge after auth failure...");
+    debugLog("Re-registering with bridge...");
     const roomId = await ensureMatrixRoom(baseDir).catch(() => null);
-    const newSessionId = `opencode-${process.pid}-${Date.now()}`;
-    const result = await registerWithBridge(baseDir, newSessionId, roomId);
+    // IMPORTANT: Reuse the same session ID to avoid bridge cleanup loop
+    const result = await registerWithBridge(baseDir, currentSessionId, roomId);
     if (result) {
       bridgeRegistrationId = result.id;
-      console.log(`[MatrixPlugin] Re-registered as ${result.id}, reconnecting WebSocket...`);
+      debugLog(`Re-registered with bridge as: ${result.id}`);
       connectWebSocket(result.wsUrl || wsUrl, result.id);
     } else {
-      console.log("[MatrixPlugin] Re-registration failed, scheduling retry...");
+      debugLog("Re-registration failed, scheduling retry...");
       scheduleReconnect(wsUrl, bridgeRegistrationId || "");
     }
   };
@@ -301,6 +484,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
 
     ws.on("open", () => {
       wsReconnectAttempts = 0;
+      debugLog(`WebSocket opened, sending auth for registrationId: ${registrationId}`);
       ws?.send(JSON.stringify({ type: "auth", registrationId }));
     });
 
@@ -309,11 +493,11 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
         const message = JSON.parse(data.toString());
 
         if (message.type === "auth_success") {
-          console.log("[MatrixPlugin] WebSocket authenticated");
+          debugLog("WebSocket authenticated successfully");
           return;
         }
         if (message.type === "auth_error") {
-          console.log("[MatrixPlugin] WebSocket auth failed, re-registering...");
+          debugLog("WebSocket auth failed, re-registering...");
           ws?.close();
           reRegisterAndReconnect(wsUrl);
           return;
@@ -321,32 +505,43 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
 
         if (message.type === "matrix_message") {
           const matrixMsg = message as MatrixMessage;
+          debugLog(`Received matrix_message from ${matrixMsg.sender}: ${matrixMsg.body.substring(0, 50)}...`);
           
           if (matrixMsg.body.startsWith("**User:**") || matrixMsg.body.startsWith("**Emmanuel:**")) {
+            debugLog(`Skipping echo message`);
             return;
           }
           
-          const sessionId = await getActiveSessionId(client, baseDir);
-          if (!sessionId) return;
-
-          const injection = `[Matrix from ${matrixMsg.sender} in ${matrixMsg.roomId}]\n${matrixMsg.body}`;
-
-          try {
-            await client.tui.appendPrompt({ body: { text: injection } });
-            await client.tui.submitPrompt();
-          } catch {
+          // Skip if already processed
+          if (processedEventIds.has(matrixMsg.eventId)) {
+            debugLog(`Skipping already processed eventId: ${matrixMsg.eventId}`);
+            return;
           }
+          
+          // Queue the message for injection on session.idle
+          pendingMatrixMessages.push({
+            sender: matrixMsg.sender,
+            senderMxid: matrixMsg.senderMxid,
+            roomId: matrixMsg.roomId,
+            body: matrixMsg.body,
+            eventId: matrixMsg.eventId,
+            receivedAt: Date.now(),
+          });
+          
+          debugLog(`Queued message from ${matrixMsg.sender} (${pendingMatrixMessages.length} pending)`);
         }
       } catch {
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code, reason) => {
+      debugLog(`WebSocket closed: code=${code}, reason=${reason?.toString() || 'none'}`);
       if (shuttingDown) return;
       scheduleReconnect(wsUrl, registrationId);
     });
 
-    ws.on("error", () => {
+    ws.on("error", (err) => {
+      debugLog(`WebSocket error: ${err?.message || err}`);
     });
   };
 
@@ -359,7 +554,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       WS_RECONNECT_MAX_MS
     );
 
-    console.log(`[MatrixPlugin] Scheduling reconnect in ${delay}ms (attempt ${wsReconnectAttempts})`);
+    debugLog(`Scheduling reconnect in ${delay}ms (attempt ${wsReconnectAttempts})`);
     wsReconnectTimeout = setTimeout(() => {
       wsReconnectTimeout = null;
       reRegisterAndReconnect(wsUrl);
@@ -376,25 +571,26 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     process.exit(0);
   });
 
+  // Initial registration after 2 second delay
   setTimeout(async () => {
     try {
       await acquireLock(lockPath);
-    } catch {
+    } catch (lockErr: any) {
+      debugLog(`Lock acquisition failed: ${lockErr?.message || lockErr}`);
       return;
     }
 
     try {
-      const sessionId = `opencode-${process.pid}-${Date.now()}`;
-      
       const roomId = await ensureMatrixRoom(baseDir);
       if (roomId) {
-        console.log(`[MatrixPlugin] Room ensured: ${roomId}`);
+        debugLog(`Room ensured: ${roomId}`);
       }
       
-      const result = await registerWithBridge(baseDir, sessionId, roomId);
+      const result = await registerWithBridge(baseDir, currentSessionId, roomId);
 
       if (result) {
         bridgeRegistrationId = result.id;
+        debugLog(`Registered with bridge as: ${result.id}`);
 
         heartbeatInterval = setInterval(() => {
           if (bridgeRegistrationId) {
@@ -403,8 +599,11 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
         }, HEARTBEAT_INTERVAL_MS);
 
         connectWebSocket(result.wsUrl, result.id);
+      } else {
+        debugLog(`Bridge registration failed - no result`);
       }
-    } catch {
+    } catch (err: any) {
+      debugLog(`Bridge registration error: ${err?.message || err}`);
       shutdown();
     }
   }, 2000);
@@ -463,6 +662,65 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       }
       
       if (event.type === "session.idle") {
+        debugLog(`session.idle event received. Properties: ${JSON.stringify(event.properties || {})}`);
+        let sessionId = event.properties?.sessionID as string | undefined;
+        
+        // Fallback: get active session if not in event
+        if (!sessionId) {
+          debugLog(`No sessionID in event, trying getActiveSessionId...`);
+          sessionId = await getActiveSessionId(client, baseDir);
+          debugLog(`getActiveSessionId returned: ${sessionId || 'null'}`);
+        }
+        
+        // Process queued Matrix messages
+        debugLog(`Pending messages: ${pendingMatrixMessages.length}, sessionId: ${sessionId || 'null'}`);
+        if (pendingMatrixMessages.length > 0 && sessionId) {
+          debugLog(`session.idle - processing ${pendingMatrixMessages.length} queued messages`);
+          
+          // Get context from previous message for proper agent/model routing
+          const messageDir = getOrCreateMessageDir(sessionId);
+          const prevMessage = findNearestMessageWithFields(messageDir);
+          
+          // Combine all pending messages into one injection
+          const combinedMessages = pendingMatrixMessages
+            .filter(msg => !processedEventIds.has(msg.eventId))
+            .map(msg => `[Matrix from ${msg.sender} in ${msg.roomId}]\n${msg.body}`)
+            .join("\n\n---\n\n");
+          
+          if (combinedMessages.trim()) {
+            // Mark all as processed
+            pendingMatrixMessages.forEach(msg => processedEventIds.add(msg.eventId));
+            pendingMatrixMessages.length = 0;
+            
+            // Limit processed set size
+            if (processedEventIds.size > 200) {
+              const toRemove = Array.from(processedEventIds).slice(0, 100);
+              toRemove.forEach(id => processedEventIds.delete(id));
+            }
+            
+            try {
+              debugLog(`Attempting session.prompt with sessionId=${sessionId}, agent=${prevMessage?.agent || 'none'}`);
+              debugLog(`Combined message content: ${combinedMessages.substring(0, 200)}...`);
+              // Inject using session.prompt - this triggers the AI to respond
+              await client.session.prompt({
+                path: { id: sessionId },
+                body: {
+                  agent: prevMessage?.agent,
+                  parts: [{ type: "text", text: combinedMessages }],
+                },
+                query: { directory: baseDir },
+              });
+              debugLog(`SUCCESS: Injected queued messages via session.prompt`);
+            } catch (e: any) {
+              debugLog(`FAILED: session.prompt error: ${e?.message || e}`);
+              // Fallback to file-based injection
+              const fallbackResult = injectMessage(sessionId, combinedMessages, baseDir);
+              debugLog(`Fallback file-based injection result: ${fallbackResult}`);
+            }
+          }
+        }
+        
+        // Original outbound message handling
         for (const [messageID, parts] of messagePartsMap.entries()) {
           if (sentMessages.has(messageID)) continue;
           

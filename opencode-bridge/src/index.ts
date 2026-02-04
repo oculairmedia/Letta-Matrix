@@ -254,6 +254,7 @@ function isOpenCodeIdentity(mxid: string): boolean {
 }
 
 async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Promise<void> {
+  console.log(`[Bridge] handleMatrixMessage: ${event.getType()} from ${event.getSender()} in ${room.roomId}`);
   if (event.getSender() === matrixClient?.getUserId()) return;
   if (event.getType() !== "m.room.message") return;
   
@@ -273,8 +274,12 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
   const roomRegistration = roomToRegistration.get(roomId);
   if (roomRegistration) {
     const roomOwnerIdentities = deriveMatrixIdentities(roomRegistration.directory);
-    if (roomOwnerIdentities.includes(senderMxid)) return;
-    forwardToOpenCode(roomRegistration, roomId, senderName, senderMxid, body, eventId);
+    if (roomOwnerIdentities.includes(senderMxid)) {
+      console.log(`[Bridge] Skipping own message from ${senderMxid}`);
+      return;
+    }
+    const forwarded = forwardToOpenCode(roomRegistration, roomId, senderName, senderMxid, body, eventId);
+    console.log(`[Bridge] Room-registered forward to ${roomRegistration.id}: ${forwarded ? 'SUCCESS' : 'FAILED'} - "${body.substring(0, 50)}..."`);
     return;
   }
 
@@ -331,7 +336,7 @@ async function initMatrix(): Promise<void> {
     }
   });
 
-  await matrixClient.startClient({ initialSyncLimit: 0 });
+  await matrixClient.startClient({ initialSyncLimit: 1 });
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -396,6 +401,26 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           const persistedRoom = getRoomForDirectory(directory);
           if (persistedRoom) {
             effectiveRooms = [persistedRoom];
+          }
+        }
+        
+        // Clean up old registrations from the same directory
+        for (const [oldId, oldReg] of registrations.entries()) {
+          if (oldReg.directory === directory && oldId !== id) {
+            console.log(`[Bridge] Cleaning up stale registration ${oldId} for ${directory}`);
+            if (oldReg.ws) oldReg.ws.close();
+            for (const roomId of oldReg.rooms) {
+              if (roomToRegistration.get(roomId) === oldReg) {
+                roomToRegistration.delete(roomId);
+              }
+            }
+            const oldIdentities = deriveMatrixIdentities(oldReg.directory);
+            for (const identity of oldIdentities) {
+              if (identityToRegistration.get(identity) === oldReg) {
+                identityToRegistration.delete(identity);
+              }
+            }
+            registrations.delete(oldId);
           }
         }
         
