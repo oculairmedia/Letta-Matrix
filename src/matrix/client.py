@@ -2000,6 +2000,11 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             room_agent_id = room_agent_mapping.get("agent_id")
             room_agent_name = room_agent_mapping.get("agent_name", "Unknown")
 
+        disabled_agent_ids = [a.strip() for a in os.getenv("DISABLED_AGENT_IDS", "").split(",") if a.strip()]
+        if room_agent_id and room_agent_id in disabled_agent_ids:
+            logger.debug(f"Skipping disabled agent {room_agent_id} ({room_agent_name})")
+            return
+
         # Check if sender is an agent (for @mention routing)
         sender_mapping = get_mapping_by_matrix_user(event.sender)
         
@@ -2039,7 +2044,10 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
         fs_state = get_letta_code_room_state(room.room_id)
         fs_enabled = fs_state.get("enabled")
         is_huly_agent = room_agent_name and (room_agent_name.startswith("Huly - ") or room_agent_name == "Huly-PM-Control")
-        use_fs_mode = fs_enabled is True or (fs_enabled is None and is_huly_agent)
+        # FS_MODE_AGENTS: comma-separated agent names that auto-enable fs-task mode (routes to Letta Code CLI)
+        fs_mode_agents = [a.strip() for a in os.getenv("FS_MODE_AGENTS", "Meridian").split(",") if a.strip()]
+        is_fs_mode_agent = room_agent_name and room_agent_name in fs_mode_agents
+        use_fs_mode = fs_enabled is True or (fs_enabled is None and (is_huly_agent or is_fs_mode_agent))
         
         if use_fs_mode:
             agent_id = room_agent_id

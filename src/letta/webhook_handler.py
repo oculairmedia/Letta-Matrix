@@ -41,6 +41,9 @@ CONVERSATION_TTL_SECONDS = 300
 
 
 def register_matrix_conversation(agent_id: str, opencode_sender: Optional[str] = None) -> None:
+    existing = _active_matrix_conversations.get(agent_id)
+    if existing and opencode_sender is None:
+        opencode_sender = existing.get("opencode_sender")
     _active_matrix_conversations[agent_id] = {
         "registered_at": datetime.now(),
         "opencode_sender": opencode_sender
@@ -415,6 +418,16 @@ class LettaWebhookHandler:
             f"[Webhook] Received agent.run.completed for agent {agent_id}, "
             f"run {run_id or 'unknown'}, messages: {len(messages or [])}"
         )
+        
+        disabled_agent_ids = [a.strip() for a in os.getenv("DISABLED_AGENT_IDS", "").split(",") if a.strip()]
+        if agent_id in disabled_agent_ids:
+            logger.info(f"[Webhook] Skipping disabled agent {agent_id}")
+            return WebhookResult(
+                success=True,
+                response_posted=False,
+                error="disabled_agent",
+                agent_id=agent_id
+            )
         
         # Extract content
         user_content = extract_user_content(messages)
