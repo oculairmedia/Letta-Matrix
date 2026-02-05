@@ -198,8 +198,9 @@ export class IdentityManager {
           // Try to reset password via admin API (may not work on all servers)
           try {
             await this.resetUserPassword(localpart, password);
-            console.log('[IdentityManager] Password reset succeeded');
-            return { name: localpart, displayname: displayName };
+            console.log('[IdentityManager] Password reset succeeded, logging in...');
+            const resetLoginToken = await this.loginUser(localpart, password);
+            return { name: localpart, displayname: displayName, access_token: resetLoginToken };
           } catch (resetErr) {
             // Last resort: Check if user exists in identities.json with a stored password
             const allIdentities = await this.storage.getAllIdentitiesAsync();
@@ -277,7 +278,9 @@ export class IdentityManager {
         return;
       }
       
-      console.warn('[IdentityManager] Password reset failed:', await v2Response.text());
+      const errorText = await v2Response.text();
+      console.log('[IdentityManager] Password reset failed:', errorText);
+      throw new Error(`Admin API password reset failed: ${errorText}`);
     } catch (err) {
       console.error('[IdentityManager] Error resetting password:', err);
       throw new Error(`Failed to reset password for existing user ${userId}`);
