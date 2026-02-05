@@ -4,6 +4,7 @@
 
 import type { MatrixIdentity, IdentityProvisionRequest } from '../types/index.js';
 import type { Storage } from './storage.js';
+import { getAdminToken } from './admin-auth.js';
 
 interface SynapseUserCreateRequest {
   password?: string;
@@ -24,6 +25,7 @@ export class IdentityManager {
   private homeserverUrl: string;
   private adminToken: string;
   private serverName: string;
+  private adminRoomId: string | null = null; // Cached admin room ID for Tuwunel
 
   constructor(
     storage: Storage,
@@ -32,11 +34,17 @@ export class IdentityManager {
     serverName?: string
   ) {
     this.storage = storage;
-    this.homeserverUrl = homeserverUrl.replace(/\/$/, ''); // Remove trailing slash
+    this.homeserverUrl = homeserverUrl.replace(/\/$/, '');
     this.adminToken = adminToken;
-    // Use explicit server name or extract from MATRIX_SERVER_NAME env var or fall back to URL
     this.serverName = serverName || process.env.MATRIX_SERVER_NAME || this.extractDomainFromUrl();
     console.log(`[IdentityManager] Using server name: ${this.serverName}`);
+  }
+  
+  private async getToken(): Promise<string> {
+    if (this.adminToken) {
+      return this.adminToken;
+    }
+    return getAdminToken();
   }
   
   /**
@@ -235,20 +243,27 @@ export class IdentityManager {
   }
   
   /**
-   * Reset user password via admin API (for when user exists but we lost credentials)
+   * Reset user password - tries Tuwunel admin room first, then Synapse API fallback
    */
   private async resetUserPassword(localpart: string, newPassword: string): Promise<void> {
     const userId = `@${localpart}:${this.extractDomain()}`;
-    // Try Synapse admin API first
-    const synapseUrl = `${this.homeserverUrl}/_synapse/admin/v1/reset_password/${encodeURIComponent(userId)}`;
-    
     console.log('[IdentityManager] Resetting password for:', userId);
     
     try {
+      await this.resetPasswordViaTuwunelAdminRoom(localpart, newPassword);
+      console.log('[IdentityManager] Password reset successful via Tuwunel admin room');
+      return;
+    } catch (tuwunelErr) {
+      console.log('[IdentityManager] Tuwunel admin room failed, trying Synapse API:', tuwunelErr);
+    }
+    
+    try {
+      const token = await this.getToken();
+      const synapseUrl = `${this.homeserverUrl}/_synapse/admin/v1/reset_password/${encodeURIComponent(userId)}`;
       const response = await fetch(synapseUrl, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.adminToken}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ 
@@ -262,12 +277,11 @@ export class IdentityManager {
         return;
       }
       
-      // If Synapse API fails, try Tuwunel/generic approach - update user via v2 API
       const v2Url = `${this.homeserverUrl}/_synapse/admin/v2/users/${encodeURIComponent(userId)}`;
       const v2Response = await fetch(v2Url, {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${this.adminToken}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ password: newPassword })
@@ -279,12 +293,94 @@ export class IdentityManager {
       }
       
       const errorText = await v2Response.text();
-      console.log('[IdentityManager] Password reset failed:', errorText);
-      throw new Error(`Admin API password reset failed: ${errorText}`);
+      throw new Error(`All password reset methods failed. Last error: ${errorText}`);
     } catch (err) {
-      console.error('[IdentityManager] Error resetting password:', err);
-      throw new Error(`Failed to reset password for existing user ${userId}`);
+      console.error('[IdentityManager] All password reset methods failed:', err);
+      throw new Error(`Failed to reset password for ${userId}`);
     }
+  }
+
+  /**
+   * Reset password via Tuwunel admin room command
+   * Sends "!admin users reset-password {localpart} {password}" to #admins:{serverName}
+   */
+  private async resetPasswordViaTuwunelAdminRoom(localpart: string, newPassword: string): Promise<void> {
+    const token = await this.getToken();
+    const adminRoomId = await this.getOrJoinAdminRoom(token);
+    
+    const command = `!admin users reset-password ${localpart} ${newPassword}`;
+    const txnId = `mcp_pwd_reset_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    
+    const sendUrl = `${this.homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(adminRoomId)}/send/m.room.message/${txnId}`;
+    
+    console.log('[IdentityManager] Sending admin command to room:', adminRoomId);
+    
+    const response = await fetch(sendUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        msgtype: 'm.text',
+        body: command
+      })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to send admin command: ${response.status} ${errorText}`);
+    }
+    
+    // Wait for command to process (Tuwunel processes commands async)
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    console.log('[IdentityManager] Admin command sent successfully');
+  }
+
+  /**
+   * Get or join the Tuwunel admin room (#admins:{serverName})
+   */
+  private async getOrJoinAdminRoom(token: string): Promise<string> {
+    if (this.adminRoomId) {
+      return this.adminRoomId;
+    }
+    
+    const adminRoomAlias = `#admins:${this.serverName}`;
+    console.log('[IdentityManager] Resolving admin room:', adminRoomAlias);
+    
+    const resolveUrl = `${this.homeserverUrl}/_matrix/client/v3/directory/room/${encodeURIComponent(adminRoomAlias)}`;
+    const resolveResponse = await fetch(resolveUrl, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    
+    if (!resolveResponse.ok) {
+      throw new Error(`Failed to resolve admin room alias ${adminRoomAlias}: ${resolveResponse.status}`);
+    }
+    
+    const { room_id } = await resolveResponse.json() as { room_id: string };
+    console.log('[IdentityManager] Admin room ID:', room_id);
+    
+    const joinUrl = `${this.homeserverUrl}/_matrix/client/v3/join/${encodeURIComponent(room_id)}`;
+    const joinResponse = await fetch(joinUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: '{}'
+    });
+    
+    if (!joinResponse.ok && joinResponse.status !== 403) {
+      // 403 usually means already joined, which is fine
+      const errorText = await joinResponse.text();
+      if (!errorText.includes('already in the room') && !errorText.includes('M_FORBIDDEN')) {
+        console.warn('[IdentityManager] Join warning:', joinResponse.status, errorText);
+      }
+    }
+    
+    this.adminRoomId = room_id;
+    return room_id;
   }
 
   /**
@@ -379,6 +475,7 @@ export class IdentityManager {
       throw new Error(`Identity not found: ${id}`);
     }
 
+    const token = await this.getToken();
     const url = `${this.homeserverUrl}/_synapse/admin/v2/users/${identity.mxid}`;
 
     const body: Partial<SynapseUserCreateRequest> = {};
@@ -394,7 +491,7 @@ export class IdentityManager {
     const response = await fetch(url, {
       method: 'PUT',
       headers: {
-        'Authorization': `Bearer ${this.adminToken}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(body)
@@ -459,13 +556,13 @@ export class IdentityManager {
       return false;
     }
 
-    // Deactivate user via Synapse Admin API
+    const token = await this.getToken();
     const url = `${this.homeserverUrl}/_synapse/admin/v1/deactivate/${identity.mxid}`;
     
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.adminToken}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ erase: false })

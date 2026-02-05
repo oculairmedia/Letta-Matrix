@@ -185,7 +185,29 @@ Run the health check script:
 ./scripts/health-check-auth.sh
 ```
 
-### Recovery Steps
+### Auto-Recovery (Identity Bridge)
+
+The identity bridge (`matrix-messaging-mcp`) now handles password resets automatically via Tuwunel's admin room. When an identity fails to authenticate, the bridge:
+
+1. Sends `!admin users reset-password <localpart> <password>` to `#admins:matrix.oculair.ca`
+2. Tuwunel processes the command and resets the password
+3. The bridge then logs in with the new password
+
+This happens transparently during identity provisioning/recovery.
+
+### Manual Recovery Steps
+
+If auto-recovery fails or you need to reset passwords manually:
+
+**Option A: Admin Room (Tuwunel running)**
+
+Send commands to `#admins:matrix.oculair.ca` as the admin user:
+
+```
+!admin users reset-password <localpart> <new_password>
+```
+
+**Option B: CLI (Tuwunel stopped)**
 
 1. **Stop Tuwunel**:
 
@@ -193,7 +215,7 @@ Run the health check script:
    docker compose stop tuwunel
    ```
 
-2. **Reset failed user passwords** (run for each failed user):
+2. **Reset failed user passwords**:
 
    ```bash
    timeout 60 docker run --rm --entrypoint "" \
