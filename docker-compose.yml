@@ -259,6 +259,34 @@ services:
       - homepage.href=http://192.168.50.90:2586
       - homepage.description=Push notification service for alerts
 
+  ntfy-bridge:
+    image: node:22-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
+    working_dir: /app
+    command: ["node", "index.js"]
+    environment:
+      - NTFY_URL=http://ntfy:80
+      - NTFY_TOPICS=alerts,failures,deploys,errors
+      - BRIDGE_URL=http://matrix-messaging-mcp:3100
+      - PM_AGENT=Huly - Matrix Synapse Deployment
+      - CALLER_DIR=/opt/stacks/matrix-synapse-deployment
+    volumes:
+      - ./ntfy-bridge:/app:ro
+    networks:
+      - matrix-internal
+    depends_on:
+      ntfy:
+        condition: service_healthy
+      matrix-messaging-mcp:
+        condition: service_healthy
+    labels:
+      - homepage.group=Monitoring
+      - homepage.name=ntfy-to-PM Bridge
+      - homepage.icon=si-ntfy
+      - homepage.description=Forwards ntfy alerts to PM agent for triage
+
 networks:
   matrix-internal:
     driver: bridge
