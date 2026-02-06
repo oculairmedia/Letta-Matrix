@@ -1,0 +1,17 @@
+id: telegram
+as_token: oJ2p5CssiClCyT8_Sn8E4j24cus9vp-WlvUvK4uk01gpsMJFRXE61BQLENDQ_At8
+hs_token: aiTVynLr-MB6YqlNNvhjkNYzOxdjTjFTj5bFkzgG_f39ITgedZogBD7g4aGOsuxn
+namespaces:
+    users:
+    - exclusive: true
+      regex: '@telegram_.*:matrix\.oculair\.ca'
+    - exclusive: true
+      regex: '@telegrambot:matrix\.oculair\.ca'
+    aliases:
+    - exclusive: true
+      regex: \#telegram_.*:matrix\.oculair\.ca
+url: http://mautrix-telegram:29317
+sender_localpart: NdtwigJ5w-Ays5gc8jQgNQF0qQcZ9mVHdXzzZozaz1ZkD84IJxk7UnA0YpDZbeSc
+rate_limited: false
+de.sorunome.msc2409.push_ephemeral: true
+receive_ephemeral: true
