@@ -8,6 +8,11 @@ These tests verify that all agent rooms have the required members:
 - @agent_mail_bridge:matrix.oculair.ca
 
 Run with: pytest tests/integration/test_room_membership.py -v
+
+Tests that query the live Matrix homeserver and database are marked with
+@pytest.mark.slow so they can be excluded from fast CI runs:
+    pytest -m "not slow"          # Fast CI (PR checks)
+    pytest -m "slow"              # Nightly / manual verification
 """
 import os
 import pytest
@@ -112,6 +117,9 @@ async def matrix_client():
     return client
 
 
+@pytest.mark.slow
+@pytest.mark.requires_matrix
+@pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_all_agent_rooms_have_required_members(matrix_client):
     """
@@ -158,6 +166,9 @@ async def test_all_agent_rooms_have_required_members(matrix_client):
         pytest.fail(f"Found {len(failures)} rooms with missing required members:{failure_report}")
 
 
+@pytest.mark.slow
+@pytest.mark.requires_matrix
+@pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_specific_agent_room_membership(matrix_client):
     """
@@ -189,6 +200,9 @@ async def test_specific_agent_room_membership(matrix_client):
         )
 
 
+@pytest.mark.slow
+@pytest.mark.requires_matrix
+@pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_agent_mail_bridge_in_all_rooms(matrix_client):
     """
@@ -215,7 +229,10 @@ async def test_agent_mail_bridge_in_all_rooms(matrix_client):
         )
 
 
-@pytest.mark.asyncio  
+@pytest.mark.slow
+@pytest.mark.requires_matrix
+@pytest.mark.requires_db
+@pytest.mark.asyncio
 async def test_letta_bot_in_all_rooms(matrix_client):
     """
     Verify @letta is in all agent rooms.
@@ -241,6 +258,9 @@ async def test_letta_bot_in_all_rooms(matrix_client):
         )
 
 
+@pytest.mark.slow
+@pytest.mark.requires_matrix
+@pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_admin_in_all_rooms(matrix_client):
     """
@@ -267,6 +287,9 @@ async def test_admin_in_all_rooms(matrix_client):
         )
 
 
+@pytest.mark.slow
+@pytest.mark.requires_matrix
+@pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_room_member_count_reasonable(matrix_client):
     """
@@ -298,6 +321,9 @@ async def test_room_member_count_reasonable(matrix_client):
         pytest.fail(f"Room member count issues:\n  " + "\n  ".join(issues))
 
 
+@pytest.mark.slow
+@pytest.mark.requires_matrix
+@pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_ensure_required_members_function(matrix_client):
     """
