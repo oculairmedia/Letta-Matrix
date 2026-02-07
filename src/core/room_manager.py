@@ -283,7 +283,14 @@ class MatrixRoomManager:
                 
                 async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status != 200:
-                        logger.error(f"Failed to login as agent {agent_username}")
+                        error_text = await response.text()
+                        logger.error(f"Failed to login as agent {agent_username}: {response.status} - {error_text}")
+                        if response.status == 403 or "M_FORBIDDEN" in error_text:
+                            try:
+                                from src.matrix.alerting import alert_auth_failure
+                                await alert_auth_failure(agent_username, room_id)
+                            except Exception as alert_error:
+                                logger.warning(f"Failed to send auth-failure alert for {agent_username}: {alert_error}")
                         return {user: "failed" for user in self.REQUIRED_ROOM_MEMBERS}
                     
                     auth_data = await response.json()

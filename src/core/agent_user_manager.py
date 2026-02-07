@@ -242,7 +242,7 @@ class AgentUserManager:
         """Get an admin access token - delegates to user_manager"""
         return await self.user_manager.get_admin_token()
 
-    async def check_user_exists(self, username: str) -> bool:
+    async def check_user_exists(self, username: str) -> str:
         """Check if a Matrix user exists - delegates to user_manager"""
         return await self.user_manager.check_user_exists(username)
     async def create_matrix_user(self, username: str, password: str, display_name: str) -> bool:

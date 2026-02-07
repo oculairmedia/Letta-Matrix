@@ -9,7 +9,7 @@ import re
 import secrets
 import string
 import aiohttp
-from typing import Optional
+from typing import Literal, Optional
 
 logger = logging.getLogger("matrix_client.user_manager")
 
@@ -73,14 +73,16 @@ class MatrixUserManager:
             logger.error(f"Error getting admin token: {e}")
             return None
 
-    async def check_user_exists(self, username: str) -> bool:
-        """Check if a Matrix user exists (Tuwunel compatible)
+    async def check_user_exists(self, username: str) -> Literal["exists_healthy", "exists_auth_failed", "not_found"]:
+        """Check Matrix user state (Tuwunel compatible)
 
         Args:
             username: Matrix username (localpart only, without @domain)
 
         Returns:
-            True if user exists, False otherwise
+            - exists_healthy: user exists and credentials are valid
+            - exists_auth_failed: user exists but auth is failing (e.g., M_FORBIDDEN)
+            - not_found: user does not exist
         """
         try:
             # Try to login - if it fails with wrong password, user exists
@@ -102,42 +104,34 @@ class MatrixUserManager:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
-                        # Somehow logged in with dummy password (shouldn't happen)
-                        logger.debug(f"User {username} exists (authenticated with test password)")
-                        return True
+                        logger.debug(f"User {username} exists and accepted test password")
+                        return "exists_healthy"
                     elif response.status == 403:
-                        # Wrong password = user exists
                         try:
                             error_data = await response.json()
                             errcode = error_data.get("errcode", "")
                             if errcode == "M_FORBIDDEN":
-                                # Wrong password means user exists
-                                logger.debug(f"User {username} exists (M_FORBIDDEN on login)")
-                                return True
-                            elif errcode == "M_UNKNOWN":
-                                # Unknown user
-                                logger.debug(f"User {username} does not exist (M_UNKNOWN)")
-                                return False
+                                logger.debug(f"User {username} exists but auth failed (M_FORBIDDEN)")
+                                return "exists_auth_failed"
+                            elif errcode in {"M_UNKNOWN", "M_NOT_FOUND"}:
+                                logger.debug(f"User {username} does not exist ({errcode})")
+                                return "not_found"
                             else:
-                                # Assume user exists for other 403 errors
-                                logger.debug(f"User {username} exists (403 with {errcode})")
-                                return True
+                                logger.debug(f"User {username} returned 403 with {errcode}; treating as auth failed")
+                                return "exists_auth_failed"
                         except:
-                            # If we can't parse JSON, assume 403 = user exists
-                            logger.debug(f"User {username} exists (403 status)")
-                            return True
+                            logger.debug(f"User {username} returned 403; treating as auth failed")
+                            return "exists_auth_failed"
                     elif response.status == 404:
-                        # User not found
                         logger.debug(f"User {username} does not exist (404)")
-                        return False
+                        return "not_found"
                     else:
-                        # For other errors, log and assume user doesn't exist
-                        logger.warning(f"Unexpected status {response.status} checking user {username}, assuming doesn't exist")
-                        return False
+                        logger.warning(f"Unexpected status {response.status} checking user {username}; treating as not_found")
+                        return "not_found"
 
         except Exception as e:
             logger.error(f"Error checking if user {username} exists: {e}")
-            return False
+            return "not_found"
 
     async def create_matrix_user(self, username: str, password: str, display_name: str) -> bool:
         """Create a new Matrix user via registration API (Tuwunel compatible)
@@ -436,9 +430,18 @@ class MatrixUserManager:
             try:
                 # Extract localpart from '@user:domain'
                 user_local = full_user_id.split(":")[0].replace("@", "")
-                exists = await self.check_user_exists(user_local)
-                if exists:
+                state = await self.check_user_exists(user_local)
+                if state == "exists_healthy":
                     logger.info(f"Core user already exists: {full_user_id}")
+                    continue
+
+                if state == "exists_auth_failed":
+                    logger.error(f"Core user auth failed: {full_user_id} (user exists, credentials invalid)")
+                    try:
+                        from src.matrix.alerting import alert_auth_failure
+                        await alert_auth_failure(user_local, "core-user-check")
+                    except Exception as alert_error:
+                        logger.warning(f"Failed to send auth-failure alert for {full_user_id}: {alert_error}")
                     continue
 
                 logger.info(f"Core user missing, creating: {full_user_id}")
