@@ -25,3 +25,4 @@ class AgentUserMapping:
     room_id: Optional[str] = None
     room_created: bool = False
     invitation_status: Optional[Dict[str, str]] = None
+    removed_at: Optional[str] = None

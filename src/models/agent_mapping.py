@@ -1,7 +1,7 @@
 """
 SQLAlchemy models for agent mappings database storage.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, ForeignKey, Index
 from sqlalchemy.ext.declarative import declarative_base
@@ -24,6 +24,7 @@ class AgentMapping(Base):
     room_created = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    removed_at = Column(DateTime, nullable=True, default=None)  # Soft-delete timestamp; cleaned up after grace period
 
     # Relationship to invitation status
     invitations = relationship("InvitationStatus", back_populates="agent", cascade="all, delete-orphan")
@@ -38,7 +39,7 @@ class AgentMapping(Base):
     def to_dict(self) -> Dict:
         """Convert to dictionary format (compatible with old JSON structure)"""
         invitation_status = {inv.invitee: inv.status for inv in self.invitations}
-        return {
+        result = {
             "agent_id": self.agent_id,
             "agent_name": self.agent_name,
             "matrix_user_id": self.matrix_user_id,
@@ -48,6 +49,9 @@ class AgentMapping(Base):
             "created": True,  # Backward compatibility
             "invitation_status": invitation_status
         }
+        if self.removed_at is not None:
+            result["removed_at"] = self.removed_at.isoformat()
+        return result
 
 
 class InvitationStatus(Base):
@@ -151,15 +155,17 @@ class AgentMappingDB:
         finally:
             session.close()
 
-    def get_by_room_id(self, room_id: str) -> Optional[AgentMapping]:
+    def get_by_room_id(self, room_id: str, include_removed: bool = False) -> Optional[AgentMapping]:
         """Get mapping by room ID - used for routing messages"""
         session = self.Session()
         try:
-            # Expire all cached data to ensure fresh read
             session.expire_all()
-            mapping = session.query(AgentMapping).options(
+            query = session.query(AgentMapping).options(
                 joinedload(AgentMapping.invitations)
-            ).filter_by(room_id=room_id).first()
+            ).filter_by(room_id=room_id)
+            if not include_removed:
+                query = query.filter(AgentMapping.removed_at.is_(None))
+            mapping = query.first()
             if mapping:
                 session.expunge(mapping)
             return mapping
@@ -308,6 +314,64 @@ class AgentMappingDB:
                 session.add(inv)
 
             session.commit()
+        finally:
+            session.close()
+
+    def soft_delete(self, agent_id: str) -> Optional[AgentMapping]:
+        """Mark an agent as removed by setting removed_at timestamp."""
+        return self.update(agent_id, removed_at=datetime.utcnow())
+
+    def clear_removed(self, agent_id: str) -> Optional[AgentMapping]:
+        """Clear removed_at flag (agent reappeared before grace period expired)."""
+        return self.update(agent_id, removed_at=None)
+
+    def get_expired_removals(self, grace_period_hours: int = 2) -> List[AgentMapping]:
+        """Get mappings whose removed_at is older than the grace period."""
+        cutoff = datetime.utcnow() - timedelta(hours=grace_period_hours)
+        session = self.Session()
+        try:
+            session.expire_all()
+            mappings = session.query(AgentMapping).options(
+                joinedload(AgentMapping.invitations)
+            ).filter(
+                AgentMapping.removed_at.isnot(None),
+                AgentMapping.removed_at < cutoff
+            ).all()
+            for mapping in mappings:
+                session.expunge(mapping)
+            return mappings
+        finally:
+            session.close()
+
+    def get_pending_removals(self) -> List[AgentMapping]:
+        """Get all mappings marked for removal (regardless of grace period)."""
+        session = self.Session()
+        try:
+            session.expire_all()
+            mappings = session.query(AgentMapping).options(
+                joinedload(AgentMapping.invitations)
+            ).filter(
+                AgentMapping.removed_at.isnot(None)
+            ).all()
+            for mapping in mappings:
+                session.expunge(mapping)
+            return mappings
+        finally:
+            session.close()
+
+    def get_all_active(self) -> List[AgentMapping]:
+        """Get all mappings that are NOT marked for removal."""
+        session = self.Session()
+        try:
+            session.expire_all()
+            mappings = session.query(AgentMapping).options(
+                joinedload(AgentMapping.invitations)
+            ).filter(
+                AgentMapping.removed_at.is_(None)
+            ).all()
+            for mapping in mappings:
+                session.expunge(mapping)
+            return mappings
         finally:
             session.close()
 

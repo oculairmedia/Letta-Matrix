@@ -450,10 +450,28 @@ class AgentUserManager:
                                     logger.info(f"✅ Invited {user_id} to {agent['name']}'s room")
                                 elif status == "failed":
                                     logger.warning(f"⚠️  Failed to ensure {user_id} in {agent['name']}'s room")
-        # TODO: Optionally handle removed agents (deactivate users?)
+        # --- Agent lifecycle: soft-delete removed agents, cleanup after grace period ---
         removed_agents = existing_agent_ids - current_agent_ids
         if removed_agents:
-            logger.info(f"Found {len(removed_agents)} agents that no longer exist: {removed_agents}")
+            from src.models.agent_mapping import AgentMappingDB
+            db = AgentMappingDB()
+            for agent_id in removed_agents:
+                mapping = self.mappings.get(agent_id)
+                if mapping and not mapping.removed_at:
+                    logger.info(f"Agent {agent_id} removed from Letta — marking for cleanup (2h grace period)")
+                    db.soft_delete(agent_id)
+                    mapping.removed_at = "pending"
+
+        for agent_id in current_agent_ids:
+            mapping = self.mappings.get(agent_id)
+            if mapping and mapping.removed_at:
+                logger.info(f"Agent {agent_id} reappeared — cancelling pending removal")
+                from src.models.agent_mapping import AgentMappingDB
+                db = AgentMappingDB()
+                db.clear_removed(agent_id)
+                mapping.removed_at = None
+
+        await self._cleanup_expired_agents()
 
         # Save updated mappings
         await self.save_mappings()
@@ -480,6 +498,48 @@ class AgentUserManager:
                 logger.info(f"[MatrixMemory] Block sync: {result.get('synced', 0)} agents updated")
         except Exception as e:
             logger.warning(f"[MatrixMemory] Block sync failed (non-critical): {e}")
+
+    async def _cleanup_expired_agents(self, grace_period_hours: int = 2):
+        """Clean up agents whose removal grace period has expired.
+        
+        For each expired agent: leave room as all members, remove from space, delete DB mapping.
+        """
+        from src.models.agent_mapping import AgentMappingDB
+        db = AgentMappingDB()
+        expired = db.get_expired_removals(grace_period_hours)
+
+        if not expired:
+            return
+
+        logger.info(f"Cleaning up {len(expired)} agents past {grace_period_hours}h grace period")
+
+        space_id = self.space_manager.get_space_id()
+
+        for mapping in expired:
+            agent_id = str(mapping.agent_id)
+            room_id = str(mapping.room_id) if mapping.room_id is not None else None
+            matrix_user_id = str(mapping.matrix_user_id)
+            username = matrix_user_id.split(":")[0].replace("@", "")
+            password = str(mapping.matrix_password)
+
+            logger.info(f"Cleaning up expired agent {agent_id} (user={matrix_user_id}, room={room_id})")
+
+            if room_id:
+                if space_id:
+                    await self.room_manager.remove_room_from_space(room_id, space_id)
+
+                await self.room_manager.leave_room_as_user(room_id, username, password)
+                await self.room_manager.leave_room_as_admin(room_id)
+
+                letta_username = os.getenv("MATRIX_LETTA_USERNAME", "letta")
+                letta_password = os.getenv("MATRIX_LETTA_PASSWORD", "letta")
+                await self.room_manager.leave_room_as_user(room_id, letta_username, letta_password)
+
+            db.delete(agent_id)
+            if agent_id in self.mappings:
+                del self.mappings[agent_id]
+
+            logger.info(f"Cleaned up agent {agent_id}: room left, mapping deleted")
 
     async def create_user_for_agent(self, agent: dict):
         """Create a Matrix user for a specific agent"""

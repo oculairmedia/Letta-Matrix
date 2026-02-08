@@ -41,7 +41,7 @@ def invalidate_cache():
     _cache_valid = False
 
 
-def get_all_mappings() -> Dict[str, dict]:
+def get_all_mappings(include_removed: bool = False) -> Dict[str, dict]:
     """
     Get all agent mappings as a dictionary.
     
@@ -51,13 +51,17 @@ def get_all_mappings() -> Dict[str, dict]:
     global _mapping_cache, _cache_valid
     
     if _cache_valid and _mapping_cache is not None:
-        return _mapping_cache
+        if include_removed:
+            return _mapping_cache
+        return {k: v for k, v in _mapping_cache.items() if "removed_at" not in v}
     
     try:
         db = _get_db()
         _mapping_cache = db.export_to_dict()
         _cache_valid = True
-        return _mapping_cache
+        if include_removed:
+            return _mapping_cache
+        return {k: v for k, v in _mapping_cache.items() if "removed_at" not in v}
     except Exception as e:
         logger.error(f"Error loading mappings from database: {e}")
         return {}
@@ -76,7 +80,7 @@ def get_mapping_by_agent_id(agent_id: str) -> Optional[dict]:
     try:
         db = _get_db()
         mapping = db.get_by_agent_id(agent_id)
-        if mapping:
+        if mapping and mapping.removed_at is None:
             return mapping.to_dict()
         return None
     except Exception as e:
@@ -97,7 +101,7 @@ def get_mapping_by_room_id(room_id: str) -> Optional[dict]:
     try:
         db = _get_db()
         mapping = db.get_by_room_id(room_id)
-        if mapping:
+        if mapping and mapping.removed_at is None:
             return mapping.to_dict()
         return None
     except Exception as e:
@@ -118,7 +122,7 @@ def get_mapping_by_matrix_user(matrix_user_id: str) -> Optional[dict]:
     try:
         db = _get_db()
         mapping = db.get_by_matrix_user(matrix_user_id)
-        if mapping:
+        if mapping and mapping.removed_at is None:
             return mapping.to_dict()
         return None
     except Exception as e:
