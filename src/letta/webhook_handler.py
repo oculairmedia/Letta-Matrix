@@ -433,6 +433,19 @@ class LettaWebhookHandler:
         user_content = extract_user_content(messages)
         assistant_content = extract_assistant_content(messages)
         
+        # Skip background/silent-mode tasks (heartbeat, email poll, cron jobs)
+        # LettaBot wraps these with a [SILENT MODE] banner in the user prompt
+        if user_content and "[SILENT MODE]" in user_content:
+            logger.info(
+                f"[Webhook] Skipping silent-mode background task for agent {agent_id}"
+            )
+            return WebhookResult(
+                success=True,
+                response_posted=False,
+                error="silent_mode_background_task",
+                agent_id=agent_id
+            )
+        
         if not assistant_content:
             logger.info(
                 f"[Webhook] No assistant message content in webhook for agent {agent_id}"
