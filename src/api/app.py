@@ -31,25 +31,9 @@ except ImportError as e:
     logger.warning(f"Agent sync not available: {e}")
     AGENT_SYNC_AVAILABLE = False
 
-# Import Letta webhook functionality
-try:
-    from ..letta.webhook_handler import (
-        LettaWebhookPayload,
-        LettaWebhookHandler,
-        WebhookConfig,
-        initialize_webhook_handler,
-        get_webhook_handler,
-    )
-    from ..bridges.letta_matrix_bridge import (
-        LettaMatrixBridge,
-        BridgeConfig,
-        initialize_bridge,
-        get_bridge,
-    )
-    LETTA_WEBHOOK_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Letta webhook not available: {e}")
-    LETTA_WEBHOOK_AVAILABLE = False
+# Letta webhook receiver removed — all responses now flow through
+# LettaBot WS gateway → bridge streaming path.
+LETTA_WEBHOOK_AVAILABLE = False
 
 try:
     from src.api.routes.identity import router as identity_router, dm_router, internal_router
@@ -131,6 +115,7 @@ class NewAgentNotification(BaseModel):
     timestamp: str
 
 class WebhookResponse(BaseModel):
+    """Used by /webhook/new-agent only."""
     success: bool
     message: str
     timestamp: str
@@ -490,73 +475,6 @@ async def new_agent_webhook(notification: NewAgentNotification, background_tasks
             message=f"Error: {str(e)}",
             timestamp=datetime.now().isoformat()
         )
-
-
-@app.post("/webhooks/letta/agent-response")
-async def letta_agent_response_webhook(request: dict, background_tasks: BackgroundTasks):
-    """
-    Webhook endpoint for Letta agent.run.completed events.
-    
-    This receives webhooks from Letta when an agent completes a run,
-    and posts the response to the agent's Matrix room as an audit message.
-    """
-    if not LETTA_WEBHOOK_AVAILABLE:
-        return JSONResponse(
-            status_code=503,
-            content={"success": False, "error": "Letta webhook functionality not available"}
-        )
-    
-    try:
-        payload = LettaWebhookPayload(**request)
-        
-        if payload.event_type != "agent.run.completed":
-            logger.info(f"Ignoring non-run-completed webhook: {payload.event_type}")
-            return {"success": True, "message": "Event type ignored", "event_type": payload.event_type}
-        
-        handler = get_webhook_handler()
-        if not handler:
-            handler = initialize_webhook_handler()
-            bridge = initialize_bridge()
-            handler.set_bridge(bridge)
-        
-        async def process_webhook():
-            try:
-                result = await handler.handle_run_completed(payload)
-                if result.success:
-                    logger.info(f"Webhook processed for agent {result.agent_id}: posted={result.response_posted}")
-                else:
-                    logger.warning(f"Webhook processing failed for agent {result.agent_id}: {result.error}")
-            except Exception as e:
-                logger.exception(f"Error processing Letta webhook: {e}")
-        
-        background_tasks.add_task(process_webhook)
-        
-        return {"success": True, "message": "Webhook received", "agent_id": payload.agent_id}
-        
-    except Exception as e:
-        logger.exception(f"Error parsing Letta webhook: {e}")
-        return JSONResponse(
-            status_code=400,
-            content={"success": False, "error": str(e)}
-        )
-
-
-class ConversationRegistration(BaseModel):
-    agent_id: str
-    matrix_event_id: Optional[str] = None
-    matrix_room_id: Optional[str] = None
-    opencode_sender: Optional[str] = None
-
-
-@app.post("/conversations/register")
-async def register_matrix_conversation_endpoint(registration: ConversationRegistration):
-    if not LETTA_WEBHOOK_AVAILABLE:
-        return JSONResponse(status_code=503, content={"success": False, "error": "Webhook module not available"})
-    
-    from src.letta.webhook_handler import register_matrix_conversation
-    register_matrix_conversation(registration.agent_id, registration.opencode_sender)
-    logger.info(f"Registered Matrix conversation for agent {registration.agent_id}, opencode_sender={registration.opencode_sender}")
-    return {"success": True, "agent_id": registration.agent_id, "opencode_sender": registration.opencode_sender}
 
 
 @app.get("/agents/mappings")

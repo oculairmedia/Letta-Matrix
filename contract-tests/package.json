@@ -1,0 +1,19 @@
+{
+  "name": "matrix-letta-bridge-contract-tests",
+  "version": "1.0.0",
+  "description": "Contract tests for Matrix-Letta bridge - validates behavioral parity between Python and TypeScript implementations",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:health": "vitest run --reporter=verbose src/tests/health.test.ts",
+    "test:agent-lifecycle": "vitest run --reporter=verbose src/tests/agent-lifecycle.test.ts",
+    "test:message-routing": "vitest run --reporter=verbose src/tests/message-routing.test.ts",
+    "test:webhook": "vitest run --reporter=verbose src/tests/webhook.test.ts",
+    "test:streaming": "vitest run --reporter=verbose src/tests/streaming.test.ts"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0",
+    "typescript": "^5.7.0"
+  }
+}

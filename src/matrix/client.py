@@ -23,10 +23,6 @@ from src.core.agent_user_manager import run_agent_sync
 from src.matrix.event_dedupe import is_duplicate_event
 from src.matrix.poll_handler import process_agent_response, is_poll_command, handle_poll_vote, POLL_RESPONSE_TYPE
 
-# Cross-run tracking webhook URL (TypeScript MCP - deprecated)
-CONVERSATION_TRACKER_URL = os.getenv("CONVERSATION_TRACKER_URL", "http://192.168.50.90:3101")
-
-# Python Matrix API for conversation registration
 MATRIX_API_URL = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
 
 # Agent Mail MCP server URL for reverse bridge
@@ -65,56 +61,7 @@ async def cancel_all_letta_tasks() -> None:
     await asyncio.gather(*_active_letta_tasks.values(), return_exceptions=True)
     _active_letta_tasks.clear()
 
-async def register_conversation_for_tracking(
-    matrix_event_id: str,
-    matrix_room_id: str,
-    agent_id: str,
-    original_query: str,
-    logger: logging.Logger
-) -> bool:
-    """
-    Register a conversation with the webhook server for cross-run tracking.
-    This enables the system to link responses from subsequent Letta runs
-    back to the original Matrix message.
-    """
-    registered = False
-    
-    # Register with Python matrix-api (primary - prevents duplicate audit)
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{MATRIX_API_URL}/conversations/register",
-                json={"agent_id": agent_id, "matrix_event_id": matrix_event_id, "matrix_room_id": matrix_room_id},
-                timeout=aiohttp.ClientTimeout(total=5)
-            ) as resp:
-                if resp.status == 200:
-                    logger.info(f"[CROSS-RUN] Registered conversation with matrix-api for agent {agent_id}")
-                    registered = True
-    except Exception as e:
-        logger.debug(f"[CROSS-RUN] Could not register with matrix-api: {e}")
-    
-    # Also register with TypeScript tracker (for cross-run tool handling - legacy)
-    if CONVERSATION_TRACKER_URL:
-        try:
-            async with aiohttp.ClientSession() as session:
-                payload = {
-                    "operation": "start_conversation",
-                    "matrix_event_id": matrix_event_id,
-                    "matrix_room_id": matrix_room_id,
-                    "agent_id": agent_id,
-                    "original_query": original_query[:500] if original_query else ""
-                }
-                async with session.post(
-                    f"{CONVERSATION_TRACKER_URL}/conversations/start",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as resp:
-                    if resp.status == 200:
-                        logger.debug(f"[CROSS-RUN] Also registered with TypeScript tracker")
-        except Exception as e:
-            logger.debug(f"[CROSS-RUN] TypeScript tracker unavailable: {e}")
-    
-    return registered
+
 
 
 async def forward_to_agent_mail(
@@ -1855,15 +1802,6 @@ async def _process_letta_message(
             )
             logger.debug(f"[MATRIX-CONTEXT] Added context for sender {event_sender}")
 
-        if original_event_id and room_agent_id:
-            await register_conversation_for_tracking(
-                matrix_event_id=original_event_id,
-                matrix_room_id=room_id,
-                agent_id=room_agent_id,
-                original_query=message_to_send,
-                logger=logger
-            )
-
         if config.letta_streaming_enabled:
             logger.info("[STREAMING] Using streaming mode for Letta API call")
             letta_response = await send_to_letta_api_streaming(
@@ -2202,16 +2140,6 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                     is_mentioned=False,
                 )
                 logger.debug(f"[MATRIX-FS] Added context for sender {event.sender}")
-            
-            event_id_str = getattr(event, 'event_id', '') or ''
-            if event_id_str:
-                await register_conversation_for_tracking(
-                    matrix_event_id=event_id_str,
-                    matrix_room_id=room.room_id,
-                    agent_id=agent_id,
-                    original_query=event.body,
-                    logger=logger
-                )
             
             if config.letta_code_enabled:
                 try:

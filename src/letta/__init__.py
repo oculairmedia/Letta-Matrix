@@ -21,18 +21,6 @@ from src.letta.types import (
     extract_tool_calls,
 )
 
-from src.letta.webhook_handler import (
-    LettaWebhookHandler,
-    LettaWebhookPayload,
-    WebhookConfig,
-    WebhookResult,
-    initialize_webhook_handler,
-    get_webhook_handler,
-    extract_content_text,
-    extract_user_content,
-    extract_assistant_content as extract_webhook_assistant_content,
-)
-
 __all__ = [
     # Client
     "LettaConfig",
@@ -52,14 +40,4 @@ __all__ = [
     "is_tool_call",
     "extract_assistant_content",
     "extract_tool_calls",
-    # Webhook
-    "LettaWebhookHandler",
-    "LettaWebhookPayload",
-    "WebhookConfig",
-    "WebhookResult",
-    "initialize_webhook_handler",
-    "get_webhook_handler",
-    "extract_content_text",
-    "extract_user_content",
-    "extract_webhook_assistant_content",
 ]

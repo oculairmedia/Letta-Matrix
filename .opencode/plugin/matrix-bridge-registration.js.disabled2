@@ -1,0 +1,96 @@
+/**
+ * OpenCode Matrix Bridge Auto-Registration Plugin
+ *
+ * Automatically registers this OpenCode instance with the Matrix bridge
+ * when the session starts, and updates registration periodically.
+ */
+
+export const MatrixBridgeRegistration = async ({ project, client, $, directory, worktree, serverUrl }) => {
+  const BRIDGE_URL = process.env.OPENCODE_BRIDGE_URL || 'http://127.0.0.1:3201';
+
+  let registrationId = null;
+  let keepAliveInterval = null;
+  let port = null;
+  let hostname = '127.0.0.1';
+
+  // Parse port from serverUrl immediately (sync, no logging)
+  if (serverUrl) {
+    try {
+      const url = typeof serverUrl === 'string' ? new URL(serverUrl) : serverUrl;
+      port = parseInt(url.port, 10) || null;
+      hostname = url.hostname || '127.0.0.1';
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }
+
+  if (!port && process.env.OPENCODE_PORT) {
+    port = parseInt(process.env.OPENCODE_PORT, 10);
+  }
+
+  // Get the current session info
+  function getSessionInfo() {
+    const dirName = directory.split('/').filter(p => p).pop() || 'default';
+    const sessionId = `ses-${dirName}`;
+
+    return {
+      port,
+      hostname,
+      sessionId,
+      directory,
+      rooms: []
+    };
+  }
+
+  // Register with the bridge (fire and forget, no await needed)
+  function register() {
+    const sessionInfo = getSessionInfo();
+    if (!sessionInfo.port) return;
+
+    fetch(`${BRIDGE_URL}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sessionInfo)
+    })
+    .then(response => response.ok ? response.json() : null)
+    .then(result => {
+      if (result && !registrationId) {
+        registrationId = result.id;
+        // Start keep-alive only once
+        if (!keepAliveInterval) {
+          keepAliveInterval = setInterval(register, 30000);
+        }
+      }
+    })
+    .catch(() => {}); // Silently ignore errors
+  }
+
+  // Unregister from the bridge
+  function unregister() {
+    if (!registrationId) return;
+
+    fetch(`${BRIDGE_URL}/unregister`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: registrationId })
+    }).catch(() => {});
+
+    if (keepAliveInterval) {
+      clearInterval(keepAliveInterval);
+      keepAliveInterval = null;
+    }
+  }
+
+  // Delayed registration (non-blocking)
+  setTimeout(register, 3000);
+
+  return {
+    event: async ({ event }) => {
+      if (event.type === "session.created") {
+        register();
+      } else if (event.type === "session.deleted") {
+        unregister();
+      }
+    }
+  };
+};

@@ -108,25 +108,6 @@ class TestFsTaskMatrixContext:
         assert mock_event.body not in agent_response or "Agent response" in agent_response
 
     @pytest.mark.asyncio
-    async def test_webhook_skips_matrix_originated_messages(self):
-        """Webhook should not re-post user messages for Matrix-originated conversations."""
-        from src.letta.webhook_handler import (
-            register_matrix_conversation,
-            is_matrix_conversation,
-            clear_matrix_conversation
-        )
-        
-        agent_id = "agent-test-123"
-        
-        assert not is_matrix_conversation(agent_id)
-        
-        register_matrix_conversation(agent_id)
-        assert is_matrix_conversation(agent_id)
-        
-        clear_matrix_conversation(agent_id)
-        assert not is_matrix_conversation(agent_id)
-
-    @pytest.mark.asyncio
     async def test_huly_agent_defaults_to_fs_mode(self):
         """Huly agents should default to fs-task mode."""
         huly_agents = [

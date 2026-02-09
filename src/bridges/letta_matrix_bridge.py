@@ -18,7 +18,6 @@ from typing import Any, Dict, Optional
 
 import aiohttp
 
-from src.letta.webhook_handler import WebhookResult
 from src.matrix.identity_client_pool import send_as_agent, send_as_user
 
 logger = logging.getLogger(__name__)
@@ -321,63 +320,6 @@ class LettaMatrixBridge:
                 result = await resp.json()
                 return result.get("event_id", "")
     
-    async def post_webhook_response(
-        self,
-        agent_id: str,
-        user_content: Optional[str],
-        assistant_content: str,
-        run_id: Optional[str] = None
-    ) -> WebhookResult:
-        room_id = await self.find_matrix_room_for_agent(agent_id)
-        if not room_id:
-            logger.warning(f"[Bridge] No Matrix room found for agent {agent_id}")
-            return WebhookResult(
-                success=False,
-                response_posted=False,
-                error="no_matrix_room",
-                agent_id=agent_id
-            )
-        
-        try:
-            from src.letta.webhook_handler import get_opencode_sender
-            opencode_sender = get_opencode_sender(agent_id) or self.config.matrix_admin_username
-            
-            if user_content:
-                posted = await self.post_as_user(opencode_sender, room_id, user_content)
-                if not posted:
-                    await self._send_matrix_message(room_id=room_id, body=user_content, msgtype="m.text")
-                    logger.info(f"[Bridge] Posted user message as admin to {room_id}")
-            
-            if assistant_content.strip() in ("<no-reply/>", "<no-reply />"):
-                logger.info(f"[Bridge] Agent {agent_id} chose not to reply (no-reply marker)")
-                return WebhookResult(
-                    success=True,
-                    response_posted=False,
-                    response_content="<no-reply/>",
-                    agent_id=agent_id,
-                    room_id=room_id
-                )
-
-            await self.post_as_agent(agent_id, room_id, assistant_content)
-            
-            return WebhookResult(
-                success=True,
-                response_posted=True,
-                response_content=assistant_content[:100] + "..." if len(assistant_content) > 100 else assistant_content,
-                agent_id=agent_id,
-                room_id=room_id
-            )
-        except Exception as e:
-            logger.exception(f"[Bridge] Failed to post webhook response: {e}")
-            return WebhookResult(
-                success=False,
-                response_posted=False,
-                error=str(e),
-                agent_id=agent_id,
-                room_id=room_id
-            )
-
-
 # ============================================================================
 # Module-level singleton
 # ============================================================================
