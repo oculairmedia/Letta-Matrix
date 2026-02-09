@@ -2043,6 +2043,7 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                 sender_agent_name=sender_mapping.get("agent_name", "Unknown"),
                 config=config,
                 logger=logger,
+                admin_client=client,
             )
 
         # Only ignore messages from THIS room's own agent (prevent self-loops)
