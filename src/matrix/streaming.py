@@ -103,23 +103,14 @@ class StepStreamReader:
         include_pings: bool = True,
         timeout: float = 120.0,
         idle_data_timeout: float = 120.0,
+        max_tool_calls: int = 100,
     ):
-        """
-        Initialize the stream reader.
-        
-        Args:
-            letta_client: Initialized Letta SDK client
-            include_reasoning: Whether to emit reasoning events
-            include_pings: Whether to include keepalive pings in stream
-            timeout: Maximum stream duration in seconds
-            idle_data_timeout: Max seconds to wait for real data (non-ping) before killing stream.
-                               Prevents hung streams that only send keepalive pings indefinitely.
-        """
         self.client = letta_client
         self.include_reasoning = include_reasoning
         self.include_pings = include_pings
         self.timeout = timeout
         self.idle_data_timeout = idle_data_timeout
+        self.max_tool_calls = max_tool_calls
         self._last_tool_name: Optional[str] = None
     
     def _create_stream_with_retry(
@@ -210,6 +201,7 @@ class StepStreamReader:
             
             chunk_queue: queue.Queue = queue.Queue()
             error_holder: list = []
+            tool_call_count = 0
             
             def _consume_stream():
                 try:
@@ -280,6 +272,19 @@ class StepStreamReader:
                 elif item_type == 'chunk':
                     event = self._parse_chunk(item_data)
                     if event:
+                        if event.type == StreamEventType.TOOL_CALL:
+                            tool_call_count += 1
+                            if tool_call_count > self.max_tool_calls:
+                                logger.error(
+                                    f"[STREAM] Tool loop detected: {tool_call_count} tool calls "
+                                    f"(limit={self.max_tool_calls}), aborting"
+                                )
+                                yield StreamEvent(
+                                    type=StreamEventType.ERROR,
+                                    content=f"Agent stuck in tool loop ({tool_call_count} calls, limit={self.max_tool_calls}). Stopped.",
+                                    metadata={"error_type": "tool_loop"}
+                                )
+                                break
                         if event.type != StreamEventType.PING:
                             last_data_time = loop.time()
                         logger.debug(f"[STREAM] Yielding event: {event.type.value}")
@@ -494,6 +499,11 @@ class StreamingMessageHandler:
             return event_id
         
         elif event.is_final:
+            # Suppress <no-reply/> responses — agent chose not to reply
+            content = (event.content or "").strip()
+            if content == "<no-reply/>" or content == "<no-reply />":
+                logger.info(f"[Streaming] Agent chose not to reply (no-reply marker) in {self.room_id}")
+                return None
             # Send final assistant response (not deleted) - use send_final_message
             # which may include rich reply context
             return await self.send_final_message(self.room_id, event.content or "")
@@ -566,9 +576,11 @@ class LiveEditStreamingHandler:
         edit_message: Callable[[str, str, str], Any],
         room_id: str,
         send_final_message: Optional[Callable[[str, str], Any]] = None,
+        delete_message: Optional[Callable[[str, str], Any]] = None,
     ):
         self.send_message = send_message
         self.edit_message = edit_message
+        self.delete_message = delete_message
         self.room_id = room_id
         self.send_final_message = send_final_message or send_message
 
@@ -589,6 +601,11 @@ class LiveEditStreamingHandler:
             return None
 
         if event.is_final:
+            content = (event.content or "").strip()
+            if content == "<no-reply/>" or content == "<no-reply />":
+                logger.info(f"[LiveEdit] Agent chose not to reply (no-reply marker) in {self.room_id}")
+                await self._cleanup_no_reply()
+                return None
             return await self._send_final(event.content or "")
 
         if event.is_error:
@@ -640,6 +657,16 @@ class LiveEditStreamingHandler:
 
     def _build_body(self) -> str:
         return "\n".join(self._lines)
+
+    async def _cleanup_no_reply(self) -> None:
+        if self._event_id and self.delete_message:
+            try:
+                await self.delete_message(self.room_id, self._event_id)
+                logger.debug(f"Deleted live-edit progress message {self._event_id} for no-reply")
+            except Exception as e:
+                logger.warning(f"Failed to delete live-edit progress for no-reply: {e}")
+        self._event_id = None
+        self._lines.clear()
 
     async def cleanup(self) -> None:
         if self._event_id and self._lines:

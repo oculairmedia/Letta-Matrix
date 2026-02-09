@@ -348,6 +348,16 @@ class LettaMatrixBridge:
                     await self._send_matrix_message(room_id=room_id, body=user_content, msgtype="m.text")
                     logger.info(f"[Bridge] Posted user message as admin to {room_id}")
             
+            if assistant_content.strip() in ("<no-reply/>", "<no-reply />"):
+                logger.info(f"[Bridge] Agent {agent_id} chose not to reply (no-reply marker)")
+                return WebhookResult(
+                    success=True,
+                    response_posted=False,
+                    response_content="<no-reply/>",
+                    agent_id=agent_id,
+                    room_id=room_id
+                )
+
             await self.post_as_agent(agent_id, room_id, assistant_content)
             
             return WebhookResult(

@@ -1,5 +1,4 @@
 import asyncio
-import asyncio
 import os
 import logging
 import json
@@ -17,6 +16,7 @@ from src.matrix.auth import MatrixAuthManager
 
 # Import file handler
 from src.matrix.file_handler import LettaFileHandler, FileUploadError
+from src.matrix import formatter as matrix_formatter
 
 # Import agent user manager
 from src.core.agent_user_manager import run_agent_sync
@@ -290,6 +290,8 @@ class Config:
     letta_streaming_timeout: float = 120.0  # Streaming timeout in seconds
     letta_streaming_idle_timeout: float = 120.0  # Kill stream if no real data (only pings) for this long
     letta_streaming_live_edit: bool = False  # Edit single message in-place instead of sending separate messages
+    # Typing indicators
+    letta_typing_enabled: bool = False  # Show typing indicator while agent is processing
     # Conversations API configuration (context isolation per room)
     letta_conversations_enabled: bool = False  # Feature flag for Conversations API
     
@@ -321,6 +323,7 @@ class Config:
                 letta_code_api_url=os.getenv("LETTA_CODE_API_URL", "http://192.168.50.90:3099"),
                 letta_code_enabled=os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true",
                 letta_conversations_enabled=os.getenv("LETTA_CONVERSATIONS_ENABLED", "false").lower() == "true",
+                letta_typing_enabled=os.getenv("LETTA_TYPING_ENABLED", "false").lower() == "true",
             )
         except Exception as e:
             raise ConfigurationError(f"Failed to load configuration: {e}")
@@ -886,6 +889,7 @@ async def send_to_letta_api_streaming(
             edit_message=edit_message,
             room_id=room_id,
             send_final_message=send_final_message,
+            delete_message=delete_message,
         )
     else:
         handler = StreamingMessageHandler(
@@ -896,15 +900,13 @@ async def send_to_letta_api_streaming(
             send_final_message=send_final_message,
         )
     
-    # Track the final response
     final_response = ""
-    
-    # NOTE: Typing indicators disabled due to tuwunel/Conduit bug where
-    # typing=false doesn't clear the indicator. Can be re-enabled when
-    # using a server that properly supports typing notifications.
-    # typing_manager = TypingIndicatorManager(room_id, config, logger)
+    typing_manager = TypingIndicatorManager(room_id, config, logger) if config.letta_typing_enabled else None
     
     try:
+        if typing_manager:
+            await typing_manager.start()
+        
         async for event in stream_reader.stream_message(
             agent_id=agent_id_to_use,
             message=message_body,
@@ -912,26 +914,25 @@ async def send_to_letta_api_streaming(
         ):
             logger.debug(f"[STREAMING] Event: {event.type.value}")
             
-            # Handle the event (sends progress messages to Matrix)
             await handler.handle_event(event)
             
-            # Capture final assistant response
             if event.type == StreamEventType.ASSISTANT and event.content:
                 final_response = event.content
             
-            # Log errors
             if event.type == StreamEventType.ERROR:
                 logger.error(f"[STREAMING] Error: {event.content}")
                 if not final_response:
                     final_response = f"Error: {event.content}"
         
-        # Cleanup any remaining progress messages
         await handler.cleanup()
         
     except Exception as e:
         logger.error(f"[STREAMING] Exception during streaming: {e}", exc_info=True)
         await handler.cleanup()
         raise LettaApiError(f"Streaming error: {e}")
+    finally:
+        if typing_manager:
+            await typing_manager.stop()
     
     if not final_response:
         final_response = "Agent processed the request (no text response)."
@@ -1100,11 +1101,14 @@ async def send_to_letta_api(
         
         return result
 
+    typing_manager = TypingIndicatorManager(room_id, config, logger) if (config.letta_typing_enabled and room_id) else None
+    
     try:
-        # Use retry logic for the API call
+        if typing_manager:
+            await typing_manager.start()
+        
         response = await retry_with_backoff(_send_to_letta, max_retries=3, logger=logger)
         
-        # Extract assistant messages from the response (now a dict)
         if response and 'messages' in response:
             messages = response['messages']
             assistant_messages = []
@@ -1171,6 +1175,9 @@ async def send_to_letta_api(
         else:
             logger.error("Unexpected error in Letta API call", extra={"error": error_str}, exc_info=True)
             raise LettaApiError(f"An unexpected error occurred with the Letta SDK: {e}")
+    finally:
+        if typing_manager:
+            await typing_manager.stop()
 
 async def delete_message_as_agent(room_id: str, event_id: str, config: Config, logger: logging.Logger) -> bool:
     """Redact (delete) a message as the agent user for this room"""
@@ -1696,6 +1703,11 @@ async def _process_letta_message(
             await auth_manager_global.ensure_valid_token(client)
         
         message_to_send = event_body
+        event_timestamp = None
+        if event_source and isinstance(event_source, dict):
+            event_timestamp = event_source.get("origin_server_ts")
+        if event_timestamp is None:
+            event_timestamp = int(time.time() * 1000)
         is_inter_agent_message = False
         from_agent_id = None
         from_agent_name = None
@@ -1733,16 +1745,14 @@ async def _process_letta_message(
             else:
                 payload = raw_body
 
-            message_to_send = f"""[INTER-AGENT MESSAGE from {from_agent_name}]
-
-{payload}
-
----
-SYSTEM NOTE (INTER-AGENT COMMUNICATION)
-The message above is from another Letta agent: {from_agent_name} (ID: {from_agent_id}).
-Treat this as your MAIN task for this turn; the other agent is trying to
-collaborate with you.
-"""
+            message_to_send = matrix_formatter.format_inter_agent_envelope(
+                sender_agent_name=from_agent_name,
+                sender_agent_id=from_agent_id,
+                text=payload,
+                chat_id=room_id,
+                message_id=original_event_id,
+                timestamp=event_timestamp,
+            )
             logger.info(f"[INTER-AGENT CONTEXT] Enhanced message for receiving agent:")
             logger.info(f"[INTER-AGENT CONTEXT] Sender: {from_agent_name} ({from_agent_id})")
             logger.info(f"[INTER-AGENT CONTEXT] Full enhanced message:\n{message_to_send}")
@@ -1751,23 +1761,29 @@ collaborate with you.
         opencode_mxid: Optional[str] = None
         if is_opencode_sender and not is_inter_agent_message:
             opencode_mxid = event_sender
-            message_to_send = f"""[MESSAGE FROM OPENCODE USER]
-
-{event_body}
-
----
-RESPONSE INSTRUCTION (OPENCODE BRIDGE):
-This message is from an OpenCode user: {opencode_mxid}
-When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
-in your response so the OpenCode bridge can route your reply to them.
-
-Example: "@oc_matrix_synapse_deployment:matrix.oculair.ca Here is my response..."
-"""
+            message_to_send = matrix_formatter.format_opencode_envelope(
+                opencode_mxid=opencode_mxid,
+                text=event_body,
+                chat_id=room_id,
+                message_id=original_event_id,
+                timestamp=event_timestamp,
+            )
             logger.info(f"[OPENCODE] Detected message from OpenCode identity: {opencode_mxid}")
             logger.info(f"[OPENCODE] Injected @mention instruction for response routing")
         elif not is_inter_agent_message:
             room_display = room_display_name or room_id
-            message_to_send = f"[Matrix: {event_sender} in {room_display} | Format: markdown+html]\n\n{event_body}"
+            message_to_send = matrix_formatter.format_message_envelope(
+                channel="Matrix",
+                chat_id=room_id,
+                message_id=original_event_id,
+                sender=event_sender,
+                sender_name=event_sender,
+                timestamp=event_timestamp,
+                text=event_body,
+                is_group=True,
+                group_name=room_display,
+                is_mentioned=False,
+            )
             logger.debug(f"[MATRIX-CONTEXT] Added context for sender {event_sender}")
 
         if original_event_id and room_agent_id:
@@ -2087,24 +2103,35 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             
             # Add Matrix context or OpenCode metaprompt
             fs_prompt = event.body
+            fs_event_timestamp = getattr(event, 'server_timestamp', None)
+            if fs_event_timestamp is None and hasattr(event, 'source') and isinstance(event.source, dict):
+                fs_event_timestamp = event.source.get('origin_server_ts')
+            if fs_event_timestamp is None:
+                fs_event_timestamp = int(time.time() * 1000)
             if event.sender.startswith("@oc_"):
                 opencode_mxid = event.sender
-                fs_prompt = f"""[MESSAGE FROM OPENCODE USER]
-
-{event.body}
-
----
-RESPONSE INSTRUCTION (OPENCODE BRIDGE):
-This message is from an OpenCode user: {opencode_mxid}
-When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
-in your response so the OpenCode bridge can route your reply to them.
-
-Example: "{opencode_mxid} Here is my response..."
-"""
+                fs_prompt = matrix_formatter.format_opencode_envelope(
+                    opencode_mxid=opencode_mxid,
+                    text=event.body,
+                    chat_id=room.room_id,
+                    message_id=getattr(event, 'event_id', None),
+                    timestamp=fs_event_timestamp,
+                )
                 logger.info(f"[OPENCODE-FS] Detected message from OpenCode identity: {opencode_mxid}")
             else:
                 room_display = room.display_name or room.room_id
-                fs_prompt = f"[Matrix: {event.sender} in {room_display} | Format: markdown+html]\n\n{event.body}"
+                fs_prompt = matrix_formatter.format_message_envelope(
+                    channel="Matrix",
+                    chat_id=room.room_id,
+                    message_id=getattr(event, 'event_id', None),
+                    sender=event.sender,
+                    sender_name=event.sender,
+                    timestamp=fs_event_timestamp,
+                    text=event.body,
+                    is_group=True,
+                    group_name=room_display,
+                    is_mentioned=False,
+                )
                 logger.debug(f"[MATRIX-FS] Added context for sender {event.sender}")
             
             event_id_str = getattr(event, 'event_id', '') or ''
