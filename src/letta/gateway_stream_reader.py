@@ -38,6 +38,20 @@ async def stream_via_gateway(
     tool_call_count = 0
     assistant_chunks: list[str] = []
     assistant_metadata: Dict[str, Any] = {}
+    current_assistant_uuid: Optional[str] = None
+
+    def _flush_assistant():
+        """Build a flushed StreamEvent from accumulated chunks (non-yielding helper)."""
+        if not assistant_chunks:
+            return None
+        ev = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="".join(assistant_chunks),
+            metadata=dict(assistant_metadata),
+        )
+        assistant_chunks.clear()
+        assistant_metadata.clear()
+        return ev
 
     async for raw_event in client.send_message_streaming(
         agent_id=agent_id,
@@ -49,6 +63,12 @@ async def stream_via_gateway(
             continue
 
         if event.type == StreamEventType.TOOL_CALL:
+            # Flush any pending assistant content before tool activity
+            # (mirrors bot.ts type-change finalize, line 580)
+            flushed = _flush_assistant()
+            if flushed:
+                current_assistant_uuid = None
+                yield flushed
             tool_call_count += 1
             if tool_call_count > max_tool_calls:
                 logger.error(
@@ -65,20 +85,29 @@ async def stream_via_gateway(
             continue
 
         if event.type == StreamEventType.ASSISTANT:
+            # Detect UUID change — different send_message call = separate bubble
+            # (mirrors bot.ts UUID-based splitting, line 612)
+            msg_uuid = event.metadata.get("message_id")
+            if (
+                msg_uuid
+                and current_assistant_uuid
+                and msg_uuid != current_assistant_uuid
+                and assistant_chunks
+            ):
+                flushed = _flush_assistant()
+                if flushed:
+                    yield flushed
+            current_assistant_uuid = msg_uuid or current_assistant_uuid
             if event.content:
                 assistant_chunks.append(event.content)
             assistant_metadata.update(event.metadata)
             continue
 
         if event.type == StreamEventType.STOP:
-            if assistant_chunks:
-                yield StreamEvent(
-                    type=StreamEventType.ASSISTANT,
-                    content="".join(assistant_chunks),
-                    metadata=assistant_metadata,
-                )
-                assistant_chunks.clear()
-                assistant_metadata.clear()
+            flushed = _flush_assistant()
+            if flushed:
+                yield flushed
+            current_assistant_uuid = None
             yield event
             continue
 
