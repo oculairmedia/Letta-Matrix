@@ -268,7 +268,11 @@ export function initializeResponseMonitor(
   storage: Storage,
   tracker: ConversationTracker,
   config?: Partial<ResponseMonitorConfig>
-): ResponseMonitor {
-  monitorInstance = new ResponseMonitor(lettaClient, clientPool, storage, tracker, config);
-  return monitorInstance;
+): ResponseMonitor | undefined {
+  // DISABLED: ResponseMonitor polling is redundant with the Python matrix-client
+  // which handles all Matrix room response delivery via streaming.
+  // Having both active causes double message delivery.
+  // See beads issues: bd-nerx (double delivery), bd-b8d84 (replace polling with webhooks)
+  console.log('[ResponseMonitor] DISABLED - Python matrix-client handles Matrix response delivery');
+  return undefined;
 }

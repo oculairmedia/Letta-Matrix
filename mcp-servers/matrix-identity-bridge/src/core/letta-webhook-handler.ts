@@ -290,40 +290,25 @@ export class LettaWebhookHandler {
       };
     }
 
-    console.log(`[LettaWebhook] Cross-run response for ${conversation!.matrix_event_id} (${conversation!.tools_attached!.length} tools attached)`)
+    // Cross-run scenario: Python matrix-client handles response delivery via streaming.
+    // Posting here would cause double delivery. Just clean up tracking state.
+    console.log(`[LettaWebhook] Cross-run response for ${conversation!.matrix_event_id} — skipping Matrix post (handled by Python matrix-client)`);
 
-    // Post the response to Matrix
-    try {
-      await this.postToMatrix(agent_id, roomId, assistantContent, conversation?.matrix_event_id);
-
-      if (conversation) {
-        const monitor = getResponseMonitor();
-        if (monitor) {
-          monitor.cancelMonitoring(conversation.matrix_event_id);
-        }
-        tracker.completeConversation(conversation.matrix_event_id);
+    if (conversation) {
+      const monitor = getResponseMonitor();
+      if (monitor) {
+        monitor.cancelMonitoring(conversation.matrix_event_id);
       }
-
-      console.log(`[LettaWebhook] Posted response to Matrix room ${roomId} for agent ${agent_id}`);
-
-      return {
-        success: true,
-        responsePosted: true,
-        responseContent: assistantContent.substring(0, 200) + (assistantContent.length > 200 ? '...' : ''),
-        agentId: agent_id,
-        roomId
-      };
-
-    } catch (error) {
-      console.error(`[LettaWebhook] Failed to post to Matrix:`, error);
-      return {
-        success: false,
-        responsePosted: false,
-        error: error instanceof Error ? error.message : 'matrix_post_failed',
-        agentId: agent_id,
-        roomId
-      };
+      tracker.completeConversation(conversation.matrix_event_id);
     }
+
+    return {
+      success: true,
+      responsePosted: false,
+      error: 'python_client_handles_delivery',
+      agentId: agent_id,
+      roomId
+    };
   }
 
   /**
