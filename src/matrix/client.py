@@ -290,10 +290,17 @@ class Config:
     letta_streaming_timeout: float = 120.0  # Streaming timeout in seconds
     letta_streaming_idle_timeout: float = 120.0  # Kill stream if no real data (only pings) for this long
     letta_streaming_live_edit: bool = False  # Edit single message in-place instead of sending separate messages
+    letta_max_tool_calls: int = 100  # Abort stream if agent exceeds this many tool calls (loop detection)
     # Typing indicators
     letta_typing_enabled: bool = False  # Show typing indicator while agent is processing
     # Conversations API configuration (context isolation per room)
     letta_conversations_enabled: bool = False  # Feature flag for Conversations API
+    # Gateway configuration (route messages through lettabot WS gateway)
+    letta_gateway_enabled: bool = False  # Feature flag for WS gateway
+    letta_gateway_url: str = "ws://192.168.50.90:8407/api/v1/agent-gateway"  # WebSocket gateway URL
+    letta_gateway_api_key: str = ""  # API key for gateway auth (X-Api-Key header)
+    letta_gateway_idle_timeout: float = 300.0  # Close idle WS connections after 5 minutes
+    letta_gateway_max_connections: int = 20  # Max concurrent WS connections
     
     @classmethod
     def from_env(cls) -> "Config":
@@ -322,8 +329,14 @@ class Config:
                 letta_streaming_live_edit=os.getenv("LETTA_STREAMING_LIVE_EDIT", "false").lower() == "true",
                 letta_code_api_url=os.getenv("LETTA_CODE_API_URL", "http://192.168.50.90:3099"),
                 letta_code_enabled=os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true",
+                letta_max_tool_calls=int(os.getenv("LETTA_MAX_TOOL_CALLS", "100")),
                 letta_conversations_enabled=os.getenv("LETTA_CONVERSATIONS_ENABLED", "false").lower() == "true",
                 letta_typing_enabled=os.getenv("LETTA_TYPING_ENABLED", "false").lower() == "true",
+                letta_gateway_enabled=os.getenv("LETTA_GATEWAY_ENABLED", "false").lower() == "true",
+                letta_gateway_url=os.getenv("LETTA_GATEWAY_URL", "ws://192.168.50.90:8407/api/v1/agent-gateway"),
+                letta_gateway_api_key=os.getenv("LETTA_GATEWAY_API_KEY", ""),
+                letta_gateway_idle_timeout=float(os.getenv("LETTA_GATEWAY_IDLE_TIMEOUT", "300.0")),
+                letta_gateway_max_connections=int(os.getenv("LETTA_GATEWAY_MAX_CONNECTIONS", "20")),
             )
         except Exception as e:
             raise ConfigurationError(f"Failed to load configuration: {e}")
@@ -397,6 +410,8 @@ async def resolve_letta_project_dir(
                 "status_code": exc.status_code,
                 "error": str(exc),
             })
+    except Exception as exc:
+        logger.debug(f"Letta Code API unreachable for session resolve: {exc}")
     return None
 
 # Setup structured logging
@@ -827,15 +842,29 @@ async def send_to_letta_api_streaming(
             logger.warning(f"[CONVERSATIONS] Failed to get conversation, falling back to agents API: {e}")
             conversation_id = None
     
-    stream_reader = StepStreamReader(
-        letta_client=letta_client,
-        include_reasoning=False,
-        include_pings=True,
-        timeout=config.letta_streaming_timeout,
-        idle_data_timeout=config.letta_streaming_idle_timeout,
-    )
+    use_gateway = config.letta_gateway_enabled
+    gateway_client = None
+
+    if use_gateway:
+        try:
+            from src.letta.ws_gateway_client import get_gateway_client
+            gateway_client = await get_gateway_client(
+                gateway_url=config.letta_gateway_url,
+                idle_timeout=config.letta_gateway_idle_timeout,
+                max_connections=config.letta_gateway_max_connections,
+                api_key=config.letta_gateway_api_key or config.letta_token,
+            )
+            logger.info("[STREAMING] Gateway enabled, will attempt WS path first")
+        except Exception as e:
+            logger.warning(f"[STREAMING] Gateway client init failed, falling back to direct API: {e}")
+            use_gateway = False
+
+    try:
+        from src.letta.approval_manager import disable_all_tool_approvals
+        disable_all_tool_approvals(letta_client, agent_id_to_use)
+    except Exception as e:
+        logger.debug(f"[APPROVAL] Pre-message approval disable skipped: {e}")
     
-    # Create message handlers for Matrix
     async def send_message(rid: str, content: str) -> str:
         """Send a progress message and return event_id (no reply context)"""
         event_id = await send_as_agent_with_event_id(rid, content, config, logger)
@@ -907,11 +936,40 @@ async def send_to_letta_api_streaming(
         if typing_manager:
             await typing_manager.start()
         
-        async for event in stream_reader.stream_message(
-            agent_id=agent_id_to_use,
-            message=message_body,
-            conversation_id=conversation_id,
-        ):
+        event_source = None
+        if use_gateway and gateway_client:
+            from src.letta.gateway_stream_reader import stream_via_gateway
+            from src.letta.ws_gateway_client import GatewayUnavailableError
+            try:
+                event_source = stream_via_gateway(
+                    client=gateway_client,
+                    agent_id=agent_id_to_use,
+                    message=message_body,
+                    conversation_id=conversation_id,
+                    max_tool_calls=config.letta_max_tool_calls,
+                )
+                logger.info("[STREAMING] Using WS gateway as event source")
+            except GatewayUnavailableError as gw_err:
+                logger.warning(f"[STREAMING] Gateway unavailable, falling back: {gw_err}")
+                event_source = None
+
+        if event_source is None:
+            fallback_reader = StepStreamReader(
+                letta_client=letta_client,
+                include_reasoning=False,
+                include_pings=True,
+                timeout=config.letta_streaming_timeout,
+                idle_data_timeout=config.letta_streaming_idle_timeout,
+                max_tool_calls=config.letta_max_tool_calls,
+            )
+            logger.info("[STREAMING] Using direct Letta API as event source")
+            event_source = fallback_reader.stream_message(
+                agent_id=agent_id_to_use,
+                message=message_body,
+                conversation_id=conversation_id,
+            )
+
+        async for event in event_source:
             logger.debug(f"[STREAMING] Event: {event.type.value}")
             
             await handler.handle_event(event)
@@ -1107,6 +1165,32 @@ async def send_to_letta_api(
         if typing_manager:
             await typing_manager.start()
         
+        gateway_result: Optional[str] = None
+        if config.letta_gateway_enabled:
+            try:
+                from src.letta.ws_gateway_client import get_gateway_client, GatewayUnavailableError
+                from src.letta.gateway_stream_reader import collect_via_gateway
+                gw_client = await get_gateway_client(
+                    gateway_url=config.letta_gateway_url,
+                    idle_timeout=config.letta_gateway_idle_timeout,
+                    max_connections=config.letta_gateway_max_connections,
+                    api_key=config.letta_gateway_api_key or config.letta_token,
+                )
+                gateway_result = await collect_via_gateway(
+                    client=gw_client,
+                    agent_id=agent_id_to_use,
+                    message=message_body,
+                    conversation_id=conversation_id,
+                )
+                if gateway_result:
+                    logger.info(f"[API] Got response via WS gateway ({len(gateway_result)} chars)")
+            except Exception as gw_err:
+                logger.warning(f"[API] Gateway failed, falling back to direct API: {gw_err}")
+                gateway_result = None
+
+        if gateway_result:
+            return gateway_result
+
         response = await retry_with_backoff(_send_to_letta, max_retries=3, logger=logger)
         
         if response and 'messages' in response:
