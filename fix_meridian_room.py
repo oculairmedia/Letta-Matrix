@@ -18,7 +18,7 @@ async def main():
         homeserver_url=os.getenv("MATRIX_HOMESERVER_URL", "http://localhost:8008"),
         admin_username=os.getenv("MATRIX_ADMIN_USER", "admin"),
         admin_password=os.getenv("MATRIX_ADMIN_PASSWORD"),
-        letta_api_url=os.getenv("LETTA_API_URL", "https://letta.oculair.ca")
+        letta_api_url=os.getenv("LETTA_API_URL", "http://192.168.50.90:8289")
     )
     
     agent_id = "agent-597b5756-2915-4560-ba6b-91005f085166"

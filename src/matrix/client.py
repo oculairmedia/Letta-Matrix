@@ -259,7 +259,7 @@ class Config:
                 password=os.getenv("MATRIX_PASSWORD", "letta"),
                 # MATRIX_ROOM_ID is optional. If unset or empty, we skip joining a base room.
                 room_id=os.getenv("MATRIX_ROOM_ID", "") or "",
-                letta_api_url=os.getenv("LETTA_API_URL", "https://letta.oculair.ca"),
+                letta_api_url=os.getenv("LETTA_API_URL", "http://192.168.50.90:8289"),
                 letta_token=os.getenv("LETTA_TOKEN", "lettaSecurePass123"),
                 letta_agent_id=os.getenv("LETTA_AGENT_ID", "agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444"),
                 log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -1806,8 +1806,8 @@ async def _process_letta_message(
             logger.info("[STREAMING] Using streaming mode for Letta API call")
             letta_response = await send_to_letta_api_streaming(
                 message_to_send, event_sender, config, logger, room_id,
-                reply_to_event_id=original_event_id,
-                reply_to_sender=event_sender,
+                reply_to_event_id=None,
+                reply_to_sender=None,
                 opencode_sender=opencode_mxid
             )
             logger.info("Successfully processed streaming response", extra={
@@ -1854,8 +1854,8 @@ async def _process_letta_message(
                 response_text=letta_response,
                 config=config,
                 logger_instance=logger,
-                reply_to_event_id=original_event_id,
-                reply_to_sender=event_sender
+                reply_to_event_id=None,
+                reply_to_sender=None
             )
             
             if poll_handled:
@@ -1872,19 +1872,14 @@ async def _process_letta_message(
                     letta_response, 
                     config, 
                     logger,
-                    reply_to_event_id=original_event_id,
-                    reply_to_sender=event_sender
+                    reply_to_event_id=None,
+                    reply_to_sender=None
                 )
             
             if not sent_as_agent:
                 if client:
                     logger.warning("Failed to send as agent, falling back to main client")
                     message_content: Dict[str, Any] = {"msgtype": "m.text", "body": letta_response}
-                    if original_event_id:
-                        message_content["m.relates_to"] = {
-                            "m.in_reply_to": {"event_id": original_event_id}
-                        }
-                        message_content["m.mentions"] = {"user_ids": [event_sender]}
                     await client.room_send(
                         room_id,
                         "m.room.message",
@@ -1942,13 +1937,11 @@ async def _process_letta_message(
         try:
             sent_as_agent = await send_as_agent(
                 room_id, error_message, config, logger,
-                reply_to_event_id=original_event_id,
-                reply_to_sender=event_sender
+                reply_to_event_id=None,
+                reply_to_sender=None
             )
             if not sent_as_agent and client:
                 error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_message}
-                if original_event_id:
-                    error_content["m.relates_to"] = {"m.in_reply_to": {"event_id": original_event_id}}
                 await client.room_send(
                     room_id,
                     "m.room.message",
@@ -1967,13 +1960,11 @@ async def _process_letta_message(
             error_msg = f"Sorry, I encountered an unexpected error: {str(e)[:100]}"
             sent_as_agent = await send_as_agent(
                 room_id, error_msg, config, logger,
-                reply_to_event_id=original_event_id,
-                reply_to_sender=event_sender
+                reply_to_event_id=None,
+                reply_to_sender=None
             )
             if not sent_as_agent and client:
                 error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_msg}
-                if original_event_id:
-                    error_content["m.relates_to"] = {"m.in_reply_to": {"event_id": original_event_id}}
                 await client.room_send(
                     room_id,
                     "m.room.message",

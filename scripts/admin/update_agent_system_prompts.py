@@ -10,7 +10,7 @@ import requests
 from typing import List, Dict
 
 # Letta API configuration
-LETTA_API_URL = os.getenv("LETTA_API_URL", "https://letta.oculair.ca")
+LETTA_API_URL = os.getenv("LETTA_API_URL", "http://192.168.50.90:8289")
 LETTA_PASSWORD = os.getenv("LETTA_TOKEN") or os.getenv("LETTA_PASSWORD")
 
 # Messaging instructions to add to system prompts

@@ -198,18 +198,13 @@ export class ResponseMonitor {
         return;
       }
 
-      // Send message as a reply to the original
+      // Send message as a normal message (not a reply, to avoid quoting in the UI)
       await client.sendMessage(matrix_room_id, {
         msgtype: 'm.text',
-        body: content,
-        'm.relates_to': {
-          'm.in_reply_to': {
-            event_id: matrix_event_id
-          }
-        }
+        body: content
       });
 
-      console.log(`[ResponseMonitor] Posted response to ${matrix_room_id} as reply to ${matrix_event_id}`);
+      console.log(`[ResponseMonitor] Posted response to ${matrix_room_id} (ref: ${matrix_event_id})`);
 
     } catch (error) {
       console.error(`[ResponseMonitor] Failed to post response to Matrix:`, error);

@@ -133,11 +133,11 @@ services:
       tuwunel:
         condition: service_healthy
     labels:
-      - homepage.group=Communication
-      - homepage.name=Matrix API
-      - homepage.icon=si-api
-      - homepage.href=http://192.168.50.90:8004
-      - homepage.description=Matrix API server for automation
+       - homepage.group=Communication
+       - homepage.name=Matrix API
+       - homepage.icon=mdi-api
+       - homepage.href=http://192.168.50.90:8004
+       - homepage.description=Matrix API server for automation
 
   opencode-bridge:
     image: ghcr.io/oculairmedia/letta-matrix-opencode-bridge:latest
@@ -253,11 +253,11 @@ services:
       retries: 3
       start_period: 5s
     labels:
-      - homepage.group=Monitoring
-      - homepage.name=ntfy
-      - homepage.icon=si-ntfy
-      - homepage.href=http://192.168.50.90:2586
-      - homepage.description=Push notification service for alerts
+       - homepage.group=Communication
+       - homepage.name=ntfy
+       - homepage.icon=mdi-bell-ring
+       - homepage.href=http://192.168.50.90:2586
+       - homepage.description=Push notification service for alerts
 
   ntfy-bridge:
     image: node:22-alpine
@@ -282,10 +282,10 @@ services:
       matrix-messaging-mcp:
         condition: service_healthy
     labels:
-      - homepage.group=Monitoring
-      - homepage.name=ntfy-to-PM Bridge
-      - homepage.icon=si-ntfy
-      - homepage.description=Forwards ntfy alerts to PM agent for triage
+       - homepage.group=Communication
+       - homepage.name=ntfy-to-PM Bridge
+       - homepage.icon=mdi-bell-ring
+       - homepage.description=Forwards ntfy alerts to PM agent for triage
 
 networks:
   matrix-internal:

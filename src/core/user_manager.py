@@ -436,12 +436,11 @@ class MatrixUserManager:
                     continue
 
                 if state == "exists_auth_failed":
-                    logger.error(f"Core user auth failed: {full_user_id} (user exists, credentials invalid)")
-                    try:
-                        from src.matrix.alerting import alert_auth_failure
-                        await alert_auth_failure(user_local, "core-user-check")
-                    except Exception as alert_error:
-                        logger.warning(f"Failed to send auth-failure alert for {full_user_id}: {alert_error}")
+                    # Note: check_user_exists uses a dummy password, so M_FORBIDDEN
+                    # is the EXPECTED response for existing users. This is NOT a real
+                    # auth failure. Real auth monitoring is handled by the cron-based
+                    # health-check-auth.sh which tests with actual credentials.
+                    logger.info(f"Core user exists (dummy-password check): {full_user_id}")
                     continue
 
                 logger.info(f"Core user missing, creating: {full_user_id}")

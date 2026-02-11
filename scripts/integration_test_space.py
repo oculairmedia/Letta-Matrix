@@ -19,7 +19,7 @@ class TestConfig:
     homeserver_url: str = os.getenv("MATRIX_HOMESERVER_URL", "http://localhost:8008")
     username: str = os.getenv("MATRIX_USERNAME", "@letta:matrix.oculair.ca")
     password: str = os.getenv("MATRIX_PASSWORD", "letta")
-    letta_api_url: str = os.getenv("LETTA_API_URL", "https://letta.oculair.ca")
+    letta_api_url: str = os.getenv("LETTA_API_URL", "http://192.168.50.90:8289")
     letta_token: str = os.getenv("LETTA_TOKEN", "lettaSecurePass123")
     letta_agent_id: str = os.getenv("LETTA_AGENT_ID", "agent-test")
 

@@ -16,7 +16,7 @@ async def test_sync():
         homeserver_url = "http://synapse:8008"
         username = "@letta:matrix.oculair.ca"
         password = "letta"
-        letta_api_url = "https://letta.oculair.ca"
+        letta_api_url = "http://192.168.50.90:8289"
         letta_token = "lettaSecurePass123"
         log_level = "INFO"
     
