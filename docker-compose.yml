@@ -235,6 +235,7 @@ services:
       start_period: 15s
   ntfy:
     image: binwiederhier/ntfy:latest
+    init: true
     restart: unless-stopped
     mem_limit: 128m
     memswap_limit: 128m
@@ -252,6 +253,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     labels:
        - homepage.group=Communication
        - homepage.name=ntfy
