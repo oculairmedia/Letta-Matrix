@@ -196,8 +196,8 @@ def _parse_stream_event(
             metadata["tool_call_id"] = raw["tool_call_id"]
 
     elif mapped_type == StreamEventType.TOOL_RETURN:
-        metadata["tool_name"] = raw.get("tool_name", "unknown")
-        metadata["status"] = "success"
+        metadata["tool_name"] = raw.get("tool_name") or "unknown"
+        metadata["status"] = "error" if raw.get("is_error") else "success"
         if raw.get("tool_call_id"):
             metadata["tool_call_id"] = raw["tool_call_id"]
 
