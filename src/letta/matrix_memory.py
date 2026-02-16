@@ -143,17 +143,33 @@ async def sync_matrix_block_to_agents(agent_ids: List[str]) -> dict:
     if not block_id:
         return {"error": "Failed to get/create block", "synced": 0, "failed": len(agent_ids)}
     
+    # Filter out sleeptime agents — they don't need matrix_capabilities in context
+    sleeptime_ids = set()
+    try:
+        all_agents = client.agents.list(limit=200)
+        for agent in all_agents:
+            if getattr(agent, 'agent_type', None) == "sleeptime_agent":
+                sleeptime_ids.add(agent.id)
+        if sleeptime_ids:
+            logger.info(f"[MatrixMemory] Excluding {len(sleeptime_ids)} sleeptime agents from block sync")
+    except Exception as e:
+        logger.warning(f"[MatrixMemory] Could not filter sleeptime agents: {e}")
+    
     synced = 0
     failed = 0
+    skipped = 0
     
     for agent_id in agent_ids:
+        if agent_id in sleeptime_ids:
+            skipped += 1
+            continue
         if await ensure_agent_has_block(agent_id, block_id, client):
             synced += 1
         else:
             failed += 1
     
-    logger.info(f"[MatrixMemory] Sync complete: {synced} ok, {failed} failed")
-    return {"synced": synced, "failed": failed, "block_id": block_id}
+    logger.info(f"[MatrixMemory] Sync complete: {synced} ok, {failed} failed, {skipped} sleeptime skipped")
+    return {"synced": synced, "failed": failed, "skipped": skipped, "block_id": block_id}
 
 
 def format_matrix_context(sender: str, room_name: Optional[str] = None) -> str:
