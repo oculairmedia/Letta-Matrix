@@ -148,7 +148,7 @@ jobs:
         MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
       run: |
         mkdir -p $MATRIX_DATA_DIR
-        pytest -m "not slow" --cov=src --cov-config=pytest.ini --cov-report=xml --cov-report=html --cov-report=term-missing
+        pytest -m "unit or integration" --cov=src --cov-config=pytest.ini --cov-report=xml --cov-report=html --cov-report=term-missing
 
     - name: Display coverage summary
       run: |
