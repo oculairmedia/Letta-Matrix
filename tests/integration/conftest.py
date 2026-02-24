@@ -249,16 +249,8 @@ def patched_http_session(mock_http_session):
     Also resets the database engine singleton and initializes an in-memory
     SQLite database so tests don't fail with 'no such table' errors.
     """
-    # --- Database setup: reset engine singleton and use in-memory SQLite ---
-    import src.models.agent_mapping as _db_mod
-    _original_engine = _db_mod._engine
-    _db_mod._engine = None  # Reset singleton so get_engine() creates a fresh one
-
-    _env_patcher = patch.dict(os.environ, {'DATABASE_URL': 'sqlite:///:memory:'})
-    _env_patcher.start()
-
-    # Now init_database() will create tables in the fresh in-memory engine
-    _db_mod.init_database()
+    # Database engine is already configured by the session-scoped
+    # _reset_db_engine_for_tests autouse fixture in tests/conftest.py
 
     async def mock_get_global_session():
         return mock_http_session
@@ -316,11 +308,7 @@ def patched_http_session(mock_http_session):
     # Stop all patchers and reset SDK client
     for patcher in patchers:
         patcher.stop()
-    _env_patcher.stop()
     reset_client()
-
-    # Restore original engine singleton
-    _db_mod._engine = _original_engine
 
 @pytest.fixture
 def patched_logging():

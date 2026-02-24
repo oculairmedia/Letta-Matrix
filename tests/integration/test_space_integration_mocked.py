@@ -77,16 +77,13 @@ class MockedIntegrationTest:
 
     async def setup_mocked_manager(self):
         """Set up the AgentUserManager with all necessary mocks"""
-        # Reset database engine singleton and use in-memory SQLite
-        import src.models.agent_mapping as _db_mod
-        self._original_engine = _db_mod._engine
-        _db_mod._engine = None  # Reset singleton
+        # Database engine is already configured by the session-scoped
+        # _reset_db_engine_for_tests autouse fixture in tests/conftest.py
 
         with patch.dict(os.environ, {
             "MATRIX_DATA_DIR": self.temp_dir,
             "MATRIX_ADMIN_USERNAME": "@admin:mock.matrix.test",
-            "MATRIX_ADMIN_PASSWORD": "admin_password",
-            "DATABASE_URL": "sqlite:///:memory:"
+            "MATRIX_ADMIN_PASSWORD": "admin_password"
         }):
             # Patch logging to avoid logger issues
             with patch('src.core.agent_user_manager.logging.getLogger'):
@@ -94,9 +91,6 @@ class MockedIntegrationTest:
                     with patch('src.core.user_manager.logging.getLogger'):
                         with patch('src.core.room_manager.logging.getLogger'):
                             self.manager = AgentUserManager(config=self.config)
-
-        # Initialize database tables in the in-memory engine
-        _db_mod.init_database()
 
         # Mock the HTTP session and responses
         await self._setup_http_mocks()
@@ -527,10 +521,6 @@ class MockedIntegrationTest:
                 if mapping.room_id:
                     print(f"  - {mapping.agent_name}: {mapping.room_id}")
             print("=" * 60)
-
-        # Restore original engine singleton
-        import src.models.agent_mapping as _db_mod
-        _db_mod._engine = getattr(self, '_original_engine', None)
 
         return passed == total
 
