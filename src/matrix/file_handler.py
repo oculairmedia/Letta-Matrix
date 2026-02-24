@@ -20,7 +20,7 @@ import logging
 import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Dict, Any, Callable, Awaitable
+from typing import Optional, Dict, Any, Callable, Awaitable, Union
 from dataclasses import dataclass
 import aiohttp
 from nio import Event
@@ -195,7 +195,7 @@ class LettaFileHandler:
             raise last_exception
         raise FileUploadError(f"{operation_name} failed with no exception")
         
-    async def handle_file_event(self, event: Event, room_id: str, agent_id: Optional[str] = None) -> bool:
+    async def handle_file_event(self, event: Event, room_id: str, agent_id: Optional[str] = None) -> Union[bool, list, None]:
         """
         Handle a file upload event from Matrix
         
@@ -205,7 +205,9 @@ class LettaFileHandler:
             agent_id: Optional agent ID to attach source to
             
         Returns:
-            True if file was processed successfully
+            list: Multimodal content for image uploads (to be sent via normal message pipeline)
+            bool: Success/failure for document uploads handled internally
+            None: Nothing to do
         """
         try:
             # Extract file metadata
@@ -226,7 +228,7 @@ class LettaFileHandler:
             # Check if this is an image - handle differently via multimodal message
             is_image = metadata.file_type.startswith('image/')
             if is_image:
-                logger.info(f"Image uploaded: {metadata.file_name}. Sending as multimodal message to agent.")
+                logger.info(f"Image uploaded: {metadata.file_name}. Building multimodal message content.")
                 return await self._handle_image_upload(metadata, room_id, agent_id)
             
             # For documents (PDF, text, etc.) - use file upload flow
@@ -268,7 +270,7 @@ class LettaFileHandler:
             logger.error(f"Error handling file event: {e}", exc_info=True)
             raise FileUploadError(f"Failed to process file upload: {e}")
     
-    async def _handle_image_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> bool:
+    async def _handle_image_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> Optional[list]:
         """
         Handle image upload by sending as multimodal message to agent.
         
@@ -281,14 +283,9 @@ class LettaFileHandler:
             agent_id: Agent ID to send image to
             
         Returns:
-            True if image was processed successfully
+            Multimodal input content for Letta API, or None on failure
         """
         import base64
-        
-        if not agent_id:
-            logger.warning("No agent_id provided for image upload, cannot send multimodal message")
-            await self._notify(room_id, f"⚠️ Cannot process image: no agent configured for this room")
-            return False
         
         # Notify user that we're processing the image
         await self._notify(room_id, f"🖼️ Processing image: {metadata.file_name}")
@@ -334,9 +331,7 @@ Example: "{opencode_mxid} Here is my response..."
 """
                 logger.info(f"[OPENCODE-IMAGE] Injected @mention instruction for image upload")
             
-            # Send multimodal message to agent using SDK
-            # Format: content array with text and image parts
-            message_content = [
+            input_content = [
                 {
                     "type": "text",
                     "text": message_text
@@ -350,28 +345,9 @@ Example: "{opencode_mxid} Here is my response..."
                     }
                 }
             ]
-            
-            # Send to agent via SDK
-            response = await self._send_multimodal_message(agent_id, message_content)
-            
-            if response:
-                logger.info(f"Successfully sent image {metadata.file_name} to agent {agent_id}")
-                await self._notify(room_id, f"✅ Image sent to agent for analysis")
-                
-                # Extract and send agent response back to Matrix
-                assistant_response = self._extract_assistant_response(response)
-                if assistant_response:
-                    await self._notify(room_id, assistant_response)
-                
-                return True
-            else:
-                logger.error(f"Failed to send image to agent")
-                await self._notify(room_id, 
-                    f"⚠️ Image upload failed. Your agent may need to be configured without strict tool requirements for image analysis. "
-                    f"Try using an agent with a vision-capable model (GPT-4o, Claude Sonnet 4, Gemini 2.5) and flexible tool rules."
-                )
-                return False
-                
+            logger.info(f"Built multimodal content for image {metadata.file_name}")
+            return input_content
+                 
         finally:
             # Clean up temporary file
             if file_path and os.path.exists(file_path):

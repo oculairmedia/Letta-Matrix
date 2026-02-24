@@ -4,7 +4,8 @@ consumed by StreamingMessageHandler / LiveEditStreamingHandler.
 """
 
 import logging
-from typing import Any, AsyncGenerator, Dict, Optional
+import json
+from typing import Any, AsyncGenerator, Dict, Optional, Union
 
 from src.matrix.streaming import StreamEvent, StreamEventType
 from src.letta.ws_gateway_client import (
@@ -26,10 +27,11 @@ _EVENT_MAP: Dict[str, StreamEventType] = {
 async def stream_via_gateway(
     client: GatewayClient,
     agent_id: str,
-    message: str,
+    message: Union[str, list],
     conversation_id: Optional[str] = None,
     include_reasoning: bool = False,
     max_tool_calls: int = 100,
+    source: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     """
     Yield StreamEvents from the WS gateway, matching the same interface as
@@ -39,6 +41,7 @@ async def stream_via_gateway(
     assistant_chunks: list[str] = []
     assistant_metadata: Dict[str, Any] = {}
     current_assistant_uuid: Optional[str] = None
+    gateway_message = json.dumps(message) if isinstance(message, list) else message
 
     def _flush_assistant():
         """Build a flushed StreamEvent from accumulated chunks (non-yielding helper)."""
@@ -55,8 +58,9 @@ async def stream_via_gateway(
 
     async for raw_event in client.send_message_streaming(
         agent_id=agent_id,
-        message=message,
+        message=gateway_message,
         conversation_id=conversation_id,
+        source=source,
     ):
         event = _parse_gateway_event(raw_event, include_reasoning)
         if event is None:
@@ -119,6 +123,7 @@ async def collect_via_gateway(
     agent_id: str,
     message: str,
     conversation_id: Optional[str] = None,
+    source: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """
     Send through the gateway, collect everything, and return the final assistant content.
@@ -132,6 +137,7 @@ async def collect_via_gateway(
         message=message,
         conversation_id=conversation_id,
         include_reasoning=False,
+        source=source,
     ):
         if event.type == StreamEventType.ASSISTANT and event.content:
             assistant_content = event.content

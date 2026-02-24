@@ -5,7 +5,7 @@ import json
 import time
 import uuid
 import aiohttp
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union
 from dataclasses import dataclass
 from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset, RoomMessageMedia, UnknownEvent
 from nio.responses import JoinError
@@ -731,7 +731,7 @@ async def get_agent_from_room_members(room_id: str, config: Config, logger: logg
 
 
 async def send_to_letta_api_streaming(
-    message_body: str, 
+    message_body: Union[str, list], 
     sender_id: str, 
     config: Config, 
     logger: logging.Logger, 
@@ -884,7 +884,7 @@ async def send_to_letta_api_streaming(
             await typing_manager.start()
         
         event_source = None
-        if use_gateway and gateway_client:
+        if use_gateway and gateway_client and not isinstance(message_body, list):
             from src.letta.gateway_stream_reader import stream_via_gateway
             from src.letta.ws_gateway_client import GatewayUnavailableError
             try:
@@ -894,6 +894,7 @@ async def send_to_letta_api_streaming(
                     message=message_body,
                     conversation_id=conversation_id,
                     max_tool_calls=config.letta_max_tool_calls,
+                    source={"channel": "matrix", "chatId": room_id},
                 )
                 logger.info("[STREAMING] Using WS gateway as event source")
             except GatewayUnavailableError as gw_err:
@@ -946,7 +947,7 @@ async def send_to_letta_api_streaming(
 
 
 async def send_to_letta_api(
-    message_body: str,
+    message_body: Union[str, list],
     sender_id: str,
     config: Config,
     logger: logging.Logger,
@@ -993,8 +994,13 @@ async def send_to_letta_api(
     logger.warning(f"[DEBUG] Agent Name: {agent_name_found}")
     logger.warning(f"[DEBUG] Routing Method: {routing_method}")
     
+    if isinstance(message_body, str):
+        message_preview = message_body[:100] + "..." if len(message_body) > 100 else message_body
+    else:
+        message_preview = f"[multimodal content: {len(message_body)} parts]"
+
     logger.info("Sending message to Letta API", extra={
-        "message_preview": message_body[:100] + "..." if len(message_body) > 100 else message_body,
+        "message_preview": message_preview,
         "sender": username,
         "agent_id": agent_id_to_use,
         "room_id": room_id
@@ -1081,11 +1087,16 @@ async def send_to_letta_api(
                 )
             else:
                 logger.debug(f"[API] Using Agents API: {current_agent_id}")
+                if isinstance(message_body, list):
+                    return letta_client.agents.messages.create(
+                        agent_id=current_agent_id,
+                        input=message_body,
+                    )
                 return letta_client.agents.messages.create(
                     agent_id=current_agent_id,
                     messages=[{"role": "user", "content": message_body}]
                 )
-        response = await asyncio.to_thread(_sync_send)
+        response: Any = await asyncio.to_thread(_sync_send)
         
         if hasattr(response, 'model_dump'):
             result = response.model_dump()
@@ -1113,7 +1124,7 @@ async def send_to_letta_api(
             await typing_manager.start()
         
         gateway_result: Optional[str] = None
-        if config.letta_gateway_enabled:
+        if config.letta_gateway_enabled and not isinstance(message_body, list):
             try:
                 from src.letta.ws_gateway_client import get_gateway_client, GatewayUnavailableError
                 from src.letta.gateway_stream_reader import collect_via_gateway
@@ -1128,6 +1139,7 @@ async def send_to_letta_api(
                     agent_id=agent_id_to_use,
                     message=message_body,
                     conversation_id=conversation_id,
+                    source={"channel": "matrix", "chatId": room_id} if room_id else None,
                 )
                 if gateway_result:
                     logger.info(f"[API] Got response via WS gateway ({len(gateway_result)} chars)")
@@ -1691,7 +1703,13 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
             return
         
         # Handle the file upload (notifications are sent by file_handler)
-        await file_handler.handle_file_event(event, room.room_id, agent_id)
+        file_result = await file_handler.handle_file_event(event, room.room_id, agent_id)
+
+        if isinstance(file_result, list):
+            if config.letta_streaming_enabled:
+                await send_to_letta_api_streaming(file_result, event.sender, config, logger, room.room_id)
+            else:
+                await send_to_letta_api(file_result, event.sender, config, logger, room.room_id)
     
     except FileUploadError as e:
         logger.error(f"File upload error: {e}")

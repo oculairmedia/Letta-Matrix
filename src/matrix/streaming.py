@@ -9,7 +9,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
 
 from letta_client import Letta
 
@@ -116,7 +116,7 @@ class StepStreamReader:
     def _create_stream_with_retry(
         self,
         conversation_id: str,
-        message: str,
+        message: Union[str, list],
         background: bool = False,
         max_retries: int = 3,
     ) -> Any:
@@ -174,7 +174,7 @@ class StepStreamReader:
     async def stream_message(
         self,
         agent_id: str,
-        message: str,
+        message: Union[str, list],
         background: bool = False,
         conversation_id: Optional[str] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
