@@ -236,6 +236,33 @@ def mock_http_session(mock_space_id, mock_room_id, mock_access_token, mock_letta
     return mock_session
 
 
+@pytest.fixture(autouse=True)
+def _clean_db_between_integration_tests():
+    """Clear all rows from the shared in-memory database between integration tests.
+    
+    The session-scoped DB engine is shared across all tests. Integration tests
+    that insert data (mappings, invitations) can leave stale rows that cause
+    UNIQUE constraint violations in subsequent tests.
+    """
+    yield
+    # Cleanup after each integration test
+    import src.models.agent_mapping as _db_mod
+    from src.models.agent_mapping import AgentMapping, InvitationStatus
+    from sqlalchemy.orm import sessionmaker
+    try:
+        engine = _db_mod.get_engine()
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        try:
+            session.query(InvitationStatus).delete()
+            session.query(AgentMapping).delete()
+            session.commit()
+        finally:
+            session.close()
+    except Exception:
+        pass  # Engine might not be initialized yet
+
+
 @pytest.fixture
 def patched_http_session(mock_http_session):
     """
