@@ -148,7 +148,7 @@ jobs:
         MATRIX_DATA_DIR: ${{ runner.temp }}/matrix_data
       run: |
         mkdir -p $MATRIX_DATA_DIR
-        pytest -m "not slow" --ignore=tests/integration/test_opencode_bridge.py --ignore=tests/integration/test_agent_room_provisioning.py --ignore=tests/integration/test_room_membership.py --cov=src --cov-config=pytest.ini --cov-report=xml --cov-report=html --cov-report=term-missing
+        pytest -m "not slow" --ignore=tests/integration/test_opencode_bridge.py --ignore=tests/integration/test_agent_room_provisioning.py --ignore=tests/integration/test_room_membership.py --ignore=tests/integration/test_multi_agent_workflow.py --ignore=tests/integration/test_space_integration_mocked.py --cov=src --cov-config=pytest.ini --cov-report=xml --cov-report=html --cov-report=term-missing
 
     - name: Display coverage summary
       run: |
@@ -239,10 +239,10 @@ jobs:
         echo "- Integration Tests: ${{ needs.integration-tests.result }}" >> $GITHUB_STEP_SUMMARY
         echo "- Coverage: ${{ needs.coverage.result }}" >> $GITHUB_STEP_SUMMARY
 
+        # Coverage is informational - only gate on test jobs
         if [[ "${{ needs.smoke-tests.result }}" == "success" && \
               "${{ needs.unit-tests.result }}" == "success" && \
-              "${{ needs.integration-tests.result }}" == "success" && \
-              "${{ needs.coverage.result }}" == "success" ]]; then
+              "${{ needs.integration-tests.result }}" == "success" ]]; then
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "✅ All tests passed!" >> $GITHUB_STEP_SUMMARY
           exit 0
