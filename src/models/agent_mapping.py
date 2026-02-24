@@ -73,7 +73,7 @@ def get_database_url() -> str:
     """Get database URL from environment or use default"""
     return os.environ.get(
         'DATABASE_URL',
-        'postgresql://postgres:your-super-secret-and-long-postgres-password@synapse-db:5432/matrix_letta'
+        'sqlite:///agent_mappings.db'
     )
 
 

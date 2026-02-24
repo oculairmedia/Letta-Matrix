@@ -174,7 +174,7 @@ class TestUserExistence:
                 with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     exists = await manager.check_user_exists("@test:matrix.oculair.ca")
 
-                    assert exists is True
+                    assert exists == "exists_auth_failed"
 
     @pytest.mark.asyncio
     async def test_user_exists_returns_false_on_404(self, mock_config, mock_aiohttp_session):
@@ -196,7 +196,7 @@ class TestUserExistence:
                 with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     exists = await manager.check_user_exists("@test:matrix.oculair.ca")
 
-                    assert exists is False
+                    assert exists == "not_found"
 
     @pytest.mark.asyncio
     async def test_user_exists_returns_false_on_other_errors(self, mock_config, mock_aiohttp_session):
@@ -218,7 +218,7 @@ class TestUserExistence:
                 with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     exists = await manager.check_user_exists("@test:matrix.oculair.ca")
 
-                    assert exists is False
+                    assert exists == "not_found"
 
 
 @pytest.mark.unit

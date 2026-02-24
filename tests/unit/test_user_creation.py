@@ -37,7 +37,7 @@ class TestUserCreation:
         
         with patch('aiohttp.ClientSession', return_value=mock_session):
             exists = await user_manager.check_user_exists("testuser")
-            assert exists is True
+            assert exists == "exists_auth_failed"
 
     @pytest.mark.asyncio
     async def test_check_user_exists_user_not_found(self, user_manager):
@@ -49,7 +49,7 @@ class TestUserCreation:
             mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
             
             exists = await user_manager.check_user_exists("testuser")
-            assert exists is False
+            assert exists == "not_found"
 
     @pytest.mark.asyncio
     async def test_check_user_exists_m_unknown(self, user_manager):
@@ -62,7 +62,7 @@ class TestUserCreation:
             mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
             
             exists = await user_manager.check_user_exists("testuser")
-            assert exists is False
+            assert exists == "not_found"
 
     @pytest.mark.asyncio
     async def test_create_matrix_user_success(self, user_manager):
@@ -132,7 +132,7 @@ class TestUserCreation:
         
         # Mock check_user_exists to return False (users don't exist)
         with patch.object(user_manager, 'check_user_exists', new_callable=AsyncMock) as mock_check:
-            mock_check.return_value = False
+            mock_check.return_value = "not_found"
             
             # Mock create_matrix_user to return True (successful creation)
             with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
@@ -154,7 +154,7 @@ class TestUserCreation:
         
         # Mock check_user_exists to return True (users exist)
         with patch.object(user_manager, 'check_user_exists', new_callable=AsyncMock) as mock_check:
-            mock_check.return_value = True
+            mock_check.return_value = "exists_auth_failed"
             
             # Mock create_matrix_user (should not be called)
             with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
@@ -174,7 +174,7 @@ class TestUserCreation:
         
         # Mock check_user_exists: first exists, second doesn't
         with patch.object(user_manager, 'check_user_exists', new_callable=AsyncMock) as mock_check:
-            mock_check.side_effect = [True, False]
+            mock_check.side_effect = ["exists_auth_failed", "not_found"]
             
             # Mock create_matrix_user
             with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
@@ -196,7 +196,7 @@ class TestUserCreation:
         
         # Mock check_user_exists to raise an exception for first user
         with patch.object(user_manager, 'check_user_exists', new_callable=AsyncMock) as mock_check:
-            mock_check.side_effect = [Exception("Network error"), False]
+            mock_check.side_effect = [Exception("Network error"), "not_found"]
             
             # Mock create_matrix_user
             with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
@@ -738,7 +738,7 @@ class TestUserCreationIntegration:
         # First call: user doesn't exist, gets created
         # Second call: user already exists
         with patch.object(user_manager, 'check_user_exists', new_callable=AsyncMock) as mock_check:
-            mock_check.side_effect = [False, True]
+            mock_check.side_effect = ["not_found", "exists_auth_failed"]
             
             with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
                 mock_create.return_value = True

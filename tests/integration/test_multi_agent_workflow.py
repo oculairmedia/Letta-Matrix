@@ -120,7 +120,7 @@ class TestRoomCreationAndManagement:
         assert mapping.room_created is True, "Room should be marked as created"
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Test relies on old file-based storage - now uses database which requires synapse-db")
+    @pytest.mark.skip(reason="Test relies on old file-based storage - now uses database")
     async def test_room_persistence_across_restarts(self, tmp_path, mock_config):
         """Test that rooms persist across manager restarts"""
         pass

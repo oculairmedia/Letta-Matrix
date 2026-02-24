@@ -82,6 +82,7 @@ class TestGetMappingByAgentId:
     def test_returns_mapping_when_found(self, mock_db):
         """Test that mapping is returned when found"""
         mock_mapping = Mock()
+        mock_mapping.removed_at = None
         mock_mapping.to_dict.return_value = {
             "agent_id": "agent-123",
             "agent_name": "TestAgent",
@@ -118,6 +119,7 @@ class TestGetMappingByRoomId:
     def test_returns_mapping_when_found(self, mock_db):
         """Test that mapping is returned when found"""
         mock_mapping = Mock()
+        mock_mapping.removed_at = None
         mock_mapping.to_dict.return_value = {
             "agent_id": "agent-123",
             "room_id": "!room:test"
@@ -144,6 +146,7 @@ class TestGetMappingByMatrixUser:
     def test_returns_mapping_when_found(self, mock_db):
         """Test that mapping is returned when found"""
         mock_mapping = Mock()
+        mock_mapping.removed_at = None
         mock_mapping.to_dict.return_value = {
             "agent_id": "agent-123",
             "matrix_user_id": "@agent:test"
