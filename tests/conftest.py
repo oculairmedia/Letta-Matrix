@@ -17,6 +17,35 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # ============================================================================
+# Database Engine Reset (autouse - ensures in-memory SQLite for ALL tests)
+# ============================================================================
+
+@pytest.fixture(autouse=True, scope="session")
+def _reset_db_engine_for_tests():
+    """
+    Automatically reset the database engine singleton to use in-memory SQLite.
+
+    This prevents 'no such table: agent_mappings' errors in CI where the
+    file-based SQLite default (sqlite:///agent_mappings.db) has no tables.
+    Runs once per test session before any test.
+    """
+    import src.models.agent_mapping as db_mod
+    original_engine = db_mod._engine
+    db_mod._engine = None  # Reset singleton
+
+    # Set DATABASE_URL to in-memory SQLite for the entire test session
+    _env_patch = patch.dict(os.environ, {'DATABASE_URL': 'sqlite:///:memory:'})
+    _env_patch.start()
+
+    # Initialize tables in the fresh in-memory engine
+    db_mod.init_database()
+
+    yield
+
+    _env_patch.stop()
+    db_mod._engine = original_engine
+
+# ============================================================================
 # Configuration Fixtures
 # ============================================================================
 
