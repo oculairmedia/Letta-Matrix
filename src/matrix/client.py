@@ -7,7 +7,7 @@ import uuid
 import aiohttp
 from typing import Optional, Dict, Any, Tuple, Union
 from dataclasses import dataclass
-from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset, RoomMessageMedia, UnknownEvent
+from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset, RoomMessageMedia, RoomMessageAudio, UnknownEvent
 from nio.responses import JoinError
 from nio.exceptions import RemoteProtocolError
 
@@ -743,6 +743,8 @@ async def send_to_letta_api_streaming(
 ) -> str:
     from src.matrix.streaming import StepStreamReader, StreamingMessageHandler, StreamEventType
     from src.letta.client import get_letta_client, LettaConfig
+    from src.voice.directive_parser import parse_directives
+    from src.voice.tts import is_tts_configured, synthesize_speech
     
     agent_id_to_use = config.letta_agent_id
     agent_name_found = "DEFAULT"
@@ -878,6 +880,7 @@ async def send_to_letta_api_streaming(
     
     final_response = ""
     typing_manager = TypingIndicatorManager(room_id, config, logger) if config.letta_typing_enabled else None
+    voice_logger = logging.getLogger("matrix_client.voice")
     
     try:
         if typing_manager:
@@ -919,11 +922,41 @@ async def send_to_letta_api_streaming(
 
         async for event in event_source:
             logger.debug(f"[STREAMING] Event: {event.type.value}")
+
+            if event.type == StreamEventType.ASSISTANT and event.content:
+                parse_result = parse_directives(event.content)
+
+                if parse_result.directives:
+                    event.content = parse_result.clean_text
+                    final_response = parse_result.clean_text
+
+                    if is_tts_configured():
+                        for directive in parse_result.directives:
+                            audio_data = await synthesize_speech(directive.text)
+                            if not audio_data:
+                                voice_logger.warning("[VOICE] TTS synthesis returned no audio")
+                                continue
+
+                            filename = f"voice-{uuid.uuid4().hex}.mp3"
+                            audio_event_id = await upload_and_send_audio(
+                                room_id=room_id,
+                                audio_data=audio_data,
+                                filename=filename,
+                                mimetype="audio/mpeg",
+                                config=config,
+                                logger=voice_logger,
+                            )
+                            if audio_event_id:
+                                voice_logger.info("[VOICE] Sent voice message event %s", audio_event_id)
+                            else:
+                                voice_logger.warning("[VOICE] Failed to upload/send voice message")
+                    else:
+                        voice_logger.info("[VOICE] Voice directive found but TTS is not configured")
+
+                elif event.content:
+                    final_response = event.content
             
             await handler.handle_event(event)
-            
-            if event.type == StreamEventType.ASSISTANT and event.content:
-                final_response = event.content
             
             if event.type == StreamEventType.ERROR:
                 logger.error(f"[STREAMING] Error: {event.content}")
@@ -944,6 +977,119 @@ async def send_to_letta_api_streaming(
         final_response = "Agent processed the request (no text response)."
     
     return final_response
+
+
+async def upload_and_send_audio(
+    room_id: str,
+    audio_data: bytes,
+    filename: str,
+    mimetype: str,
+    config,
+    logger,
+    duration_ms: Optional[int] = None,
+) -> Optional[str]:
+    try:
+        from src.core.mapping_service import get_mapping_by_room_id
+
+        agent_mapping = get_mapping_by_room_id(room_id)
+        if not agent_mapping:
+            logger.warning("[VOICE] No agent mapping found for room %s", room_id)
+            return None
+
+        agent_username = agent_mapping["matrix_user_id"].split(":")[0].replace("@", "")
+        agent_password = agent_mapping["matrix_password"]
+
+        login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
+        login_data = {
+            "type": "m.login.password",
+            "user": agent_username,
+            "password": agent_password,
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(login_url, json=login_data) as login_response:
+                if login_response.status != 200:
+                    error_text = await login_response.text()
+                    logger.error(
+                        "[VOICE] Failed to login as agent %s: %s - %s",
+                        agent_username,
+                        login_response.status,
+                        error_text,
+                    )
+                    return None
+
+                auth_data = await login_response.json()
+                agent_token = auth_data.get("access_token")
+                if not agent_token:
+                    logger.error("[VOICE] No token received for agent %s", agent_username)
+                    return None
+
+            upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
+            upload_headers = {
+                "Authorization": f"Bearer {agent_token}",
+                "Content-Type": mimetype,
+            }
+
+            async with session.put(
+                upload_url,
+                headers=upload_headers,
+                params={"filename": filename},
+                data=audio_data,
+            ) as upload_response:
+                if upload_response.status != 200:
+                    upload_error = await upload_response.text()
+                    logger.error(
+                        "[VOICE] Audio upload failed: %s - %s",
+                        upload_response.status,
+                        upload_error,
+                    )
+                    return None
+
+                upload_data = await upload_response.json()
+                content_uri = upload_data.get("content_uri")
+                if not content_uri:
+                    logger.error("[VOICE] Upload response missing content_uri")
+                    return None
+
+            txn_id = str(uuid.uuid4())
+            message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
+            message_headers = {
+                "Authorization": f"Bearer {agent_token}",
+                "Content-Type": "application/json",
+            }
+
+            info = {
+                "mimetype": mimetype,
+                "size": len(audio_data),
+                "duration": duration_ms,
+            }
+            message_data = {
+                "msgtype": "m.audio",
+                "url": content_uri,
+                "body": filename,
+                "info": info,
+                "org.matrix.msc1767.audio": {},
+                "org.matrix.msc3245.voice": {},
+            }
+
+            async with session.put(message_url, headers=message_headers, json=message_data) as send_response:
+                if send_response.status != 200:
+                    send_error = await send_response.text()
+                    logger.error(
+                        "[VOICE] Audio send failed: %s - %s",
+                        send_response.status,
+                        send_error,
+                    )
+                    return None
+
+                send_result = await send_response.json()
+                event_id = send_result.get("event_id")
+                logger.debug("[VOICE] Sent audio event_id: %s", event_id)
+                return event_id
+
+    except Exception as e:
+        logger.error(f"[VOICE] Exception while uploading/sending audio: {e}", exc_info=True)
+        return None
 
 
 async def send_to_letta_api(
@@ -1706,6 +1852,11 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
         file_result = await file_handler.handle_file_event(event, room.room_id, agent_id)
 
         if isinstance(file_result, list):
+            if config.letta_streaming_enabled:
+                await send_to_letta_api_streaming(file_result, event.sender, config, logger, room.room_id)
+            else:
+                await send_to_letta_api(file_result, event.sender, config, logger, room.room_id)
+        elif isinstance(file_result, str):
             if config.letta_streaming_enabled:
                 await send_to_letta_api_streaming(file_result, event.sender, config, logger, room.room_id)
             else:
@@ -2475,6 +2626,7 @@ async def main():
             logger.error(f"Error in file callback: {e}", exc_info=True)
     
     client.add_event_callback(file_callback_wrapper, RoomMessageMedia)
+    client.add_event_callback(file_callback_wrapper, RoomMessageAudio)
     
     async def poll_response_wrapper(room, event):
         try:

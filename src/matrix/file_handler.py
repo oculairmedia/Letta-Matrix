@@ -24,6 +24,7 @@ from typing import Optional, Dict, Any, Callable, Awaitable, Union
 from dataclasses import dataclass
 import aiohttp
 from nio import Event
+from src.voice.transcription import transcribe_audio
 
 # Import Letta SDK
 from letta_client import Letta
@@ -46,6 +47,14 @@ SUPPORTED_FILE_TYPES = {
     'image/webp': '.webp',
     'image/bmp': '.bmp',
     'image/tiff': '.tiff',
+    'audio/ogg': '.ogg',
+    'audio/mpeg': '.mp3',
+    'audio/mp4': '.m4a',
+    'audio/wav': '.wav',
+    'audio/x-wav': '.wav',
+    'audio/webm': '.webm',
+    'audio/flac': '.flac',
+    'audio/aac': '.aac',
     'application/octet-stream': None,  # Accept but determine by extension
 }
 
@@ -54,7 +63,8 @@ SUPPORTED_EXTENSIONS = {
     # Documents
     '.pdf', '.txt', '.md', '.json', '.markdown',
     # Images
-    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif'
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif',
+    '.ogg', '.mp3', '.m4a', '.wav', '.webm', '.flac', '.aac', '.oga'
 }
 
 # File size limit (50MB)
@@ -195,7 +205,7 @@ class LettaFileHandler:
             raise last_exception
         raise FileUploadError(f"{operation_name} failed with no exception")
         
-    async def handle_file_event(self, event: Event, room_id: str, agent_id: Optional[str] = None) -> Union[bool, list, None]:
+    async def handle_file_event(self, event: Event, room_id: str, agent_id: Optional[str] = None) -> Union[bool, list, str, None]:
         """
         Handle a file upload event from Matrix
         
@@ -206,6 +216,7 @@ class LettaFileHandler:
             
         Returns:
             list: Multimodal content for image uploads (to be sent via normal message pipeline)
+            str: Transcribed text wrapper for voice uploads
             bool: Success/failure for document uploads handled internally
             None: Nothing to do
         """
@@ -225,6 +236,11 @@ class LettaFileHandler:
             
             logger.info(f"Processing file upload: {metadata.file_name} from {metadata.sender} in room {room_id}")
             
+            is_audio = metadata.file_type.startswith('audio/')
+            if is_audio:
+                logger.info(f"Audio uploaded: {metadata.file_name}. Transcribing voice message.")
+                return await self._handle_audio_upload(metadata)
+
             # Check if this is an image - handle differently via multimodal message
             is_image = metadata.file_type.startswith('image/')
             if is_image:
@@ -353,6 +369,29 @@ Example: "{opencode_mxid} Here is my response..."
             if file_path and os.path.exists(file_path):
                 os.unlink(file_path)
                 logger.debug(f"Cleaned up temporary file {file_path}")
+
+    async def _handle_audio_upload(self, metadata: FileMetadata) -> str:
+        file_path = await self._download_matrix_file(metadata)
+
+        try:
+            with open(file_path, 'rb') as audio_file:
+                audio_data = audio_file.read()
+
+            result = await transcribe_audio(audio_data, filename=metadata.file_name or "voice.ogg")
+            if result.error:
+                logger.warning(f"Voice transcription failed for {metadata.file_name}: {result.error}")
+                return f"[Voice message - transcription failed: {result.error}]"
+
+            transcribed_text = (result.text or "").strip()
+            if not transcribed_text:
+                transcribed_text = "(no speech detected)"
+
+            logger.info(f"Voice transcription succeeded for {metadata.file_name}")
+            return f"[Voice message]: {transcribed_text}"
+        finally:
+            if file_path and os.path.exists(file_path):
+                os.unlink(file_path)
+                logger.debug(f"Cleaned up temporary file {file_path}")
     
     async def _send_multimodal_message(self, agent_id: str, content: list) -> Optional[Any]:
         """
@@ -440,8 +479,7 @@ Example: "{opencode_mxid} Here is my response..."
             content = event.source.get('content', {})
             msgtype = content.get('msgtype')
             
-            # Accept both m.file and m.image message types
-            if msgtype not in ['m.file', 'm.image']:
+            if msgtype not in ['m.file', 'm.image', 'm.audio']:
                 return None
             
             # Extract file information
@@ -536,7 +574,21 @@ Example: "{opencode_mxid} Here is my response..."
                 metadata.file_type = 'image/bmp'
             elif ext in ['.tiff', '.tif']:
                 metadata.file_type = 'image/tiff'
-        
+            elif ext in ['.ogg', '.oga']:
+                metadata.file_type = 'audio/ogg'
+            elif ext == '.mp3':
+                metadata.file_type = 'audio/mpeg'
+            elif ext == '.m4a':
+                metadata.file_type = 'audio/mp4'
+            elif ext == '.wav':
+                metadata.file_type = 'audio/wav'
+            elif ext == '.webm':
+                metadata.file_type = 'audio/webm'
+            elif ext == '.flac':
+                metadata.file_type = 'audio/flac'
+            elif ext == '.aac':
+                metadata.file_type = 'audio/aac'
+
         return None
     
     async def _download_matrix_file(self, metadata: FileMetadata) -> str:
