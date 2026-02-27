@@ -655,16 +655,17 @@ class LiveEditStreamingHandler:
         return None
 
     async def _send_final(self, content: str) -> str:
-        if self._event_id and self._lines:
-            final_body = "\n".join(self._lines) + "\n\n" + content
-            await self.edit_message(self.room_id, self._event_id, final_body)
+        # Delete the progress message and send a clean final response
+        if self._event_id:
+            if self.delete_message:
+                try:
+                    await self.delete_message(self.room_id, self._event_id)
+                except Exception:
+                    pass
             self._event_id = None
             self._lines.clear()
-            return ""
 
         eid = await self.send_final_message(self.room_id, content)
-        self._event_id = None
-        self._lines.clear()
         return eid
 
     async def _do_edit(self) -> None:
