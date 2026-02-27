@@ -10,6 +10,7 @@ const BRIDGE_WS_URL = process.env.OPENCODE_BRIDGE_WS_URL || "ws://127.0.0.1:3201
 const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
 const WS_RECONNECT_BASE_MS = 1000;
 const WS_RECONNECT_MAX_MS = 30000;
+const MESSAGE_INJECT_TIMEOUT_MS = 10_000; // 10s — if session.idle hasn't fired, inject anyway
 
 // Debug logging to file since console.log doesn't appear in OpenCode logs
 const DEBUG_LOG_PATH = path.join(os.homedir(), ".local", "share", "opencode", "matrix-plugin-debug.log");
@@ -376,7 +377,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   let wsReconnectTimeout: NodeJS.Timeout | null = null;
   let shuttingDown = false;
   const pendingMessages = new Map<string, { content: string; sentLength: number; timer: NodeJS.Timeout | null }>();
-  const STREAM_SETTLE_MS = 500;
+  // (STREAM_SETTLE_MS removed — scheduleOutboundSend was dead code, outbound messages use sendOutboundMessage directly)
   
   // Queue for incoming Matrix messages - inject on session.idle
   const pendingMatrixMessages: Array<{
@@ -388,6 +389,58 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     receivedAt: number;
   }> = [];
   const processedEventIds = new Set<string>();
+  let injectTimeout: NodeJS.Timeout | null = null;
+  
+  // Shared function: inject all queued Matrix messages into the active session
+  // Called from both session.idle handler and the fallback timeout
+  const injectPendingMessages = async (sessionId: string, trigger: string): Promise<void> => {
+    const count = pendingMatrixMessages.length;
+    if (count === 0) return;
+    debugLog(`injectPendingMessages (${trigger}): processing ${count} queued messages for session ${sessionId}`);
+    
+    const messageDir = getOrCreateMessageDir(sessionId);
+    const prevMessage = findNearestMessageWithFields(messageDir);
+    
+    // Combine all pending messages into one injection
+    const combinedMessages = pendingMatrixMessages
+      .filter(msg => !processedEventIds.has(msg.eventId))
+      .map(msg => `[Matrix from ${msg.sender} in ${msg.roomId}]\n${msg.body}`)
+      .join("\n\n---\n\n");
+    
+    if (!combinedMessages.trim()) {
+      pendingMatrixMessages.length = 0;
+      return;
+    }
+    
+    // Mark all as processed
+    pendingMatrixMessages.forEach(msg => processedEventIds.add(msg.eventId));
+    pendingMatrixMessages.length = 0;
+    
+    // Limit processed set size
+    if (processedEventIds.size > 200) {
+      const toRemove = Array.from(processedEventIds).slice(0, 100);
+      toRemove.forEach(id => processedEventIds.delete(id));
+    }
+    
+    try {
+      debugLog(`Attempting session.prompt (${trigger}) with sessionId=${sessionId}, agent=${prevMessage?.agent || 'none'}`);
+      debugLog(`Combined message content: ${combinedMessages.substring(0, 200)}...`);
+      await client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          agent: prevMessage?.agent,
+          parts: [{ type: "text", text: combinedMessages }],
+        },
+        query: { directory: baseDir },
+      });
+      debugLog(`SUCCESS (${trigger}): Injected queued messages via session.prompt`);
+    } catch (e: any) {
+      debugLog(`FAILED (${trigger}): session.prompt error: ${e?.message || e}`);
+      // Fallback to file-based injection
+      const fallbackResult = injectMessage(sessionId, combinedMessages, baseDir);
+      debugLog(`Fallback file-based injection result (${trigger}): ${fallbackResult}`);
+    }
+  };
   
   const sendOutboundMessage = (role: "assistant" | "user", content: string, messageId: string) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -405,40 +458,15 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     }
   };
   
-  const scheduleOutboundSend = (messageId: string, content: string, role: "assistant" | "user") => {
-    let entry = pendingMessages.get(messageId);
-    
-    if (!entry) {
-      entry = { content: "", sentLength: 0, timer: null };
-      pendingMessages.set(messageId, entry);
-    }
-    
-    entry.content = content;
-    
-    if (entry.timer) {
-      clearTimeout(entry.timer);
-    }
-    
-    entry.timer = setTimeout(() => {
-      const e = pendingMessages.get(messageId);
-      if (e && e.content.length > e.sentLength) {
-        sendOutboundMessage(role, e.content, messageId);
-        e.sentLength = e.content.length;
-      }
-    }, STREAM_SETTLE_MS);
-    
-    if (pendingMessages.size > 100) {
-      const staleKeys = Array.from(pendingMessages.keys()).slice(0, 50);
-      staleKeys.forEach(k => {
-        const e = pendingMessages.get(k);
-        if (e?.timer) clearTimeout(e.timer);
-        pendingMessages.delete(k);
-      });
-    }
-  };
+  // scheduleOutboundSend removed — was dead code (never called).
+  // Outbound messages go through sendOutboundMessage() directly.
 
   const shutdown = () => {
     shuttingDown = true;
+    if (injectTimeout) {
+      clearTimeout(injectTimeout);
+      injectTimeout = null;
+    }
     if (wsReconnectTimeout) {
       clearTimeout(wsReconnectTimeout);
       wsReconnectTimeout = null;
@@ -529,6 +557,21 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
           });
           
           debugLog(`Queued message from ${matrixMsg.sender} (${pendingMatrixMessages.length} pending)`);
+          
+          // Start a timeout — if session.idle doesn't fire within 10s, inject anyway
+          if (!injectTimeout) {
+            injectTimeout = setTimeout(async () => {
+              injectTimeout = null;
+              if (pendingMatrixMessages.length === 0) return;
+              debugLog(`Inject timeout fired — session.idle hasn't processed ${pendingMatrixMessages.length} messages in ${MESSAGE_INJECT_TIMEOUT_MS}ms`);
+              const sessionId = await getActiveSessionId(client, baseDir);
+              if (sessionId) {
+                await injectPendingMessages(sessionId, 'timeout');
+              } else {
+                debugLog(`Inject timeout: no active session found, messages remain queued`);
+              }
+            }, MESSAGE_INJECT_TIMEOUT_MS);
+          }
         }
       } catch {
       }
@@ -571,7 +614,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     process.exit(0);
   });
 
-  // Initial registration after 2 second delay
+  // Initial registration after short delay (non-blocking — must use setTimeout per OpenCode plugin pattern)
   setTimeout(async () => {
     try {
       await acquireLock(lockPath);
@@ -606,7 +649,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       debugLog(`Bridge registration error: ${err?.message || err}`);
       shutdown();
     }
-  }, 2000);
+  }, 500);
 
   const messagePartsMap = new Map<string, Map<string, string>>();
   const sentMessages = new Set<string>();
@@ -675,49 +718,12 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
         // Process queued Matrix messages
         debugLog(`Pending messages: ${pendingMatrixMessages.length}, sessionId: ${sessionId || 'null'}`);
         if (pendingMatrixMessages.length > 0 && sessionId) {
-          debugLog(`session.idle - processing ${pendingMatrixMessages.length} queued messages`);
-          
-          // Get context from previous message for proper agent/model routing
-          const messageDir = getOrCreateMessageDir(sessionId);
-          const prevMessage = findNearestMessageWithFields(messageDir);
-          
-          // Combine all pending messages into one injection
-          const combinedMessages = pendingMatrixMessages
-            .filter(msg => !processedEventIds.has(msg.eventId))
-            .map(msg => `[Matrix from ${msg.sender} in ${msg.roomId}]\n${msg.body}`)
-            .join("\n\n---\n\n");
-          
-          if (combinedMessages.trim()) {
-            // Mark all as processed
-            pendingMatrixMessages.forEach(msg => processedEventIds.add(msg.eventId));
-            pendingMatrixMessages.length = 0;
-            
-            // Limit processed set size
-            if (processedEventIds.size > 200) {
-              const toRemove = Array.from(processedEventIds).slice(0, 100);
-              toRemove.forEach(id => processedEventIds.delete(id));
-            }
-            
-            try {
-              debugLog(`Attempting session.prompt with sessionId=${sessionId}, agent=${prevMessage?.agent || 'none'}`);
-              debugLog(`Combined message content: ${combinedMessages.substring(0, 200)}...`);
-              // Inject using session.prompt - this triggers the AI to respond
-              await client.session.prompt({
-                path: { id: sessionId },
-                body: {
-                  agent: prevMessage?.agent,
-                  parts: [{ type: "text", text: combinedMessages }],
-                },
-                query: { directory: baseDir },
-              });
-              debugLog(`SUCCESS: Injected queued messages via session.prompt`);
-            } catch (e: any) {
-              debugLog(`FAILED: session.prompt error: ${e?.message || e}`);
-              // Fallback to file-based injection
-              const fallbackResult = injectMessage(sessionId, combinedMessages, baseDir);
-              debugLog(`Fallback file-based injection result: ${fallbackResult}`);
-            }
+          // session.idle fired — cancel the fallback timeout since we're handling it now
+          if (injectTimeout) {
+            clearTimeout(injectTimeout);
+            injectTimeout = null;
           }
+          await injectPendingMessages(sessionId, 'session.idle');
         }
         
         // Original outbound message handling

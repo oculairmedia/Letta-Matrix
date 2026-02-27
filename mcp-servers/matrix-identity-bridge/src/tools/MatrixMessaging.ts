@@ -1228,7 +1228,33 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const target = requireParam(input.target, 'target');
         const message = requireParam(input.message, 'message');
         
-        const instance = await ctx.openCodeService.findActiveInstance(target);
+        // Resolve sender identity (doesn't depend on instance lookup)
+        const resolveSenderIdentity = async () => {
+          const callingAgentId = input.__injected_agent_id || getInjectedAgentId();
+          if (input.sender_identity_id || input.identity_id) {
+            const identityId = input.sender_identity_id ?? input.identity_id;
+            if (!identityId) throw new Error('Identity id not provided');
+            const identity = await ctx.storage.getIdentityAsync(identityId);
+            if (!identity) throw new Error(`Identity not found: ${identityId}`);
+            return identity;
+          } else if (callingAgentId && ctx.lettaService) {
+            const identityId = await ctx.lettaService.getOrCreateAgentIdentity(callingAgentId);
+            const identity = await ctx.storage.getIdentityAsync(identityId);
+            if (!identity) throw new Error(`Failed to get identity for calling agent: ${callingAgentId}`);
+            return identity;
+          } else if (callerDirectory) {
+            return await resolveCallerIdentity(ctx, callerDirectory, callerName, effectiveSource);
+          } else {
+            return await ctx.openCodeService.getOrCreateDefaultIdentity();
+          }
+        };
+        
+        // Run instance lookup and sender identity resolution in parallel
+        const [instance, senderIdentity] = await Promise.all([
+          ctx.openCodeService.findActiveInstance(target),
+          resolveSenderIdentity()
+        ]);
+        
         if (!instance) {
           const knownIdentity = await ctx.openCodeService.getIdentityByTarget(target);
           if (knownIdentity) {
@@ -1246,30 +1272,6 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           });
         }
         
-        let senderIdentity;
-        const callingAgentId = input.__injected_agent_id || getInjectedAgentId();
-        
-        if (input.sender_identity_id || input.identity_id) {
-          const identityId = input.sender_identity_id ?? input.identity_id;
-          if (!identityId) {
-            throw new Error('Identity id not provided');
-          }
-          senderIdentity = await ctx.storage.getIdentityAsync(identityId);
-          if (!senderIdentity) {
-            throw new Error(`Identity not found: ${identityId}`);
-          }
-        } else if (callingAgentId && ctx.lettaService) {
-          const identityId = await ctx.lettaService.getOrCreateAgentIdentity(callingAgentId);
-          senderIdentity = await ctx.storage.getIdentityAsync(identityId);
-          if (!senderIdentity) {
-            throw new Error(`Failed to get identity for calling agent: ${callingAgentId}`);
-          }
-        } else if (callerDirectory) {
-          senderIdentity = await resolveCallerIdentity(ctx, callerDirectory, callerName, effectiveSource);
-        } else {
-          senderIdentity = await ctx.openCodeService.getOrCreateDefaultIdentity();
-        }
-        
         let targetRoomId = instance.rooms.length > 0 ? instance.rooms[0] : undefined;
         
         if (!targetRoomId) {
@@ -1282,6 +1284,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           await updateBridgeRegistration(instance.directory, targetRoomId);
         }
         
+        // Get client and join room (parallel: client pool + join are independent until send)
         const senderClient = await ctx.clientPool.getClient(senderIdentity);
         
         try {

@@ -64,6 +64,7 @@ interface OpenCodeRoomMapping {
 }
 
 let openCodeRoomMappings: Record<string, OpenCodeRoomMapping> = {};
+let roomMappingsByDir: Map<string, OpenCodeRoomMapping> = new Map();
 
 function loadOpenCodeRoomMappings(): void {
   const mappingsPath = process.env.OPENCODE_ROOM_MAPPINGS_PATH;
@@ -72,27 +73,22 @@ function loadOpenCodeRoomMappings(): void {
   try {
     const raw = readFileSync(mappingsPath, "utf-8");
     openCodeRoomMappings = JSON.parse(raw);
-  } catch {
+    roomMappingsByDir = new Map(Object.values(openCodeRoomMappings).map((m) => [m.directory, m]));
+  } catch (err) {
+    console.warn(`[Bridge] Failed to load room mappings from ${mappingsPath}:`, err);
   }
 }
 
 function getRoomForDirectory(directory: string): string | undefined {
-  for (const mapping of Object.values(openCodeRoomMappings)) {
-    if (mapping.directory === directory) {
-      return mapping.room_id;
-    }
-  }
-  return undefined;
+  return roomMappingsByDir.get(directory)?.room_id;
 }
 
 function getMappingForDirectory(directory: string): OpenCodeRoomMapping | undefined {
-  for (const mapping of Object.values(openCodeRoomMappings)) {
-    if (mapping.directory === directory) {
-      return mapping;
-    }
-  }
-  return undefined;
+  return roomMappingsByDir.get(directory);
 }
+
+// WebSocket keepalive interval (ping every 30s to detect dead connections)
+const WS_PING_INTERVAL_MS = 30000;
 
 // Track message IDs we've sent to Matrix to prevent echo loops
 const sentOutboundMessageIds = new Set<string>();
@@ -129,11 +125,15 @@ const config = {
 const registrations = new Map<string, OpenCodeRegistration>();
 const identityToRegistration = new Map<string, OpenCodeRegistration>();
 const roomToRegistration = new Map<string, OpenCodeRegistration>();
+const directoryToRegistration = new Map<string, OpenCodeRegistration>();
 let matrixClient: sdk.MatrixClient | null = null;
 let agentMappings: Record<string, AgentMapping> = {};
+let agentMappingsByRoom: Map<string, AgentMapping> = new Map();
+let agentMappingsLastFetched = 0;
+const AGENT_MAPPINGS_CACHE_TTL = 300000;
 
 const MATRIX_DOMAIN = process.env.MATRIX_DOMAIN || "matrix.oculair.ca";
-const STALE_TIMEOUT = 300000;
+const STALE_TIMEOUT = 900000; // 15 minutes (was 5min - too aggressive, caused reconnect storms)
 
 function deriveMatrixIdentities(directory: string): string[] {
   const dirName = directory.split("/").filter((p) => p).pop() || "default";
@@ -165,12 +165,15 @@ function extractOpenCodeMentions(body: string): string[] {
 async function loadAgentMappings(): Promise<void> {
   try {
     agentMappings = await fetchAgentMappings(config.matrixApi.baseUrl, fetch);
-  } catch {
+    agentMappingsByRoom = new Map(Object.values(agentMappings).map((m) => [m.room_id, m]));
+    agentMappingsLastFetched = Date.now();
+  } catch (err) {
+    console.warn(`[Bridge] Failed to load agent mappings:`, err);
   }
 }
 
 function getAgentForRoom(roomId: string): AgentMapping | undefined {
-  return Object.values(agentMappings).find((m) => m.room_id === roomId);
+  return agentMappingsByRoom.get(roomId);
 }
 
 function cleanupStaleRegistrations(): void {
@@ -190,6 +193,7 @@ function cleanupStaleRegistrations(): void {
           roomToRegistration.delete(roomId);
         }
       }
+      directoryToRegistration.delete(reg.directory);
     }
   }
 }
@@ -214,7 +218,8 @@ async function handleOutboundMessage(
   
   try {
     await matrixClient.sendTextMessage(roomId, messageContent);
-  } catch {
+  } catch (err) {
+    console.error(`[Bridge] Failed to send outbound message to Matrix room ${roomId}:`, err);
   }
 }
 
@@ -241,7 +246,8 @@ function forwardToOpenCode(
     registration.ws.send(JSON.stringify(message));
     registration.lastSeen = Date.now();
     return true;
-  } catch {
+  } catch (err) {
+    console.error(`[Bridge] Failed to forward to WebSocket for ${registration.id}:`, err);
     return false;
   }
 }
@@ -254,7 +260,7 @@ function isOpenCodeIdentity(mxid: string): boolean {
 }
 
 async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Promise<void> {
-  console.log(`[Bridge] handleMatrixMessage: ${event.getType()} from ${event.getSender()} in ${room.roomId}`);
+  // Removed noisy per-event log — only log forwarding outcomes
   if (event.getSender() === matrixClient?.getUserId()) return;
   if (event.getType() !== "m.room.message") return;
   
@@ -266,32 +272,39 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
   const body = content.body || "";
   const eventId = event.getId() || "";
 
-  if (isOpenCodeIdentity(senderMxid)) return;
+  // Skip outbound messages we sent ourselves (echo prevention)
+  if (wasMessageSentByUs(eventId)) return;
 
   const senderMember = room.getMember?.(senderMxid);
   const senderName = senderMember?.name || getAgentForRoom(roomId)?.agent_name || senderMxid;
 
+  // Path 1: Room-registered delivery (direct room → WebSocket mapping)
   const roomRegistration = roomToRegistration.get(roomId);
   if (roomRegistration) {
+    // Only skip messages from the room's OWN OpenCode identity (echo prevention)
     const roomOwnerIdentities = deriveMatrixIdentities(roomRegistration.directory);
     if (roomOwnerIdentities.includes(senderMxid)) {
-      console.log(`[Bridge] Skipping own message from ${senderMxid}`);
       return;
     }
     const forwarded = forwardToOpenCode(roomRegistration, roomId, senderName, senderMxid, body, eventId);
-    console.log(`[Bridge] Room-registered forward to ${roomRegistration.id}: ${forwarded ? 'SUCCESS' : 'FAILED'} - "${body.substring(0, 50)}..."`);
+    console.log(`[Bridge] Room-registered forward to ${roomRegistration.id}: ${forwarded ? 'SUCCESS' : 'FAILED'} - "${body.substring(0, 80)}..."`);
     return;
   }
 
+  // Path 2: Mention-based delivery (@oc_* mentions in message body)
   const mentions = extractOpenCodeMentions(body);
   if (mentions.length === 0) return;
 
   for (const mention of mentions) {
+    // Don't forward a mention to the sender themselves (echo prevention)
+    if (mention === senderMxid) continue;
+
     const registration = identityToRegistration.get(mention);
     if (registration && forwardToOpenCode(registration, roomId, senderName, senderMxid, body, eventId)) {
+      console.log(`[Bridge] Mention-based forward to ${registration.id} for ${mention}: SUCCESS`);
       continue;
     }
-    console.log(`[Bridge] No active WebSocket for ${registration?.id || mention}, scanning all registrations...`);
+    // Fallback: scan all registrations for a matching active WebSocket
     let forwarded = false;
     for (const [, reg] of registrations) {
       if (!reg.ws || reg.ws.readyState !== WebSocket.OPEN) continue;
@@ -420,6 +433,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
                 identityToRegistration.delete(identity);
               }
             }
+            directoryToRegistration.delete(oldReg.directory);
             registrations.delete(oldId);
           }
         }
@@ -434,6 +448,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           for (const roomId of effectiveRooms) {
             roomToRegistration.set(roomId, existing);
           }
+          directoryToRegistration.set(directory, existing);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ 
             success: true, 
@@ -455,6 +470,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         };
 
         registrations.set(id, registration);
+        directoryToRegistration.set(directory, registration);
 
         const matrixIdentities = deriveMatrixIdentities(directory);
         for (const identity of matrixIdentities) {
@@ -495,12 +511,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
 
         if (!registration && directory) {
-          for (const reg of registrations.values()) {
-            if (reg.directory === directory) {
-              registration = reg;
-              break;
-            }
-          }
+          registration = directoryToRegistration.get(directory);
         }
 
         if (registration) {
@@ -541,6 +552,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           for (const roomId of registration.rooms) {
             roomToRegistration.delete(roomId);
           }
+          directoryToRegistration.delete(registration.directory);
         }
         
         const deleted = registrations.delete(id);
@@ -555,7 +567,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   }
 
   if (url.pathname === "/rooms" && req.method === "GET") {
-    await loadAgentMappings();
+    if (Date.now() - agentMappingsLastFetched > AGENT_MAPPINGS_CACHE_TTL) {
+      await loadAgentMappings();
+      agentMappingsLastFetched = Date.now();
+    }
     const rooms = Object.values(agentMappings).map((m) => ({
       room_id: m.room_id,
       agent_name: m.agent_name,
@@ -581,22 +596,71 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
 
         let updated = false;
-        for (const reg of registrations.values()) {
-          if (reg.directory === directory) {
-            for (const oldRoom of reg.rooms) {
-              roomToRegistration.delete(oldRoom);
-            }
-            reg.rooms = rooms;
-            for (const newRoom of rooms) {
-              roomToRegistration.set(newRoom, reg);
-            }
-            reg.lastSeen = Date.now();
-            updated = true;
+        const reg = directoryToRegistration.get(directory);
+        if (reg) {
+          for (const oldRoom of reg.rooms) {
+            roomToRegistration.delete(oldRoom);
           }
+          reg.rooms = rooms;
+          for (const newRoom of rooms) {
+            roomToRegistration.set(newRoom, reg);
+          }
+          reg.lastSeen = Date.now();
+          updated = true;
         }
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: updated, directory, rooms }));
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
+      }
+    });
+    return;
+  }
+
+  // Direct message delivery to OpenCode instance (bypasses Matrix roundtrip)
+  if (url.pathname === "/notify" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      try {
+        const { directory, message, sender, agentName } = JSON.parse(body);
+
+        if (!directory || !message) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing required fields: directory, message" }));
+          return;
+        }
+
+        // Find registration for this directory
+        const registration = directoryToRegistration.get(directory);
+
+        if (!registration) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `No registration found for directory: ${directory}` }));
+          return;
+        }
+
+        const senderName = agentName || sender || "Unknown";
+        const eventId = `notify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const forwarded = forwardToOpenCode(
+          registration,
+          registration.rooms[0] || "",
+          senderName,
+          sender || "notify",
+          message,
+          eventId
+        );
+
+        console.log(`[Bridge] /notify to ${registration.id}: ${forwarded ? 'SUCCESS' : 'FAILED'} from ${senderName}`);
+
+        res.writeHead(forwarded ? 200 : 503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          success: forwarded,
+          forwarded_to: forwarded ? registration.id : undefined,
+          error: forwarded ? undefined : "WebSocket not connected"
+        }));
       } catch (e) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid JSON" }));
@@ -611,6 +675,21 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 function handleWebSocketConnection(ws: WebSocket): void {
   let authenticatedRegistration: OpenCodeRegistration | null = null;
+  let pingInterval: NodeJS.Timeout | null = null;
+
+  // Start ping/pong keepalive to detect dead connections early
+  pingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping();
+    }
+  }, WS_PING_INTERVAL_MS);
+
+  ws.on("pong", () => {
+    // Update lastSeen on pong to keep registration alive
+    if (authenticatedRegistration) {
+      authenticatedRegistration.lastSeen = Date.now();
+    }
+  });
 
   ws.on("message", (data) => {
     try {
@@ -621,8 +700,12 @@ function handleWebSocketConnection(ws: WebSocket): void {
         let registration = registrations.get(authMsg.registrationId);
 
         if (!registration) {
+          registration = directoryToRegistration.get(authMsg.registrationId);
+        }
+
+        if (!registration) {
           for (const reg of registrations.values()) {
-            if (reg.directory === authMsg.registrationId || reg.id.includes(authMsg.registrationId)) {
+            if (reg.id.includes(authMsg.registrationId)) {
               registration = reg;
               break;
             }
@@ -633,6 +716,7 @@ function handleWebSocketConnection(ws: WebSocket): void {
           if (registration.ws && registration.ws !== ws) registration.ws.close();
           registration.ws = ws;
           registration.lastSeen = Date.now();
+          directoryToRegistration.set(registration.directory, registration);
           authenticatedRegistration = registration;
           
           for (const roomId of registration.rooms) {
@@ -640,24 +724,34 @@ function handleWebSocketConnection(ws: WebSocket): void {
           }
           
           ws.send(JSON.stringify({ type: "auth_success", registrationId: registration.id }));
+          console.log(`[Bridge] WebSocket authenticated: ${registration.id}`);
         } else {
           ws.send(JSON.stringify({ type: "auth_error", error: "Registration not found" }));
+          console.log(`[Bridge] WebSocket auth failed: registration not found for ${authMsg.registrationId}`);
         }
       } else if (message.type === "outbound_message" && authenticatedRegistration) {
         const outbound = message as WsOutboundMessage;
         handleOutboundMessage(authenticatedRegistration, outbound);
       }
-    } catch {
+    } catch (err) {
+      console.warn(`[Bridge] WebSocket message parse error:`, err);
     }
   });
 
-  ws.on("close", () => {
+  ws.on("close", (code, reason) => {
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = null;
+    }
+    const regId = authenticatedRegistration?.id || 'unauthenticated';
+    console.log(`[Bridge] WebSocket closed for ${regId}: code=${code}, reason=${reason?.toString() || 'none'}`);
     if (authenticatedRegistration?.ws === ws) {
       authenticatedRegistration.ws = null;
     }
   });
 
-  ws.on("error", () => {
+  ws.on("error", (err) => {
+    console.warn(`[Bridge] WebSocket error for ${authenticatedRegistration?.id || 'unknown'}:`, err.message);
   });
 }
 

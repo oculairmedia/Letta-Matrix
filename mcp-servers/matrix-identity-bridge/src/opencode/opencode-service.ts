@@ -45,6 +45,11 @@ export class OpenCodeService {
   private identityManager: IdentityManager;
   private config: OpenCodeConfig;
 
+  // Registration cache — avoids redundant HTTP calls to bridge
+  private registrationCache: OpenCodeBridgeRegistration[] = [];
+  private registrationCacheTime = 0;
+  private static readonly REGISTRATION_CACHE_TTL_MS = 15_000; // 15 seconds
+
   constructor(
     storage: Storage,
     identityManager: IdentityManager,
@@ -59,21 +64,47 @@ export class OpenCodeService {
     return process.env.OPENCODE_BRIDGE_URL || 'http://127.0.0.1:3201';
   }
 
-  private async fetchBridgeRegistrations(): Promise<OpenCodeBridgeRegistration[]> {
-    const bridgeUrl = this.getBridgeUrl();
-    const response = await fetch(`${bridgeUrl}/registrations`);
-    if (!response.ok) {
-      throw new Error(`OpenCode bridge error: ${response.status} ${response.statusText}`);
+  /**
+   * Get bridge registrations with caching.
+   * Returns cached result if within TTL, otherwise fetches fresh.
+   * Pass forceRefresh=true to bypass cache (e.g., after a mutation).
+   */
+  private async getCachedRegistrations(forceRefresh = false): Promise<OpenCodeBridgeRegistration[]> {
+    const now = Date.now();
+    if (!forceRefresh && (now - this.registrationCacheTime) < OpenCodeService.REGISTRATION_CACHE_TTL_MS) {
+      return this.registrationCache;
     }
-    const data = await response.json() as { registrations?: OpenCodeBridgeRegistration[] };
-    return Array.isArray(data.registrations) ? data.registrations : [];
+    try {
+      const bridgeUrl = this.getBridgeUrl();
+      const response = await fetch(`${bridgeUrl}/registrations`);
+      if (!response.ok) {
+        throw new Error(`OpenCode bridge error: ${response.status} ${response.statusText}`);
+      }
+      const data = await response.json() as { registrations?: OpenCodeBridgeRegistration[] };
+      this.registrationCache = Array.isArray(data.registrations) ? data.registrations : [];
+      this.registrationCacheTime = Date.now();
+      return this.registrationCache;
+    } catch (err) {
+      // On failure, return stale cache if available
+      if (this.registrationCache.length > 0) {
+        console.warn('[OpenCodeService] Bridge fetch failed, using stale cache:', (err as Error).message);
+        return this.registrationCache;
+      }
+      throw err;
+    }
+  }
+
+  /** Invalidate cache (call after mutations like register/unregister) */
+  private invalidateRegistrationCache(): void {
+    this.registrationCacheTime = 0;
   }
 
   private async triggerBridgeDiscovery(): Promise<void> {
     const bridgeUrl = this.getBridgeUrl();
     try {
       await fetch(`${bridgeUrl}/discover`, { method: 'POST' });
-    } catch {
+    } catch (err) {
+      console.warn('[OpenCodeService] Bridge discovery failed:', (err as Error).message);
       return;
     }
   }
@@ -147,13 +178,12 @@ export class OpenCodeService {
 
     const identity = await this.getOrCreateIdentity(directory, displayNameOverride);
 
-    await this.triggerBridgeDiscovery();
-
     let registration: OpenCodeBridgeRegistration | undefined;
     try {
-      const registrations = await this.fetchBridgeRegistrations();
+      const registrations = await this.getCachedRegistrations();
       registration = this.pickLatestRegistrationForDirectory(registrations, directory);
-    } catch {
+    } catch (err) {
+      console.warn('[OpenCodeService] Failed to fetch bridge registrations for connect:', (err as Error).message);
       registration = undefined;
     }
 
@@ -194,13 +224,12 @@ export class OpenCodeService {
   }
 
   async getBridgeSession(directory: string): Promise<OpenCodeSession | undefined> {
-    await this.triggerBridgeDiscovery();
-
     let registration: OpenCodeBridgeRegistration | undefined;
     try {
-      const registrations = await this.fetchBridgeRegistrations();
+      const registrations = await this.getCachedRegistrations();
       registration = this.pickLatestRegistrationForDirectory(registrations, directory);
-    } catch {
+    } catch (err) {
+      console.warn('[OpenCodeService] Failed to fetch bridge registrations for session:', (err as Error).message);
       registration = undefined;
     }
 
@@ -219,12 +248,11 @@ export class OpenCodeService {
   }
 
   async listBridgeSessions(): Promise<OpenCodeSession[]> {
-    await this.triggerBridgeDiscovery();
-
     let registrations: OpenCodeBridgeRegistration[] = [];
     try {
-      registrations = await this.fetchBridgeRegistrations();
-    } catch {
+      registrations = await this.getCachedRegistrations();
+    } catch (err) {
+      console.warn('[OpenCodeService] Failed to fetch bridge registrations for listBridgeSessions:', (err as Error).message);
       registrations = [];
     }
 
@@ -242,7 +270,8 @@ export class OpenCodeService {
           connectedAt: reg.registeredAt || Date.now(),
           lastActivityAt: reg.lastSeen || Date.now()
         });
-      } catch {
+      } catch (err) {
+        console.warn(`[OpenCodeService] Failed to create identity for ${reg.directory}:`, (err as Error).message);
         continue;
       }
     }
@@ -340,8 +369,9 @@ export class OpenCodeService {
 
     let registrations: OpenCodeBridgeRegistration[] = [];
     try {
-      registrations = await this.fetchBridgeRegistrations();
-    } catch {
+      registrations = await this.getCachedRegistrations();
+    } catch (err) {
+      console.warn('[OpenCodeService] Failed to fetch registrations for listIdentities:', (err as Error).message);
       registrations = [];
     }
 
@@ -353,7 +383,7 @@ export class OpenCodeService {
       try {
         const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
         directory = Buffer.from(base64, 'base64').toString('utf-8');
-      } catch {
+      } catch (err) {
         directory = 'unknown';
       }
 
@@ -379,8 +409,9 @@ export class OpenCodeService {
 
     let registrations: OpenCodeBridgeRegistration[] = [];
     try {
-      registrations = await this.fetchBridgeRegistrations();
-    } catch {
+      registrations = await this.getCachedRegistrations();
+    } catch (err) {
+      console.warn('[OpenCodeService] Failed to fetch registrations for getStatus:', (err as Error).message);
       registrations = [];
     }
 
@@ -398,7 +429,8 @@ export class OpenCodeService {
           connectedAt: reg.registeredAt || Date.now(),
           lastActivityAt: reg.lastSeen || Date.now()
         });
-      } catch {
+      } catch (err) {
+        console.warn(`[OpenCodeService] Failed to create identity for ${reg.directory} in getStatus:`, (err as Error).message);
         continue;
       }
     }
@@ -440,12 +472,11 @@ export class OpenCodeService {
    * Only returns instances that have been seen within the threshold
    */
   async getActiveInstances(thresholdSeconds: number = 120): Promise<ActiveOpenCodeInstance[]> {
-    await this.triggerBridgeDiscovery();
-
     let registrations: OpenCodeBridgeRegistration[] = [];
     try {
-      registrations = await this.fetchBridgeRegistrations();
-    } catch {
+      registrations = await this.getCachedRegistrations();
+    } catch (err) {
+      console.warn('[OpenCodeService] Failed to fetch registrations for getActiveInstances:', (err as Error).message);
       registrations = [];
     }
 
@@ -473,7 +504,8 @@ export class OpenCodeService {
           lastSeen: new Date(reg.lastSeen || Date.now()),
           rooms: reg.rooms || []
         });
-      } catch {
+      } catch (err) {
+        console.warn(`[OpenCodeService] Failed to create identity for ${reg.directory} in getActiveInstances:`, (err as Error).message);
         continue;
       }
     }
