@@ -928,8 +928,8 @@ async def send_to_letta_api_streaming(
                 voice_logger.debug("[VOICE-DEBUG] Parsed content (%d chars): directives=%d, clean=%r", len(event.content), len(parse_result.directives), event.content[:100])
 
                 if parse_result.directives:
-                    event.content = parse_result.clean_text
-                    final_response = parse_result.clean_text or "(voice message sent)"
+                    # Collect transcript text from all voice directives
+                    transcript_parts = []
 
                     if is_tts_configured():
                         for directive in parse_result.directives:
@@ -949,13 +949,24 @@ async def send_to_letta_api_streaming(
                             )
                             if audio_event_id:
                                 voice_logger.info("[VOICE] Sent voice message event %s", audio_event_id)
+                                transcript_parts.append(directive.text)
                             else:
                                 voice_logger.warning("[VOICE] Failed to upload/send voice message")
                     else:
                         voice_logger.info("[VOICE] Voice directive found but TTS is not configured")
 
-                    # Skip sending empty text when entire message was a voice directive
-                    if not parse_result.clean_text.strip():
+                    # Build the text to display: any clean_text + transcript of spoken parts
+                    display_parts = []
+                    if parse_result.clean_text.strip():
+                        display_parts.append(parse_result.clean_text.strip())
+                    if transcript_parts:
+                        display_parts.append("🗣️ " + " ".join(transcript_parts))
+
+                    if display_parts:
+                        event.content = "\n\n".join(display_parts)
+                        final_response = event.content
+                    else:
+                        final_response = "(voice message sent)"
                         continue
                 elif event.content:
                     final_response = event.content
