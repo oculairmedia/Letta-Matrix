@@ -929,7 +929,7 @@ async def send_to_letta_api_streaming(
 
                 if parse_result.directives:
                     event.content = parse_result.clean_text
-                    final_response = parse_result.clean_text
+                    final_response = parse_result.clean_text or "(voice message sent)"
 
                     if is_tts_configured():
                         for directive in parse_result.directives:
@@ -954,6 +954,9 @@ async def send_to_letta_api_streaming(
                     else:
                         voice_logger.info("[VOICE] Voice directive found but TTS is not configured")
 
+                    # Skip sending empty text when entire message was a voice directive
+                    if not parse_result.clean_text.strip():
+                        continue
                 elif event.content:
                     final_response = event.content
             
