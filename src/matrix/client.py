@@ -743,7 +743,7 @@ async def send_to_letta_api_streaming(
 ) -> str:
     from src.matrix.streaming import StepStreamReader, StreamingMessageHandler, StreamEventType
     from src.letta.client import get_letta_client, LettaConfig
-    from src.voice.directive_parser import parse_directives
+    from src.voice.directive_parser import parse_directives, VoiceDirective, ImageDirective
     from src.voice.tts import is_tts_configured, synthesize_speech
     
     agent_id_to_use = config.letta_agent_id
@@ -928,16 +928,19 @@ async def send_to_letta_api_streaming(
                 voice_logger.debug("[VOICE-DEBUG] Parsed content (%d chars): directives=%d, clean=%r", len(event.content), len(parse_result.directives), event.content[:100])
 
                 if parse_result.directives:
-                    # Collect transcript text from all voice directives
+                    # Process each directive (voice or image)
                     transcript_parts = []
+                    caption_parts = []
 
-                    if is_tts_configured():
-                        for directive in parse_result.directives:
+                    for directive in parse_result.directives:
+                        if isinstance(directive, VoiceDirective):
+                            if not is_tts_configured():
+                                voice_logger.info("[VOICE] Voice directive found but TTS is not configured")
+                                continue
                             audio_data = await synthesize_speech(directive.text)
                             if not audio_data:
                                 voice_logger.warning("[VOICE] TTS synthesis returned no audio")
                                 continue
-
                             filename = f"voice-{uuid.uuid4().hex}.mp3"
                             audio_event_id = await upload_and_send_audio(
                                 room_id=room_id,
@@ -952,21 +955,36 @@ async def send_to_letta_api_streaming(
                                 transcript_parts.append(directive.text)
                             else:
                                 voice_logger.warning("[VOICE] Failed to upload/send voice message")
-                    else:
-                        voice_logger.info("[VOICE] Voice directive found but TTS is not configured")
 
-                    # Build the text to display: any clean_text + transcript of spoken parts
+                        elif isinstance(directive, ImageDirective):
+                            image_event_id = await fetch_and_send_image(
+                                room_id=room_id,
+                                image_url=directive.url,
+                                alt=directive.alt,
+                                config=config,
+                                logger=voice_logger,
+                            )
+                            if image_event_id:
+                                voice_logger.info("[IMAGE] Sent image event %s", image_event_id)
+                                if directive.caption:
+                                    caption_parts.append(directive.caption)
+                            else:
+                                voice_logger.warning("[IMAGE] Failed to fetch/send image from %s", directive.url)
+
+                    # Build the text to display: clean_text + voice transcripts + image captions
                     display_parts = []
                     if parse_result.clean_text.strip():
                         display_parts.append(parse_result.clean_text.strip())
                     if transcript_parts:
-                        display_parts.append("🗣️ " + " ".join(transcript_parts))
+                        display_parts.append("\ud83d\udde3\ufe0f " + " ".join(transcript_parts))
+                    if caption_parts:
+                        display_parts.append("\n".join(caption_parts))
 
                     if display_parts:
                         event.content = "\n\n".join(display_parts)
                         final_response = event.content
                     else:
-                        final_response = "(voice message sent)"
+                        final_response = "(media sent)"
                         continue
                 elif event.content:
                     final_response = event.content
@@ -1106,6 +1124,130 @@ async def upload_and_send_audio(
         logger.error(f"[VOICE] Exception while uploading/sending audio: {e}", exc_info=True)
         return None
 
+async def fetch_and_send_image(
+    room_id: str,
+    image_url: str,
+    alt: str,
+    config,
+    logger,
+) -> Optional[str]:
+    """Fetch an image from a URL, upload to Matrix media repo, and send as m.image."""
+    try:
+        from src.core.mapping_service import get_mapping_by_room_id
+
+        agent_mapping = get_mapping_by_room_id(room_id)
+        if not agent_mapping:
+            logger.warning("[IMAGE] No agent mapping found for room %s", room_id)
+            return None
+
+        agent_username = agent_mapping["matrix_user_id"].split(":")[0].replace("@", "")
+        agent_password = agent_mapping["matrix_password"]
+
+        fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
+        async with aiohttp.ClientSession() as session:
+            # Step 1: Fetch the image from the URL
+            try:
+                async with session.get(image_url, headers=fetch_headers, timeout=aiohttp.ClientTimeout(total=30)) as img_response:
+                    if img_response.status != 200:
+                        logger.error("[IMAGE] Failed to fetch image from %s: %s", image_url, img_response.status)
+                        return None
+                    image_data = await img_response.read()
+                    content_type = img_response.headers.get("Content-Type", "image/png")
+                    # Normalize content type (strip params like charset)
+                    mimetype = content_type.split(";")[0].strip()
+                    if not mimetype.startswith("image/"):
+                        mimetype = "image/png"
+            except Exception as fetch_err:
+                logger.error("[IMAGE] Exception fetching image from %s: %s", image_url, fetch_err)
+                return None
+
+            if not image_data or len(image_data) < 100:
+                logger.warning("[IMAGE] Fetched image too small (%d bytes) from %s", len(image_data) if image_data else 0, image_url)
+                return None
+
+            # Derive filename from URL
+            from urllib.parse import urlparse
+            url_path = urlparse(image_url).path
+            filename = url_path.split("/")[-1] if "/" in url_path else "image.png"
+            if not filename or "." not in filename:
+                ext = mimetype.split("/")[-1].replace("jpeg", "jpg")
+                filename = f"image.{ext}"
+
+            logger.info("[IMAGE] Fetched %s (%d bytes, %s)", filename, len(image_data), mimetype)
+
+            # Step 2: Login as agent
+            login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
+            login_data = {
+                "type": "m.login.password",
+                "user": agent_username,
+                "password": agent_password,
+            }
+
+            async with session.post(login_url, json=login_data) as login_response:
+                if login_response.status != 200:
+                    error_text = await login_response.text()
+                    logger.error("[IMAGE] Failed to login as agent %s: %s - %s", agent_username, login_response.status, error_text)
+                    return None
+                auth_data = await login_response.json()
+                agent_token = auth_data.get("access_token")
+                if not agent_token:
+                    logger.error("[IMAGE] No token received for agent %s", agent_username)
+                    return None
+
+            # Step 3: Upload to Matrix media repo
+            upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
+            upload_headers = {
+                "Authorization": f"Bearer {agent_token}",
+                "Content-Type": mimetype,
+            }
+
+            async with session.post(
+                upload_url,
+                headers=upload_headers,
+                params={"filename": filename},
+                data=image_data,
+            ) as upload_response:
+                if upload_response.status != 200:
+                    upload_error = await upload_response.text()
+                    logger.error("[IMAGE] Upload failed: %s - %s", upload_response.status, upload_error)
+                    return None
+                upload_result = await upload_response.json()
+                content_uri = upload_result.get("content_uri")
+                if not content_uri:
+                    logger.error("[IMAGE] Upload response missing content_uri")
+                    return None
+
+            # Step 4: Send m.image event
+            txn_id = str(uuid.uuid4())
+            message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
+            message_headers = {
+                "Authorization": f"Bearer {agent_token}",
+                "Content-Type": "application/json",
+            }
+
+            message_data = {
+                "msgtype": "m.image",
+                "url": content_uri,
+                "body": alt or filename,
+                "info": {
+                    "mimetype": mimetype,
+                    "size": len(image_data),
+                },
+            }
+
+            async with session.put(message_url, headers=message_headers, json=message_data) as send_response:
+                if send_response.status != 200:
+                    send_error = await send_response.text()
+                    logger.error("[IMAGE] Send failed: %s - %s", send_response.status, send_error)
+                    return None
+                send_result = await send_response.json()
+                event_id = send_result.get("event_id")
+                logger.info("[IMAGE] Sent image event_id: %s", event_id)
+                return event_id
+
+    except Exception as e:
+        logger.error(f"[IMAGE] Exception while fetching/sending image: {e}", exc_info=True)
+        return None
 
 async def send_to_letta_api(
     message_body: Union[str, list],
@@ -1843,11 +1985,11 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
         
         logger.info(f"File upload detected in room {room.room_id}")
 
-        # Skip audio files sent by agent users to prevent feedback loops
-        # (agent sends voice -> bridge picks up -> transcribes -> sends back to agent)
+        # Skip media files sent by agent users to prevent feedback loops
+        # (agent sends voice/image -> bridge picks up -> re-processes -> sends back to agent)
         event_sender = getattr(event, 'sender', '')
-        if event_sender.startswith('@agent_') and isinstance(event, RoomMessageAudio):
-            logger.debug(f"[VOICE] Skipping agent's own audio upload from {event_sender} (feedback loop prevention)")
+        if event_sender.startswith('@agent_') and isinstance(event, (RoomMessageAudio, RoomMessageMedia)):
+            logger.debug(f"[MEDIA] Skipping agent's own media upload from {event_sender} (feedback loop prevention)")
             return
         
         # Only process files in rooms that have an agent mapping
