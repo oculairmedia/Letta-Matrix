@@ -491,10 +491,16 @@ class StreamingMessageHandler:
             return None
         
         elif event.is_progress:
-            # Tool calls/returns are internal — only log, don't post to chat
-            # Matches lettabot behavior: only assistant messages are visible
-            logger.debug(f"[Streaming] Progress (not posted): {event.format_progress()}")
-            return None
+            # Show tool progress as a temporary message
+            progress_text = event.format_progress()
+            if self._progress_event_id:
+                try:
+                    await self.delete_message(self.room_id, self._progress_event_id)
+                except Exception:
+                    pass
+            eid = await self.send_message(self.room_id, progress_text)
+            self._progress_event_id = eid
+            return eid
         
         elif event.is_final:
             # Suppress <no-reply/> responses — agent chose not to reply
@@ -631,8 +637,20 @@ class LiveEditStreamingHandler:
             return self._event_id
 
         if event.is_progress:
-            logger.debug(f"[LiveEdit] Progress (not posted): {event.format_progress()}")
-            return None
+            line = event.format_progress()
+            self._lines.append(line)
+
+            if self._event_id is None:
+                body = self._build_body()
+                eid = await self.send_message(self.room_id, body)
+                self._event_id = eid
+                self._last_edit_time = time.monotonic()
+                return eid
+
+            now = time.monotonic()
+            if now - self._last_edit_time >= self.EDIT_DEBOUNCE_S:
+                await self._do_edit()
+            return self._event_id
 
         return None
 
