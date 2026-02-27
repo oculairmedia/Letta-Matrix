@@ -15,17 +15,18 @@ class ParseResult:
     directives: List[VoiceDirective]
 
 
-_ACTIONS_BLOCK_REGEX = re.compile(r"^\s*<actions>([\s\S]*?)</actions>")
+_ACTIONS_BLOCK_REGEX = re.compile(r"<actions>([\s\S]*?)</actions>")
 _VOICE_DIRECTIVE_REGEX = re.compile(r"<voice>([\s\S]*?)</voice>")
 
 
 def parse_directives(text: str) -> ParseResult:
-    match = _ACTIONS_BLOCK_REGEX.match(text)
+    match = _ACTIONS_BLOCK_REGEX.search(text)
     if not match:
         return ParseResult(clean_text=text, directives=[])
 
     actions_content = match.group(1)
-    clean_text = text[match.end():].strip()
+    # Remove the entire <actions>...</actions> block from the text
+    clean_text = (text[:match.start()] + text[match.end():]).strip()
     directives: List[VoiceDirective] = []
 
     for voice_match in _VOICE_DIRECTIVE_REGEX.finditer(actions_content):

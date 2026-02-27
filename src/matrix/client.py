@@ -925,6 +925,7 @@ async def send_to_letta_api_streaming(
 
             if event.type == StreamEventType.ASSISTANT and event.content:
                 parse_result = parse_directives(event.content)
+                voice_logger.debug("[VOICE-DEBUG] Parsed content (%d chars): directives=%d, clean=%r", len(event.content), len(parse_result.directives), event.content[:100])
 
                 if parse_result.directives:
                     event.content = parse_result.clean_text
@@ -1030,7 +1031,7 @@ async def upload_and_send_audio(
                 "Content-Type": mimetype,
             }
 
-            async with session.put(
+            async with session.post(
                 upload_url,
                 headers=upload_headers,
                 params={"filename": filename},
@@ -1827,6 +1828,13 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
             return
         
         logger.info(f"File upload detected in room {room.room_id}")
+
+        # Skip audio files sent by agent users to prevent feedback loops
+        # (agent sends voice -> bridge picks up -> transcribes -> sends back to agent)
+        event_sender = getattr(event, 'sender', '')
+        if event_sender.startswith('@agent_') and isinstance(event, RoomMessageAudio):
+            logger.debug(f"[VOICE] Skipping agent's own audio upload from {event_sender} (feedback loop prevention)")
+            return
         
         # Only process files in rooms that have an agent mapping
         # This prevents processing files in relay/bridge rooms where letta
