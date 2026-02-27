@@ -10,8 +10,8 @@ from openai import AsyncOpenAI
 logger = logging.getLogger("matrix_client.voice")
 
 _DEFAULT_TTS_PROVIDER = "elevenlabs"
-_DEFAULT_ELEVENLABS_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
-_DEFAULT_ELEVENLABS_MODEL_ID = "eleven_monolingual_v1"
+_DEFAULT_ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Sarah - Mature, Reassuring
+_DEFAULT_ELEVENLABS_MODEL_ID = "eleven_flash_v2_5"  # Fast, cost-effective
 _DEFAULT_OPENAI_TTS_VOICE = "alloy"
 _DEFAULT_OPENAI_TTS_MODEL = "tts-1"
 
@@ -52,8 +52,8 @@ async def synthesize_speech(text: str) -> Optional[bytes]:
 
 async def _synthesize_with_elevenlabs(text: str) -> Optional[bytes]:
     api_key = os.getenv("ELEVENLABS_API_KEY")
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID", _DEFAULT_ELEVENLABS_VOICE_ID)
-    model_id = os.getenv("ELEVENLABS_MODEL_ID", _DEFAULT_ELEVENLABS_MODEL_ID)
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip() or _DEFAULT_ELEVENLABS_VOICE_ID
+    model_id = os.getenv("ELEVENLABS_MODEL_ID", "").strip() or _DEFAULT_ELEVENLABS_MODEL_ID
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {

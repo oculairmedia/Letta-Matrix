@@ -81,6 +81,8 @@ services:
         condition: service_started
       mcp-server:
         condition: service_started
+      whisper:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -181,6 +183,36 @@ services:
       retries: 3
       start_period: 10s
 
+  # Speaches - Local Speech-to-Text (faster-whisper)
+  whisper:
+    image: ghcr.io/speaches-ai/speaches:latest-cuda-12.6.3
+    restart: unless-stopped
+    environment:
+      - WHISPER__INFERENCE_DEVICE=cuda
+      - WHISPER__COMPUTE_TYPE=float16
+      - PRELOAD_MODELS=["Systran/faster-whisper-medium"]
+      - STT_MODEL_TTL=-1
+    volumes:
+      - whisper-models:/home/ubuntu/.cache/huggingface/hub
+    networks:
+      - matrix-internal
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # First run downloads model
+
 networks:
   matrix-internal:
     driver: bridge
+
+volumes:
+  whisper-models:
