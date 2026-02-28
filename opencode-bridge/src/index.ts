@@ -265,7 +265,7 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
   if (event.getType() !== "m.room.message") return;
   
   const content = event.getContent();
-  if (content.msgtype !== "m.text") return;
+  if (content.msgtype !== "m.text" && content.msgtype !== "m.notice") return;
 
   const roomId = room.roomId;
   const senderMxid = event.getSender() || "unknown";
