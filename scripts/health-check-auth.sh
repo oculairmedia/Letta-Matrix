@@ -49,6 +49,11 @@ ADMIN_ROOM_WAIT=5         # seconds to wait after admin room command
 STARTUP_WAIT=8            # seconds to wait after tuwunel restart
 COMPOSE_FILE_ARGS="-f ${PROJECT_DIR}/docker-compose.tuwunel.yml"
 
+# Agent identity discovery
+IDENTITY_BRIDGE_DATA="${PROJECT_DIR}/mcp-servers/matrix-identity-bridge/data"
+IDENTITIES_FILE="${IDENTITY_BRIDGE_DATA}/archive/identities.json"
+MAX_PARALLEL_CHECKS=10    # concurrent login checks for agent identities
+
 # Parse flags
 AUTO_RECOVER=true
 for arg in "$@"; do
@@ -69,6 +74,12 @@ FAILED_USERS=()
 PASSED_USERS=()
 RECOVERED_USERS=()
 RECOVERY_FAILED_USERS=()
+
+# Agent identity tracking (separate from core users)
+AGENT_IDENTITIES=()
+FAILED_AGENTS=()
+RECOVERED_AGENTS=()
+RECOVERY_FAILED_AGENTS=()
 
 # ============================================================
 # Functions
@@ -345,6 +356,216 @@ attempt_recovery() {
     [[ ${#RECOVERY_FAILED_USERS[@]} -gt 0 ]] && log "  Still failing: ${RECOVERY_FAILED_USERS[*]}"
 }
 
+# Discover agent identities from the identity bridge storage.
+# Reads archive/identities.json and extracts localparts for type=letta identities.
+# Convention: password = localpart (e.g., agent_4a9392fc_... / agent_4a9392fc_...)
+discover_agent_identities() {
+    if [[ ! -f "$IDENTITIES_FILE" ]]; then
+        log "[Agents] Identity file not found: $IDENTITIES_FILE — skipping agent checks"
+        return 1
+    fi
+
+    # Extract localparts from mxid field for letta-type identities
+    # mxid format: @agent_xxxx:matrix.oculair.ca → localpart: agent_xxxx
+    local localparts
+    localparts=$(python3 -c "
+import json, sys
+try:
+    with open('${IDENTITIES_FILE}') as f:
+        data = json.load(f)
+    for identity in data.values():
+        if identity.get('type') == 'letta' and identity.get('mxid', '').startswith('@agent_'):
+            localpart = identity['mxid'].split(':')[0].lstrip('@')
+            print(localpart)
+except Exception as e:
+    print(f'ERROR: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null)
+
+    if [[ -z "$localparts" ]]; then
+        log "[Agents] No agent identities found in $IDENTITIES_FILE"
+        return 1
+    fi
+
+    while IFS= read -r localpart; do
+        AGENT_IDENTITIES+=("$localpart")
+    done <<< "$localparts"
+
+    log "[Agents] Discovered ${#AGENT_IDENTITIES[@]} agent identities"
+    return 0
+}
+
+# Check agent identities in parallel batches.
+# Populates FAILED_AGENTS with any that fail login.
+check_agent_identities() {
+    local total=${#AGENT_IDENTITIES[@]}
+    local checked=0
+    local failed=0
+    local batch_pids=()
+    local batch_users=()
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    for localpart in "${AGENT_IDENTITIES[@]}"; do
+        # Launch login check in background, write result to temp file
+        (
+            if check_user_login "$localpart" "$localpart" > /dev/null 2>&1; then
+                echo "OK" > "${tmpdir}/${localpart}"
+            else
+                echo "FAIL" > "${tmpdir}/${localpart}"
+            fi
+        ) &
+        batch_pids+=("$!")
+        batch_users+=("$localpart")
+
+        # When batch is full, wait for all and collect results
+        if [[ ${#batch_pids[@]} -ge $MAX_PARALLEL_CHECKS ]]; then
+            for pid in "${batch_pids[@]}"; do
+                wait "$pid" 2>/dev/null
+            done
+            for user in "${batch_users[@]}"; do
+                local result
+                result=$(cat "${tmpdir}/${user}" 2>/dev/null || echo "FAIL")
+                checked=$((checked + 1))
+                if [[ "$result" != "OK" ]]; then
+                    FAILED_AGENTS+=("$user")
+                    failed=$((failed + 1))
+                fi
+            done
+            batch_pids=()
+            batch_users=()
+        fi
+    done
+
+    # Wait for remaining batch
+    if [[ ${#batch_pids[@]} -gt 0 ]]; then
+        for pid in "${batch_pids[@]}"; do
+            wait "$pid" 2>/dev/null
+        done
+        for user in "${batch_users[@]}"; do
+            local result
+            result=$(cat "${tmpdir}/${user}" 2>/dev/null || echo "FAIL")
+            checked=$((checked + 1))
+            if [[ "$result" != "OK" ]]; then
+                FAILED_AGENTS+=("$user")
+                failed=$((failed + 1))
+            fi
+        done
+    fi
+
+    rm -rf "$tmpdir"
+    log "[Agents] Checked ${checked}/${total} — ${failed} failed"
+}
+
+# Recover failed agent identities via admin room (Tier 1 only).
+# Agent identities do NOT use Tier 2 (CLI/restart) — too disruptive for non-core users.
+# If admin room recovery fails, alert and move on.
+# Uses BATCHED recovery: sends all reset commands, waits once, then verifies in parallel.
+attempt_agent_recovery() {
+    local -a failed_agents_arr=("$@")
+    local total=${#failed_agents_arr[@]}
+
+    log "--- Agent Identity Recovery (Tier 1 batched, ${total} agents) ---"
+
+    # Acquire lock (shared with core user recovery)
+    exec 200>"$LOCK_FILE"
+    if ! flock -n 200; then
+        log "Another recovery is in progress (lock: ${LOCK_FILE}). Skipping agent recovery."
+        RECOVERY_FAILED_AGENTS=("${failed_agents_arr[@]}")
+        return 1
+    fi
+
+    # Find a healthy user that's actually in the admin room
+    local token="" room_id="" healthy_user=""
+    for user in "${PASSED_USERS[@]}"; do
+        local pw="${USERS[$user]}"
+        local t
+        t=$(get_access_token "$user" "$pw")
+        if [[ -z "$t" ]]; then continue; fi
+
+        local rid
+        rid=$(resolve_admin_room "$t")
+        if [[ -z "$rid" ]]; then continue; fi
+
+        # Test if this user can actually send to the admin room
+        if send_room_message "$t" "$rid" "health-check: testing admin room access"; then
+            token="$t"
+            room_id="$rid"
+            healthy_user="$user"
+            log "[Agents] Using '${user}' for admin room recovery"
+            break
+        fi
+    done
+
+    if [[ -z "$token" ]]; then
+        log "[Agents] No healthy user has admin room access"
+        RECOVERY_FAILED_AGENTS=("${failed_agents_arr[@]}")
+        flock -u 200
+        return 1
+    fi
+
+    log "[Agents] Admin room: ${room_id}, sending ${total} reset commands..."
+
+    # Step 2: Send ALL reset commands (no waiting between them)
+    local sent=0
+    for agent in "${failed_agents_arr[@]}"; do
+        local reset_cmd="!admin users reset-password ${agent} ${agent}"
+        if send_room_message "$token" "$room_id" "$reset_cmd"; then
+            sent=$((sent + 1))
+        else
+            log "[Agents] Failed to send reset command for ${agent}"
+        fi
+    done
+    log "[Agents] Sent ${sent}/${total} reset commands"
+
+    # Step 3: Wait once for Tuwunel to process all commands
+    # Scale wait time: 5s base + 0.5s per agent (max 30s)
+    local wait_time=$(( 5 + (total / 2) ))
+    [[ $wait_time -gt 30 ]] && wait_time=30
+    log "[Agents] Waiting ${wait_time}s for Tuwunel to process..."
+    sleep "$wait_time"
+
+    # Step 4: Verify all agents in parallel
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local batch_pids=() batch_agents=()
+
+    for agent in "${failed_agents_arr[@]}"; do
+        (
+            if check_user_login "$agent" "$agent" > /dev/null 2>&1; then
+                echo "OK" > "${tmpdir}/${agent}"
+            else
+                echo "FAIL" > "${tmpdir}/${agent}"
+            fi
+        ) &
+        batch_pids+=("$!")
+        batch_agents+=("$agent")
+
+        if [[ ${#batch_pids[@]} -ge $MAX_PARALLEL_CHECKS ]]; then
+            for pid in "${batch_pids[@]}"; do wait "$pid" 2>/dev/null; done
+            batch_pids=()
+        fi
+    done
+    for pid in "${batch_pids[@]}"; do wait "$pid" 2>/dev/null; done
+
+    for agent in "${batch_agents[@]}"; do
+        local result
+        result=$(cat "${tmpdir}/${agent}" 2>/dev/null || echo "FAIL")
+        if [[ "$result" == "OK" ]]; then
+            RECOVERED_AGENTS+=("$agent")
+        else
+            RECOVERY_FAILED_AGENTS+=("$agent")
+        fi
+    done
+    rm -rf "$tmpdir"
+
+    flock -u 200
+
+    log "--- Agent Recovery Summary ---"
+    log "  Recovered: ${#RECOVERED_AGENTS[@]}/${total}"
+    [[ ${#RECOVERY_FAILED_AGENTS[@]} -gt 0 ]] && log "  Still failing (${#RECOVERY_FAILED_AGENTS[@]}): ${RECOVERY_FAILED_AGENTS[*]}"
+}
+
 # ============================================================
 # Main
 # ============================================================
@@ -379,32 +600,69 @@ for user in "${!USERS[@]}"; do
     fi
 done
 
-echo ""
+# --- Agent Identity Checks ---
+# Discover and check all Letta agent identities from the identity bridge storage.
+# These are checked AFTER core users so we have healthy users available for recovery.
+if discover_agent_identities; then
+    echo "--- Agent Identities (${#AGENT_IDENTITIES[@]} discovered) ---"
+    check_agent_identities
+    if [[ ${#FAILED_AGENTS[@]} -gt 0 ]]; then
+        echo "AGENT FAILURES: ${#FAILED_AGENTS[@]} agent identities cannot authenticate"
+        for agent in "${FAILED_AGENTS[@]}"; do
+            echo "  FAIL: $agent"
+        done
+    else
+        echo "All ${#AGENT_IDENTITIES[@]} agent identities OK"
+    fi
+    echo ""
+fi
 
-# All healthy — exit clean
-if [[ ${#FAILED_USERS[@]} -eq 0 ]]; then
+# --- Evaluate Results ---
+TOTAL_FAILURES=$(( ${#FAILED_USERS[@]} + ${#FAILED_AGENTS[@]} ))
+
+if [[ $TOTAL_FAILURES -eq 0 ]]; then
     echo "=== All auth checks passed ==="
     exit 0
 fi
 
 # Failures detected
 echo "=== AUTH FAILURE DETECTED ==="
-echo "Failed users: ${FAILED_USERS[*]}"
+[[ ${#FAILED_USERS[@]} -gt 0 ]] && echo "Failed core users: ${FAILED_USERS[*]}"
+[[ ${#FAILED_AGENTS[@]} -gt 0 ]] && echo "Failed agent identities: ${#FAILED_AGENTS[@]} (${FAILED_AGENTS[*]})"
 echo ""
 
 # Attempt auto-recovery
 if $AUTO_RECOVER; then
-    attempt_recovery "${FAILED_USERS[@]}"
-    echo ""
+    # Recover core users first (they're needed for agent recovery)
+    if [[ ${#FAILED_USERS[@]} -gt 0 ]]; then
+        attempt_recovery "${FAILED_USERS[@]}"
+        echo ""
+    fi
 
-    if [[ ${#RECOVERY_FAILED_USERS[@]} -eq 0 ]]; then
+    # Recover agent identities (Tier 1 only — no restart)
+    if [[ ${#FAILED_AGENTS[@]} -gt 0 ]]; then
+        attempt_agent_recovery "${FAILED_AGENTS[@]}"
+        echo ""
+    fi
+
+    # Combine all recovery results
+    ALL_RECOVERED=("${RECOVERED_USERS[@]}" "${RECOVERED_AGENTS[@]}")
+    ALL_STILL_FAILING=("${RECOVERY_FAILED_USERS[@]}" "${RECOVERY_FAILED_AGENTS[@]}")
+
+    if [[ ${#ALL_STILL_FAILING[@]} -eq 0 ]]; then
         # Full recovery
         echo "=== AUTO-RECOVERY SUCCEEDED ==="
-        echo "All ${#RECOVERED_USERS[@]} user(s) recovered: ${RECOVERED_USERS[*]}"
+        echo "All ${#ALL_RECOVERED[@]} identity(ies) recovered."
+        [[ ${#RECOVERED_USERS[@]} -gt 0 ]] && echo "  Core users: ${RECOVERED_USERS[*]}"
+        [[ ${#RECOVERED_AGENTS[@]} -gt 0 ]] && echo "  Agent identities: ${#RECOVERED_AGENTS[@]}"
 
         if [[ -x "$SCRIPT_DIR/alert.sh" ]]; then
+            local_msg="Auth failure auto-recovered for ${#ALL_RECOVERED[@]} identity(ies)."
+            [[ ${#RECOVERED_USERS[@]} -gt 0 ]] && local_msg+=" Core: ${RECOVERED_USERS[*]}."
+            [[ ${#RECOVERED_AGENTS[@]} -gt 0 ]] && local_msg+=" Agents: ${#RECOVERED_AGENTS[@]}."
+            local_msg+=" No action needed."
             "$SCRIPT_DIR/alert.sh" \
-                "Auth failure auto-recovered for ${#RECOVERED_USERS[@]} user(s): ${RECOVERED_USERS[*]}. No action needed." \
+                "$local_msg" \
                 --priority default \
                 --tags "white_check_mark,wrench" \
                 --title "Matrix Auth Auto-Recovered"
@@ -413,14 +671,19 @@ if $AUTO_RECOVER; then
     else
         # Partial or full failure
         echo "=== AUTO-RECOVERY FAILED ==="
-        echo "Still failing: ${RECOVERY_FAILED_USERS[*]}"
-        [[ ${#RECOVERED_USERS[@]} -gt 0 ]] && echo "Recovered: ${RECOVERED_USERS[*]}"
+        [[ ${#RECOVERY_FAILED_USERS[@]} -gt 0 ]] && echo "Core users still failing: ${RECOVERY_FAILED_USERS[*]}"
+        [[ ${#RECOVERY_FAILED_AGENTS[@]} -gt 0 ]] && echo "Agent identities still failing: ${#RECOVERY_FAILED_AGENTS[@]}"
+        [[ ${#ALL_RECOVERED[@]} -gt 0 ]] && echo "Recovered: ${#ALL_RECOVERED[@]} identity(ies)"
         echo ""
         echo "Manual intervention required. See AGENTS.md 'OOM Recovery Runbook'."
 
         if [[ -x "$SCRIPT_DIR/alert.sh" ]]; then
+            local_msg="Auto-recovery FAILED."
+            [[ ${#RECOVERY_FAILED_USERS[@]} -gt 0 ]] && local_msg+=" Core users: ${RECOVERY_FAILED_USERS[*]}."
+            [[ ${#RECOVERY_FAILED_AGENTS[@]} -gt 0 ]] && local_msg+=" Agents: ${#RECOVERY_FAILED_AGENTS[@]}."
+            local_msg+=" Manual intervention required."
             "$SCRIPT_DIR/alert.sh" \
-                "Auto-recovery FAILED for ${#RECOVERY_FAILED_USERS[@]} user(s): ${RECOVERY_FAILED_USERS[*]}. Manual intervention required. See OOM Recovery Runbook." \
+                "$local_msg" \
                 --priority urgent \
                 --tags "rotating_light,skull" \
                 --title "Matrix Auth Recovery FAILED"
@@ -428,29 +691,45 @@ if $AUTO_RECOVER; then
         exit 1
     fi
 else
-    # No auto-recovery — original behavior
+    # No auto-recovery — report only
     echo "This may indicate RocksDB corruption from OOM."
     echo "Recovery: See AGENTS.md 'OOM Recovery Runbook' section"
     echo ""
-    echo "Quick fix:"
-    echo "  cd $PROJECT_DIR"
-    echo "  docker compose ${COMPOSE_FILE_ARGS} stop tuwunel"
-    for user in "${FAILED_USERS[@]}"; do
-        password="${USERS[$user]}"
-        echo "  # Reset $user:"
-        echo "  timeout 60 docker run --rm --entrypoint '' \\"
-        echo "    -e TUWUNEL_SERVER_NAME=${SERVER_NAME} \\"
-        echo "    -v ${TUWUNEL_DATA_PATH}:/var/lib/tuwunel \\"
-        echo "    ${TUWUNEL_IMAGE} \\"
-        echo "    /usr/local/bin/tuwunel -c /var/lib/tuwunel/tuwunel.toml \\"
-        echo "    -O 'server_name=\"${SERVER_NAME}\"' \\"
-        echo "    --execute 'users reset-password $user $password'"
-    done
-    echo "  docker compose ${COMPOSE_FILE_ARGS} up -d tuwunel"
+
+    if [[ ${#FAILED_USERS[@]} -gt 0 ]]; then
+        echo "Quick fix (core users):"
+        echo "  cd $PROJECT_DIR"
+        echo "  docker compose ${COMPOSE_FILE_ARGS} stop tuwunel"
+        for user in "${FAILED_USERS[@]}"; do
+            password="${USERS[$user]}"
+            echo "  # Reset $user:"
+            echo "  timeout 60 docker run --rm --entrypoint '' \\"
+            echo "    -e TUWUNEL_SERVER_NAME=${SERVER_NAME} \\"
+            echo "    -v ${TUWUNEL_DATA_PATH}:/var/lib/tuwunel \\"
+            echo "    ${TUWUNEL_IMAGE} \\"
+            echo "    /usr/local/bin/tuwunel -c /var/lib/tuwunel/tuwunel.toml \\"
+            echo "    -O 'server_name=\"${SERVER_NAME}\"' \\"
+            echo "    --execute 'users reset-password $user $password'"
+        done
+        echo "  docker compose ${COMPOSE_FILE_ARGS} up -d tuwunel"
+    fi
+
+    if [[ ${#FAILED_AGENTS[@]} -gt 0 ]]; then
+        echo ""
+        echo "Agent identities (${#FAILED_AGENTS[@]}) can be reset via admin room:"
+        echo "  # Login as admin, send to #admins:matrix.oculair.ca:"
+        for agent in "${FAILED_AGENTS[@]}"; do
+            echo "  !admin users reset-password $agent $agent"
+        done
+    fi
 
     if [[ -x "$SCRIPT_DIR/alert.sh" ]]; then
+        local_msg="Health check FAILED."
+        [[ ${#FAILED_USERS[@]} -gt 0 ]] && local_msg+=" Core users: ${FAILED_USERS[*]}."
+        [[ ${#FAILED_AGENTS[@]} -gt 0 ]] && local_msg+=" Agents: ${#FAILED_AGENTS[@]}."
+        local_msg+=" Possible RocksDB corruption. See OOM Recovery Runbook."
         "$SCRIPT_DIR/alert.sh" \
-            "Health check FAILED for ${#FAILED_USERS[@]} users: ${FAILED_USERS[*]}. Possible RocksDB corruption. See OOM Recovery Runbook." \
+            "$local_msg" \
             --priority urgent \
             --tags "rotating_light,skull" \
             --title "Matrix Auth FAILED"

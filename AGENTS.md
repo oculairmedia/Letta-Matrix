@@ -169,13 +169,14 @@ Ask the PM agent for architectural guidance before making significant changes.
 
 ## OOM Recovery Runbook
 
-If the host runs out of memory, Tuwunel's RocksDB can get corrupted, causing authentication failures for critical users (`admin`, `letta`, `oc_letta_v2`, etc.).
+If the host runs out of memory, Tuwunel's RocksDB can get corrupted, causing authentication failures for critical users (`admin`, `letta`, `oc_letta_v2`, etc.) and Letta agent Matrix identities (`agent_*`).
 
 ### Symptoms
 
 - Matrix client bootlooping with `M_FORBIDDEN: Wrong username or password`
 - Messages not being forwarded to Letta
 - OpenCode identity routing failures
+- Letta agents not responding in their Matrix rooms (agent identity auth failures)
 
 ### Detection & Auto-Recovery
 
@@ -190,13 +191,15 @@ The health check script runs every 15 minutes via cron and **automatically recov
 **How auto-recovery works:**
 
 1. The script tests login for all critical users (`admin`, `letta`, `oc_letta_v2`, `oc_matrix_synapse_deployment_v2`)
-2. If any user fails, recovery is attempted in two tiers:
+2. The script discovers all Letta agent identities from the identity bridge storage (`mcp-servers/matrix-identity-bridge/data/archive/identities.json`) and tests their logins in parallel (10 concurrent)
+3. If any core user fails, recovery is attempted in two tiers:
 
    **Tier 1 — Admin Room Reset (no downtime, ~5s):**
    - Uses a *healthy* user to log in and send `!admin users reset-password` to `#admins:matrix.oculair.ca`
    - Tuwunel processes the command and resets the password
    - Login is verified after reset
    - Each healthy user is tried in turn until one succeeds
+   - The recovery user must be a **member of the admin room** (not just a healthy user)
 
    **Tier 2 — CLI Reset (fallback, ~20-30s downtime):**
    - Used when Tier 1 fails (e.g., no healthy users in admin room, or all users are broken)
@@ -204,8 +207,12 @@ The health check script runs every 15 minutes via cron and **automatically recov
    - Volume path **must** be absolute — `docker run` does not support relative paths like `./`
    - All remaining failed users are batched into a single stop/start cycle
 
-3. A lock file (`/tmp/matrix-health-recovery.lock`) prevents concurrent recovery attempts
-4. ntfy alert is sent with the outcome:
+4. If any agent identities fail, they are recovered via **Tier 1 only** (batched admin room resets — Tier 2 CLI restart is too disruptive for non-core users)
+   - Password convention: `localpart = password` (e.g., `agent_4a9392fc_...` / `agent_4a9392fc_...`)
+   - All reset commands are sent, then a single wait period, then parallel verification
+   - Typical batch: 56 agents in ~33 seconds
+5. A lock file (`/tmp/matrix-health-recovery.lock`) prevents concurrent recovery attempts
+6. ntfy alert is sent with the outcome:
    - Recovery succeeded: low-priority notification, no action needed
    - Recovery failed: urgent notification, manual intervention required
 
