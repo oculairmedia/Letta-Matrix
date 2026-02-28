@@ -208,9 +208,9 @@ The health check script runs every 15 minutes via cron and **automatically recov
    - All remaining failed users are batched into a single stop/start cycle
 
 4. If any agent identities fail, they are recovered via **Tier 1 only** (batched admin room resets — Tier 2 CLI restart is too disruptive for non-core users)
-   - Password convention: `localpart = password` (e.g., `agent_4a9392fc_...` / `agent_4a9392fc_...`)
+   - Passwords are read from the matrix-client PostgreSQL DB (`matrix_letta.agent_mappings`) as the primary source, with identity bridge (`localpart = password`) as fallback
    - All reset commands are sent, then a single wait period, then parallel verification
-   - Typical batch: 56 agents in ~33 seconds
+   - Typical batch: ~76 agents in ~33 seconds
 5. A lock file (`/tmp/matrix-health-recovery.lock`) prevents concurrent recovery attempts
 6. ntfy alert is sent with the outcome:
    - Recovery succeeded: low-priority notification, no action needed
