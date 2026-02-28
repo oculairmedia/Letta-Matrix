@@ -961,6 +961,26 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           body: message
         });
         
+        // Ensure the OpenCode bridge client is in this room so it can see agent responses
+        // and forward them back to the OpenCode instance via WebSocket
+        const bridgeUrl = process.env.OPENCODE_BRIDGE_URL || 'http://opencode-bridge:3201';
+        fetch(`${bridgeUrl}/ensure-joined`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room_id: roomId })
+        }).then(r => r.json()).then((data: any) => {
+          if (data.needs_invite) {
+            // Bridge couldn't join — invite it from the caller identity
+            senderClient.invite(roomId, '@oc_matrix_synapse_deployment:matrix.oculair.ca')
+              .then(() => fetch(`${bridgeUrl}/ensure-joined`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ room_id: roomId })
+              }))
+              .catch(() => {});
+          }
+        }).catch(() => {});
+        
         const matrixApiUrl = process.env.MATRIX_API_URL || 'http://matrix-api:8000';
         const opencodeSender = (callerIdentity.mxid.startsWith('@oc_') || callerIdentity.mxid.startsWith('@cc_'))
           ? callerIdentity.mxid

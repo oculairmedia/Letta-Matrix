@@ -619,6 +619,49 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
+  // Ensure bridge Matrix client is a member of a room (so it can see responses)
+  if (url.pathname === "/ensure-joined" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", async () => {
+      try {
+        const { room_id } = JSON.parse(body);
+        if (!room_id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing required field: room_id" }));
+          return;
+        }
+        if (!matrixClient) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Matrix client not initialized" }));
+          return;
+        }
+        // Check if already joined
+        const room = matrixClient.getRoom(room_id);
+        if (room && room.getMyMembership() === "join") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true, already_joined: true }));
+          return;
+        }
+        // Try to join (will work if invited or public)
+        try {
+          await matrixClient.joinRoom(room_id);
+          console.log(`[Bridge] Joined room ${room_id} for response monitoring`);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true, joined: true }));
+        } catch (joinErr: any) {
+          console.log(`[Bridge] Could not join ${room_id}: ${joinErr?.message || joinErr}`);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: false, error: "Could not join room", needs_invite: true }));
+        }
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
+      }
+    });
+    return;
+  }
+
   // Direct message delivery to OpenCode instance (bypasses Matrix roundtrip)
   if (url.pathname === "/notify" && req.method === "POST") {
     let body = "";
