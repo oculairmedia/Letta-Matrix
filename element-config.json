@@ -1,4 +1,4 @@
-{   
+{
     "default_server_config": {
         "m.homeserver": {
             "base_url": "https://matrix.oculair.ca/"
@@ -17,8 +17,6 @@
         "https://scalar-staging.vector.im/api",
         "https://scalar-staging.riot.im/scalar/api"
     ],
-    "bug_report_endpoint_url": "https://element.io/bugreports/submit",
-    "uisi_autorageshake_app": "element-auto-uisi",
     "showLabsSettings": true,
     "roomDirectory": {
         "servers": ["matrix.org", "gitter.im", "libera.chat"]
@@ -27,25 +25,6 @@
         "https://matrix.org": false,
         "https://matrix-client.matrix.org": false
     },
-    "terms_and_conditions_links": [
-        {
-            "url": "https://element.io/privacy",
-            "text": "Privacy Policy"
-        },
-        {
-            "url": "https://element.io/cookie-policy",
-            "text": "Cookie Policy"
-        }
-    ],
-    "sentry": {
-        "dsn": "https://029a0eb289f942508ae0fb17935bd8c5@sentry.matrix.org/6",
-        "environment": "develop"
-    },
-    "posthog": {
-        "projectApiKey": "phc_Jzsm6DTm6V2705zeU5dcNvQDlonOR68XvX2sh1sEOHO",
-        "apiHost": "https://posthog.element.io"
-    },
-    "privacy_policy_url": "https://element.io/cookie-policy",
     "features": {
         "feature_spotlight": true,
         "feature_video_rooms": true

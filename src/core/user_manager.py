@@ -273,6 +273,76 @@ class MatrixUserManager:
             logger.error(f"Error setting display name: {e}")
             return False
 
+    async def set_user_avatar(self, user_id: str, avatar_mxc_url: str, access_token: str) -> bool:
+        """Set avatar URL for a user using their own access token
+
+        Args:
+            user_id: Full Matrix user ID (@user:domain)
+            avatar_mxc_url: Avatar URL in mxc:// format
+            access_token: User's access token
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            url = f"{self.homeserver_url}/_matrix/client/v3/profile/{user_id}/avatar_url"
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+            data = {"avatar_url": avatar_mxc_url}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.put(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        logger.info(f"Set avatar for {user_id}: {avatar_mxc_url}")
+                        return True
+                    else:
+                        error_body = await response.text()
+                        logger.warning(f"Failed to set avatar for {user_id}: {response.status} - {error_body}")
+                        return False
+        except Exception as e:
+            logger.error(f"Error setting avatar for {user_id}: {type(e).__name__}: {e}", exc_info=True)
+            return False
+
+    async def upload_avatar(self, image_data: bytes, filename: str, mimetype: str, token: str) -> Optional[str]:
+        """Upload an avatar image to the media server and return mxc:// URL
+
+        Args:
+            image_data: Raw image bytes
+            filename: Filename for the upload
+            mimetype: MIME type (e.g., 'image/png')
+            token: Access token for authentication
+
+        Returns:
+            mxc:// URL if successful, None otherwise
+        """
+        try:
+            url = f"{self.homeserver_url}/_matrix/media/v3/upload?filename={filename}"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": mimetype
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, data=image_data, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        content_uri = result.get("content_uri")
+                        if content_uri:
+                            logger.info(f"Successfully uploaded avatar: {content_uri}")
+                            return content_uri
+                        else:
+                            logger.error(f"Upload response missing content_uri: {result}")
+                            return None
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to upload avatar: {response.status} - {error_text}")
+                        return None
+        except Exception as e:
+            logger.error(f"Error uploading avatar: {e}")
+            return None
+
     async def update_display_name(self, user_id: str, display_name: str, password: Optional[str] = None) -> bool:
         """Update the display name of a Matrix user by logging in as them
 

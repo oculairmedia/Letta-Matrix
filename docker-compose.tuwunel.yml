@@ -79,8 +79,6 @@ services:
         condition: service_healthy
       matrix-api:
         condition: service_started
-      mcp-server:
-        condition: service_started
       whisper:
         condition: service_healthy
     healthcheck:
@@ -117,71 +115,6 @@ services:
       - "homepage.href=http://192.168.50.90:8004"
       - "homepage.description=Matrix API server for automation"
 
-  # MCP Server for Matrix Tools
-  mcp-server:
-    image: ghcr.io/oculairmedia/letta-matrix-mcp:latest
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - MATRIX_API_URL=http://matrix-api:8000
-      - MATRIX_HOMESERVER_URL=http://tuwunel:6167
-      - MCP_HOST=0.0.0.0
-      - MCP_PORT=8005
-      - MCP_HTTP_HOST=0.0.0.0
-      - MCP_HTTP_PORT=8006
-    ports:
-      - 8015:8005  # WebSocket port
-      - 8016:8006  # HTTP streaming port
-    networks:
-      - matrix-internal
-    depends_on:
-      - tuwunel
-      - matrix-api
-    volumes:
-      - ./mcp_data:/app/data
-    labels:
-      - "homepage.group=Communication"
-      - "homepage.name=Matrix MCP Server"
-      - "homepage.icon=si-websocket"
-      - "homepage.href=http://192.168.50.90:8016"
-      - "homepage.description=Matrix MCP server for Claude integration"
-
-  # Letta Agent MCP Server
-  letta-agent-mcp:
-    image: ghcr.io/oculairmedia/letta-matrix-mcp:latest
-    restart: unless-stopped
-    command: ["python", "-m", "src.mcp.letta_mcp"]
-    env_file:
-      - .env
-    environment:
-      - MATRIX_API_URL=http://matrix-api:8000
-      - MATRIX_HOMESERVER_URL=http://tuwunel:6167
-      - LETTA_API_URL=http://192.168.50.90:8289
-      - LETTA_AGENT_MCP_HOST=0.0.0.0
-      - LETTA_AGENT_MCP_PORT=8017
-    ports:
-      - 8017:8017
-    networks:
-      - matrix-internal
-    depends_on:
-      - tuwunel
-      - matrix-api
-      - matrix-client
-    volumes:
-      - ./matrix_client_data:/app/data
-    labels:
-      - "homepage.group=Communication"
-      - "homepage.name=Letta Agent MCP"
-      - "homepage.icon=si-chat"
-      - "homepage.href=http://192.168.50.90:8017"
-      - "homepage.description=Inter-agent communication MCP server"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8017/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 
   # Speaches - Local Speech-to-Text (faster-whisper)
   whisper:

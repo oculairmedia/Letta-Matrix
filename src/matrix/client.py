@@ -743,7 +743,7 @@ async def send_to_letta_api_streaming(
 ) -> str:
     from src.matrix.streaming import StepStreamReader, StreamingMessageHandler, StreamEventType
     from src.letta.client import get_letta_client, LettaConfig
-    from src.voice.directive_parser import parse_directives, VoiceDirective, ImageDirective
+    from src.voice.directive_parser import parse_directives, VoiceDirective, ImageDirective, FileDirective, VideoDirective
     from src.voice.tts import is_tts_configured, synthesize_speech
     
     agent_id_to_use = config.letta_agent_id
@@ -937,9 +937,11 @@ async def send_to_letta_api_streaming(
                             if not is_tts_configured():
                                 voice_logger.info("[VOICE] Voice directive found but TTS is not configured")
                                 continue
+                            await handler.show_progress("🎙️ Generating voice...")
                             audio_data = await synthesize_speech(directive.text)
                             if not audio_data:
                                 voice_logger.warning("[VOICE] TTS synthesis returned no audio")
+                                await handler.update_last_progress("❌ Voice synthesis failed")
                                 continue
                             filename = f"voice-{uuid.uuid4().hex}.mp3"
                             audio_event_id = await upload_and_send_audio(
@@ -953,10 +955,13 @@ async def send_to_letta_api_streaming(
                             if audio_event_id:
                                 voice_logger.info("[VOICE] Sent voice message event %s", audio_event_id)
                                 transcript_parts.append(directive.text)
+                                await handler.update_last_progress("✅ Voice sent")
                             else:
                                 voice_logger.warning("[VOICE] Failed to upload/send voice message")
+                                await handler.update_last_progress("❌ Voice upload failed")
 
                         elif isinstance(directive, ImageDirective):
+                            await handler.show_progress("🖼️ Fetching image...")
                             image_event_id = await fetch_and_send_image(
                                 room_id=room_id,
                                 image_url=directive.url,
@@ -968,8 +973,46 @@ async def send_to_letta_api_streaming(
                                 voice_logger.info("[IMAGE] Sent image event %s", image_event_id)
                                 if directive.caption:
                                     caption_parts.append(directive.caption)
+                                await handler.update_last_progress("✅ Image sent")
                             else:
                                 voice_logger.warning("[IMAGE] Failed to fetch/send image from %s", directive.url)
+                                await handler.update_last_progress("❌ Image failed")
+
+                        elif isinstance(directive, FileDirective):
+                            await handler.show_progress("📄 Fetching file...")
+                            file_event_id = await fetch_and_send_file(
+                                room_id=room_id,
+                                file_url=directive.url,
+                                filename=directive.filename,
+                                config=config,
+                                logger=voice_logger,
+                            )
+                            if file_event_id:
+                                voice_logger.info("[FILE] Sent file event %s", file_event_id)
+                                if directive.caption:
+                                    caption_parts.append(directive.caption)
+                                await handler.update_last_progress("✅ File sent")
+                            else:
+                                voice_logger.warning("[FILE] Failed to fetch/send file from %s", directive.url)
+                                await handler.update_last_progress("❌ File failed")
+
+                        elif isinstance(directive, VideoDirective):
+                            await handler.show_progress("🎬 Fetching video...")
+                            video_event_id = await fetch_and_send_video(
+                                room_id=room_id,
+                                video_url=directive.url,
+                                alt=directive.alt,
+                                config=config,
+                                logger=voice_logger,
+                            )
+                            if video_event_id:
+                                voice_logger.info("[VIDEO] Sent video event %s", video_event_id)
+                                if directive.caption:
+                                    caption_parts.append(directive.caption)
+                                await handler.update_last_progress("✅ Video sent")
+                            else:
+                                voice_logger.warning("[VIDEO] Failed to fetch/send video from %s", directive.url)
+                                await handler.update_last_progress("❌ Video failed")
 
                     # Build the text to display: clean_text + voice transcripts + image captions
                     display_parts = []
@@ -1012,6 +1055,59 @@ async def send_to_letta_api_streaming(
     return final_response
 
 
+# --- Agent Auth Helper ---
+# All agent-as-user functions share this login pattern.
+# Centralizing it here eliminates 10x code duplication
+# and ensures consistent timeout/error handling.
+
+_AGENT_LOGIN_TIMEOUT = aiohttp.ClientTimeout(total=10)
+_AGENT_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=30)
+_AGENT_SEND_TIMEOUT = aiohttp.ClientTimeout(total=15)
+
+
+async def _get_agent_token(
+    room_id: str,
+    config,
+    logger: logging.Logger,
+    session: aiohttp.ClientSession,
+    caller: str = '',
+) -> Optional[str]:
+    """
+    Look up agent mapping for a room, login as the agent user, return access token.
+    Returns None on any failure (logs the issue).
+    """
+    from src.core.mapping_service import get_mapping_by_room_id
+    agent_mapping = get_mapping_by_room_id(room_id)
+    if not agent_mapping:
+        logger.warning(f"[{caller}] No agent mapping for room {room_id}")
+        return None
+
+    agent_username = agent_mapping['matrix_user_id'].split(':')[0].replace('@', '')
+    agent_password = agent_mapping['matrix_password']
+
+    login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
+    login_data = {"type": "m.login.password", "user": agent_username, "password": agent_password}
+
+    try:
+        async with session.post(login_url, json=login_data, timeout=_AGENT_LOGIN_TIMEOUT) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                logger.error(f"[{caller}] Login failed for {agent_username}: {resp.status} - {error_text}")
+                return None
+            auth_data = await resp.json()
+            token = auth_data.get('access_token')
+            if not token:
+                logger.error(f"[{caller}] No access_token in login response for {agent_username}")
+                return None
+            return token
+    except asyncio.TimeoutError:
+        logger.error(f"[{caller}] Login timed out for {agent_username}")
+        return None
+    except Exception as e:
+        logger.error(f"[{caller}] Login exception for {agent_username}: {e}")
+        return None
+
+
 async def upload_and_send_audio(
     room_id: str,
     audio_data: bytes,
@@ -1022,40 +1118,10 @@ async def upload_and_send_audio(
     duration_ms: Optional[int] = None,
 ) -> Optional[str]:
     try:
-        from src.core.mapping_service import get_mapping_by_room_id
-
-        agent_mapping = get_mapping_by_room_id(room_id)
-        if not agent_mapping:
-            logger.warning("[VOICE] No agent mapping found for room %s", room_id)
-            return None
-
-        agent_username = agent_mapping["matrix_user_id"].split(":")[0].replace("@", "")
-        agent_password = agent_mapping["matrix_password"]
-
-        login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
-        login_data = {
-            "type": "m.login.password",
-            "user": agent_username,
-            "password": agent_password,
-        }
-
         async with aiohttp.ClientSession() as session:
-            async with session.post(login_url, json=login_data) as login_response:
-                if login_response.status != 200:
-                    error_text = await login_response.text()
-                    logger.error(
-                        "[VOICE] Failed to login as agent %s: %s - %s",
-                        agent_username,
-                        login_response.status,
-                        error_text,
-                    )
-                    return None
-
-                auth_data = await login_response.json()
-                agent_token = auth_data.get("access_token")
-                if not agent_token:
-                    logger.error("[VOICE] No token received for agent %s", agent_username)
-                    return None
+            agent_token = await _get_agent_token(room_id, config, logger, session, caller="VOICE")
+            if not agent_token:
+                return None
 
             upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
             upload_headers = {
@@ -1068,6 +1134,7 @@ async def upload_and_send_audio(
                 headers=upload_headers,
                 params={"filename": filename},
                 data=audio_data,
+                timeout=_AGENT_UPLOAD_TIMEOUT,
             ) as upload_response:
                 if upload_response.status != 200:
                     upload_error = await upload_response.text()
@@ -1105,7 +1172,12 @@ async def upload_and_send_audio(
                 "org.matrix.msc3245.voice": {},
             }
 
-            async with session.put(message_url, headers=message_headers, json=message_data) as send_response:
+            async with session.put(
+                message_url,
+                headers=message_headers,
+                json=message_data,
+                timeout=_AGENT_SEND_TIMEOUT,
+            ) as send_response:
                 if send_response.status != 200:
                     send_error = await send_response.text()
                     logger.error(
@@ -1133,16 +1205,6 @@ async def fetch_and_send_image(
 ) -> Optional[str]:
     """Fetch an image from a URL, upload to Matrix media repo, and send as m.image."""
     try:
-        from src.core.mapping_service import get_mapping_by_room_id
-
-        agent_mapping = get_mapping_by_room_id(room_id)
-        if not agent_mapping:
-            logger.warning("[IMAGE] No agent mapping found for room %s", room_id)
-            return None
-
-        agent_username = agent_mapping["matrix_user_id"].split(":")[0].replace("@", "")
-        agent_password = agent_mapping["matrix_password"]
-
         fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
         async with aiohttp.ClientSession() as session:
             # Step 1: Fetch the image from the URL
@@ -1176,23 +1238,9 @@ async def fetch_and_send_image(
             logger.info("[IMAGE] Fetched %s (%d bytes, %s)", filename, len(image_data), mimetype)
 
             # Step 2: Login as agent
-            login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
-            login_data = {
-                "type": "m.login.password",
-                "user": agent_username,
-                "password": agent_password,
-            }
-
-            async with session.post(login_url, json=login_data) as login_response:
-                if login_response.status != 200:
-                    error_text = await login_response.text()
-                    logger.error("[IMAGE] Failed to login as agent %s: %s - %s", agent_username, login_response.status, error_text)
-                    return None
-                auth_data = await login_response.json()
-                agent_token = auth_data.get("access_token")
-                if not agent_token:
-                    logger.error("[IMAGE] No token received for agent %s", agent_username)
-                    return None
+            agent_token = await _get_agent_token(room_id, config, logger, session, caller="IMAGE")
+            if not agent_token:
+                return None
 
             # Step 3: Upload to Matrix media repo
             upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
@@ -1206,6 +1254,7 @@ async def fetch_and_send_image(
                 headers=upload_headers,
                 params={"filename": filename},
                 data=image_data,
+                timeout=_AGENT_UPLOAD_TIMEOUT,
             ) as upload_response:
                 if upload_response.status != 200:
                     upload_error = await upload_response.text()
@@ -1217,7 +1266,43 @@ async def fetch_and_send_image(
                     logger.error("[IMAGE] Upload response missing content_uri")
                     return None
 
-            # Step 4: Send m.image event
+            # Step 4: Generate thumbnail and upload it
+            thumbnail_uri = None
+            thumbnail_info = None
+            try:
+                from PIL import Image as PILImage
+                import io
+                img = PILImage.open(io.BytesIO(image_data))
+                orig_w, orig_h = img.size
+                # Generate thumbnail (max 320px on longest side)
+                thumb_size = (320, 320)
+                img.thumbnail(thumb_size, PILImage.Resampling.LANCZOS)
+                thumb_w, thumb_h = img.size
+                thumb_buf = io.BytesIO()
+                img.save(thumb_buf, format='PNG')
+                thumb_data = thumb_buf.getvalue()
+
+                async with session.post(
+                    upload_url, headers={**upload_headers, 'Content-Type': 'image/png'},
+                    params={'filename': 'thumbnail.png'}, data=thumb_data,
+                    timeout=_AGENT_UPLOAD_TIMEOUT,
+                ) as thumb_resp:
+                    if thumb_resp.status == 200:
+                        thumb_result = await thumb_resp.json()
+                        thumbnail_uri = thumb_result.get('content_uri')
+                        thumbnail_info = {
+                            'w': thumb_w, 'h': thumb_h,
+                            'mimetype': 'image/png', 'size': len(thumb_data),
+                        }
+                        logger.debug('[IMAGE] Uploaded thumbnail %dx%d (%d bytes)', thumb_w, thumb_h, len(thumb_data))
+            except ImportError:
+                orig_w, orig_h = None, None
+                logger.debug('[IMAGE] Pillow not available, skipping thumbnail')
+            except Exception as thumb_err:
+                orig_w, orig_h = None, None
+                logger.debug('[IMAGE] Thumbnail generation failed: %s', thumb_err)
+
+            # Step 5: Send m.image event
             txn_id = str(uuid.uuid4())
             message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
             message_headers = {
@@ -1225,17 +1310,30 @@ async def fetch_and_send_image(
                 "Content-Type": "application/json",
             }
 
+            image_info: Dict[str, Any] = {
+                "mimetype": mimetype,
+                "size": len(image_data),
+            }
+            if orig_w and orig_h:
+                image_info['w'] = orig_w
+                image_info['h'] = orig_h
+            if thumbnail_uri and thumbnail_info:
+                image_info['thumbnail_url'] = thumbnail_uri
+                image_info['thumbnail_info'] = thumbnail_info
+
             message_data = {
                 "msgtype": "m.image",
                 "url": content_uri,
                 "body": alt or filename,
-                "info": {
-                    "mimetype": mimetype,
-                    "size": len(image_data),
-                },
+                "info": image_info,
             }
 
-            async with session.put(message_url, headers=message_headers, json=message_data) as send_response:
+            async with session.put(
+                message_url,
+                headers=message_headers,
+                json=message_data,
+                timeout=_AGENT_SEND_TIMEOUT,
+            ) as send_response:
                 if send_response.status != 200:
                     send_error = await send_response.text()
                     logger.error("[IMAGE] Send failed: %s - %s", send_response.status, send_error)
@@ -1248,6 +1346,185 @@ async def fetch_and_send_image(
     except Exception as e:
         logger.error(f"[IMAGE] Exception while fetching/sending image: {e}", exc_info=True)
         return None
+
+async def fetch_and_send_file(
+    room_id: str,
+    file_url: str,
+    filename: str,
+    config,
+    logger,
+) -> Optional[str]:
+    """Fetch a file from a URL, upload to Matrix media repo, and send as m.file."""
+    try:
+        fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
+        async with aiohttp.ClientSession() as session:
+            # Fetch the file
+            try:
+                async with session.get(file_url, headers=fetch_headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    if resp.status != 200:
+                        logger.error("[FILE] Failed to fetch file from %s: %s", file_url, resp.status)
+                        return None
+                    file_data = await resp.read()
+                    content_type = resp.headers.get("Content-Type", "application/octet-stream")
+                    mimetype = content_type.split(";")[0].strip()
+            except Exception as fetch_err:
+                logger.error("[FILE] Exception fetching file from %s: %s", file_url, fetch_err)
+                return None
+
+            if not file_data or len(file_data) < 10:
+                logger.warning("[FILE] Fetched file too small (%d bytes)", len(file_data) if file_data else 0)
+                return None
+
+            # Derive filename from URL if not provided
+            if not filename:
+                from urllib.parse import urlparse
+                url_path = urlparse(file_url).path
+                filename = url_path.split("/")[-1] if "/" in url_path else "file"
+                if not filename or "." not in filename:
+                    filename = "file.bin"
+
+            logger.info("[FILE] Fetched %s (%d bytes, %s)", filename, len(file_data), mimetype)
+
+            # Login as agent
+            agent_token = await _get_agent_token(room_id, config, logger, session, caller="FILE")
+            if not agent_token:
+                return None
+
+            # Upload to Matrix
+            upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
+            upload_headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": mimetype}
+            async with session.post(
+                upload_url,
+                headers=upload_headers,
+                params={"filename": filename},
+                data=file_data,
+                timeout=_AGENT_UPLOAD_TIMEOUT,
+            ) as upload_resp:
+                if upload_resp.status != 200:
+                    logger.error("[FILE] Upload failed: %s", upload_resp.status)
+                    return None
+                content_uri = (await upload_resp.json()).get("content_uri")
+                if not content_uri:
+                    return None
+
+            # Send m.file event
+            txn_id = str(uuid.uuid4())
+            msg_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
+            msg_headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
+            msg_data = {
+                "msgtype": "m.file",
+                "url": content_uri,
+                "body": filename,
+                "filename": filename,
+                "info": {"mimetype": mimetype, "size": len(file_data)},
+            }
+            async with session.put(
+                msg_url,
+                headers=msg_headers,
+                json=msg_data,
+                timeout=_AGENT_SEND_TIMEOUT,
+            ) as send_resp:
+                if send_resp.status != 200:
+                    logger.error("[FILE] Send failed: %s", send_resp.status)
+                    return None
+                event_id = (await send_resp.json()).get("event_id")
+                logger.info("[FILE] Sent file event_id: %s", event_id)
+                return event_id
+
+    except Exception as e:
+        logger.error(f"[FILE] Exception: {e}", exc_info=True)
+        return None
+
+
+async def fetch_and_send_video(
+    room_id: str,
+    video_url: str,
+    alt: str,
+    config,
+    logger,
+) -> Optional[str]:
+    """Fetch a video from a URL, upload to Matrix media repo, and send as m.video."""
+    try:
+        fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
+        async with aiohttp.ClientSession() as session:
+            # Fetch the video
+            try:
+                async with session.get(video_url, headers=fetch_headers, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                    if resp.status != 200:
+                        logger.error("[VIDEO] Failed to fetch from %s: %s", video_url, resp.status)
+                        return None
+                    video_data = await resp.read()
+                    content_type = resp.headers.get("Content-Type", "video/mp4")
+                    mimetype = content_type.split(";")[0].strip()
+                    if not mimetype.startswith("video/"):
+                        mimetype = "video/mp4"
+            except Exception as fetch_err:
+                logger.error("[VIDEO] Exception fetching from %s: %s", video_url, fetch_err)
+                return None
+
+            if not video_data or len(video_data) < 100:
+                logger.warning("[VIDEO] Fetched video too small (%d bytes)", len(video_data) if video_data else 0)
+                return None
+
+            # Derive filename from URL
+            from urllib.parse import urlparse
+            url_path = urlparse(video_url).path
+            filename = url_path.split("/")[-1] if "/" in url_path else "video.mp4"
+            if not filename or "." not in filename:
+                ext = mimetype.split("/")[-1]
+                filename = f"video.{ext}"
+
+            logger.info("[VIDEO] Fetched %s (%d bytes, %s)", filename, len(video_data), mimetype)
+
+            # Login as agent
+            agent_token = await _get_agent_token(room_id, config, logger, session, caller="VIDEO")
+            if not agent_token:
+                return None
+
+            # Upload to Matrix
+            upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
+            upload_headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": mimetype}
+            async with session.post(
+                upload_url,
+                headers=upload_headers,
+                params={"filename": filename},
+                data=video_data,
+                timeout=_AGENT_UPLOAD_TIMEOUT,
+            ) as upload_resp:
+                if upload_resp.status != 200:
+                    logger.error("[VIDEO] Upload failed: %s", upload_resp.status)
+                    return None
+                content_uri = (await upload_resp.json()).get("content_uri")
+                if not content_uri:
+                    return None
+
+            # Send m.video event
+            txn_id = str(uuid.uuid4())
+            msg_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
+            msg_headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
+            msg_data = {
+                "msgtype": "m.video",
+                "url": content_uri,
+                "body": alt or filename,
+                "info": {"mimetype": mimetype, "size": len(video_data)},
+            }
+            async with session.put(
+                msg_url,
+                headers=msg_headers,
+                json=msg_data,
+                timeout=_AGENT_SEND_TIMEOUT,
+            ) as send_resp:
+                if send_resp.status != 200:
+                    logger.error("[VIDEO] Send failed: %s", send_resp.status)
+                    return None
+                event_id = (await send_resp.json()).get("event_id")
+                logger.info("[VIDEO] Sent video event_id: %s", event_id)
+                return event_id
+
+    except Exception as e:
+        logger.error(f"[VIDEO] Exception: {e}", exc_info=True)
+        return None
+
 
 async def send_to_letta_api(
     message_body: Union[str, list],
@@ -1528,42 +1805,18 @@ async def send_to_letta_api(
 async def delete_message_as_agent(room_id: str, event_id: str, config: Config, logger: logging.Logger) -> bool:
     """Redact (delete) a message as the agent user for this room"""
     try:
-        # Load agent mapping from database
         from src.core.mapping_service import get_mapping_by_room_id
         agent_mapping = get_mapping_by_room_id(room_id)
-        
         if not agent_mapping:
             logger.warning(f"No agent mapping found for room {room_id}")
             return False
-        
         agent_name = agent_mapping.get("agent_name", "Unknown")
         logger.debug(f"[DELETE_AS_AGENT] Attempting to delete message as agent: {agent_name} in room {room_id}")
-        
-        # Login as the agent user
-        agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
-        agent_password = agent_mapping["matrix_password"]
-        
-        login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
-        login_data = {
-            "type": "m.login.password",
-            "user": agent_username,
-            "password": agent_password
-        }
-        
+
         async with aiohttp.ClientSession() as session:
-            # Login
-            async with session.post(login_url, json=login_data) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    logger.error(f"Failed to login as agent {agent_username}: {response.status} - {error_text}")
-                    return False
-                
-                auth_data = await response.json()
-                agent_token = auth_data.get("access_token")
-                
-                if not agent_token:
-                    logger.error(f"No token received for agent {agent_username}")
-                    return False
+            agent_token = await _get_agent_token(room_id, config, logger, session, caller="DELETE_AS_AGENT")
+            if not agent_token:
+                return False
             
             # Redact (delete) the message
             txn_id = str(uuid.uuid4())
@@ -1578,7 +1831,12 @@ async def delete_message_as_agent(room_id: str, event_id: str, config: Config, l
                 "reason": "Progress message replaced"
             }
             
-            async with session.put(redact_url, headers=headers, json=redact_data) as response:
+            async with session.put(
+                redact_url,
+                headers=headers,
+                json=redact_data,
+                timeout=_AGENT_SEND_TIMEOUT,
+            ) as response:
                 if response.status == 200:
                     logger.debug(f"[DELETE_AS_AGENT] Successfully deleted message {event_id}")
                     return True
@@ -1600,28 +1858,10 @@ async def edit_message_as_agent(
     logger: logging.Logger,
 ) -> bool:
     try:
-        from src.core.mapping_service import get_mapping_by_room_id
-        agent_mapping = get_mapping_by_room_id(room_id)
-
-        if not agent_mapping:
-            logger.warning(f"[EDIT_AS_AGENT] No agent mapping for room {room_id}")
-            return False
-
-        agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
-        agent_password = agent_mapping["matrix_password"]
-
-        login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
-        login_data = {"type": "m.login.password", "user": agent_username, "password": agent_password}
-
         async with aiohttp.ClientSession() as session:
-            async with session.post(login_url, json=login_data) as response:
-                if response.status != 200:
-                    logger.error(f"[EDIT_AS_AGENT] Login failed: {response.status}")
-                    return False
-                auth_data = await response.json()
-                agent_token = auth_data.get("access_token")
-                if not agent_token:
-                    return False
+            agent_token = await _get_agent_token(room_id, config, logger, session, caller="EDIT_AS_AGENT")
+            if not agent_token:
+                return False
 
             txn_id = str(uuid.uuid4())
             msg_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
@@ -1640,7 +1880,12 @@ async def edit_message_as_agent(
                 },
             }
 
-            async with session.put(msg_url, headers=headers, json=message_data) as response:
+            async with session.put(
+                msg_url,
+                headers=headers,
+                json=message_data,
+                timeout=_AGENT_SEND_TIMEOUT,
+            ) as response:
                 if response.status == 200:
                     logger.debug(f"[EDIT_AS_AGENT] Edited message {event_id}")
                     return True
@@ -1654,6 +1899,81 @@ async def edit_message_as_agent(
         return False
 
 
+async def send_reaction_as_agent(
+    room_id: str,
+    event_id: str,
+    emoji: str,
+    config: Config,
+    logger: logging.Logger,
+) -> Optional[str]:
+    """Send a reaction (emoji) to a message as the agent user for this room."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            agent_token = await _get_agent_token(room_id, config, logger, session, caller="REACTION")
+            if not agent_token:
+                return None
+
+            txn_id = str(uuid.uuid4())
+            url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.reaction/{txn_id}"
+            headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
+            content = {
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": event_id,
+                    "key": emoji
+                }
+            }
+
+            async with session.put(
+                url,
+                headers=headers,
+                json=content,
+                timeout=_AGENT_SEND_TIMEOUT,
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    reaction_event_id = result.get("event_id")
+                    logger.debug(f"[REACTION] Sent {emoji} to {event_id}, event_id: {reaction_event_id}")
+                    return reaction_event_id
+                else:
+                    resp_text = await response.text()
+                    logger.warning(f"[REACTION] Failed: {response.status} - {resp_text}")
+                    return None
+
+    except Exception as e:
+        logger.error(f"[REACTION] Exception: {e}", exc_info=True)
+        return None
+
+
+async def send_read_receipt_as_agent(
+    room_id: str,
+    event_id: str,
+    config: Config,
+    logger: logging.Logger,
+) -> bool:
+    """Send a read receipt for a message as the agent user for this room."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            agent_token = await _get_agent_token(room_id, config, logger, session, caller="READ_RECEIPT")
+            if not agent_token:
+                return False
+
+            url = f"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/receipt/m.read/{event_id}"
+            headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
+
+            async with session.post(url, headers=headers, json={}, timeout=_AGENT_SEND_TIMEOUT) as response:
+                if response.status == 200:
+                    logger.debug(f"[READ_RECEIPT] Sent for {event_id} in {room_id}")
+                    return True
+                else:
+                    logger.debug(f"[READ_RECEIPT] Failed: {response.status}")
+                    return False
+
+    except Exception as e:
+        logger.debug(f"[READ_RECEIPT] Exception: {e}")
+        return False
+
+
 async def _get_agent_typing_context(room_id: str, config: Config, logger: logging.Logger) -> Optional[Dict[str, str]]:
     """Resolve agent credentials and build reusable typing context for a room."""
     from src.core.mapping_service import get_mapping_by_room_id
@@ -1661,21 +1981,11 @@ async def _get_agent_typing_context(room_id: str, config: Config, logger: loggin
     if not agent_mapping:
         return None
 
-    agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
-    agent_password = agent_mapping["matrix_password"]
-
-    login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
-    login_data = {"type": "m.login.password", "user": agent_username, "password": agent_password}
-
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(login_url, json=login_data) as response:
-                if response.status != 200:
-                    return None
-                auth_data = await response.json()
-                token = auth_data.get("access_token")
-                if not token:
-                    return None
+            token = await _get_agent_token(room_id, config, logger, session, caller="TYPING")
+            if not token:
+                return None
     except Exception as e:
         logger.debug(f"[TYPING] Login failed: {e}")
         return None
@@ -1700,12 +2010,22 @@ async def _put_typing(session: aiohttp.ClientSession, typing_url: str, token: st
         typing_data["timeout"] = timeout_ms
 
     try:
-        async with session.put(typing_url, headers=headers, json=typing_data) as response:
+        async with session.put(
+            typing_url,
+            headers=headers,
+            json=typing_data,
+            timeout=_AGENT_SEND_TIMEOUT,
+        ) as response:
             if response.status == 200:
                 if not typing:
                     # Workaround: force immediate expiry on servers that ignore typing=false
                     expire_data = {"typing": True, "timeout": 1}
-                    async with session.put(typing_url, headers=headers, json=expire_data):
+                    async with session.put(
+                        typing_url,
+                        headers=headers,
+                        json=expire_data,
+                        timeout=_AGENT_SEND_TIMEOUT,
+                    ):
                         pass
                 return True
             else:
@@ -1795,7 +2115,8 @@ async def send_as_agent_with_event_id(
     config: Config, 
     logger: logging.Logger,
     reply_to_event_id: Optional[str] = None,
-    reply_to_sender: Optional[str] = None
+    reply_to_sender: Optional[str] = None,
+    reply_to_body: Optional[str] = None
 ) -> Optional[str]:
     """
     Send a message as the agent user for this room and return the event ID.
@@ -1811,50 +2132,20 @@ async def send_as_agent_with_event_id(
     Returns the event_id on success, None on failure.
     """
     try:
-        # Load agent mapping from database
         from src.core.mapping_service import get_mapping_by_room_id
         agent_mapping = get_mapping_by_room_id(room_id)
-        
+
         if not agent_mapping:
             logger.warning(f"No agent mapping found for room {room_id}")
             return None
-        
+
         agent_name = agent_mapping.get("agent_name", "Unknown")
         logger.debug(f"[SEND_AS_AGENT] Sending as agent: {agent_name} in room {room_id}")
-        
-        # Login as the agent user
-        agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
-        agent_password = agent_mapping["matrix_password"]
-        
-        login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
-        login_data = {
-            "type": "m.login.password",
-            "user": agent_username,
-            "password": agent_password
-        }
-        
+
         async with aiohttp.ClientSession() as session:
-            # Login
-            async with session.post(login_url, json=login_data) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    logger.error(f"Failed to login as agent {agent_username}: {response.status} - {error_text}")
-                    if "M_FORBIDDEN" in error_text or response.status == 403:
-                        try:
-                            from src.matrix.alerting import alert_auth_failure
-                            asyncio.get_event_loop().create_task(
-                                alert_auth_failure(agent_username, room_id)
-                            )
-                        except Exception:
-                            pass
-                    return None
-                
-                auth_data = await response.json()
-                agent_token = auth_data.get("access_token")
-                
-                if not agent_token:
-                    logger.error(f"No token received for agent {agent_username}")
-                    return None
+            agent_token = await _get_agent_token(room_id, config, logger, session, caller="SEND_AS_AGENT")
+            if not agent_token:
+                return None
             
             txn_id = str(uuid.uuid4())
             message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
@@ -1864,10 +2155,25 @@ async def send_as_agent_with_event_id(
             }
             
             message_data: Dict[str, Any] = {
-                "msgtype": "m.text",
+                "msgtype": "m.notice",
                 "body": message
             }
-            
+
+            # Convert markdown to HTML for rich rendering in Matrix clients
+            try:
+                import markdown
+                html_body = markdown.markdown(
+                    message,
+                    extensions=['tables', 'fenced_code', 'nl2br', 'sane_lists'],
+                )
+                # Only add formatted_body if HTML differs from plain text
+                # (i.e., markdown actually produced formatting)
+                if html_body and html_body != f'<p>{message}</p>':
+                    message_data['format'] = 'org.matrix.custom.html'
+                    message_data['formatted_body'] = html_body
+            except ImportError:
+                pass  # markdown not installed, send plain text
+
             # Add rich reply relationship if replying to a specific message
             if reply_to_event_id:
                 message_data["m.relates_to"] = {
@@ -1875,14 +2181,39 @@ async def send_as_agent_with_event_id(
                         "event_id": reply_to_event_id
                     }
                 }
-                # Optionally mention the original sender
+                # Build <mx-reply> fallback for proper client rendering
+                quoted_sender = reply_to_sender or 'user'
+                quoted_body = reply_to_body or ''
+                if quoted_body:
+                    # Truncate long quoted messages
+                    if len(quoted_body) > 200:
+                        quoted_body = quoted_body[:200] + '...'
+                    # Plain text fallback with > quoting
+                    message_data['body'] = f"> <{quoted_sender}> {quoted_body}\n\n{message}"
+                    # HTML formatted reply
+                    mx_reply_html = (
+                        f'<mx-reply><blockquote>'
+                        f'<a href="https://matrix.to/#/{room_id}/{reply_to_event_id}">In reply to</a> '
+                        f'<a href="https://matrix.to/#/{quoted_sender}">{quoted_sender}</a><br/>'
+                        f'{quoted_body}'
+                        f'</blockquote></mx-reply>'
+                    )
+                    existing_html = message_data.get('formatted_body', message)
+                    message_data['format'] = 'org.matrix.custom.html'
+                    message_data['formatted_body'] = mx_reply_html + existing_html
+                # Mention the original sender
                 if reply_to_sender:
                     message_data["m.mentions"] = {
                         "user_ids": [reply_to_sender]
                     }
                 logger.debug(f"[SEND_AS_AGENT] Creating rich reply to event {reply_to_event_id}")
             
-            async with session.put(message_url, headers=headers, json=message_data) as response:
+            async with session.put(
+                message_url,
+                headers=headers,
+                json=message_data,
+                timeout=_AGENT_SEND_TIMEOUT,
+            ) as response:
                 if response.status == 200:
                     result = await response.json()
                     event_id = result.get("event_id")
@@ -2134,6 +2465,10 @@ async def _process_letta_message(
                 is_mentioned=False,
             )
             logger.debug(f"[MATRIX-CONTEXT] Added context for sender {event_sender}")
+
+        # Send read receipt to show agent has seen the message
+        if original_event_id:
+            asyncio.create_task(send_read_receipt_as_agent(room_id, original_event_id, config, logger))
 
         if config.letta_streaming_enabled:
             logger.info("[STREAMING] Using streaming mode for Letta API call")

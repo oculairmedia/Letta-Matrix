@@ -491,21 +491,28 @@ class TestStreamingMessageHandler:
     
     @pytest.mark.asyncio
     async def test_handle_progress_event_no_delete(self, handler):
-        """Test handling progress event - progress is NOT posted to chat"""
+        """Test handling progress event - progress is posted to chat"""
+
         event = StreamEvent(
             type=StreamEventType.TOOL_CALL,
             metadata={"tool_name": "search"}
         )
         result = await handler.handle_event(event)
         
-        # Progress events are no longer sent to chat (only logged)
-        assert result is None
-        handler.send_message.assert_not_called()
+        # Progress events are sent to chat and return event_id
+        assert result == "$event_123"
+        handler.send_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "🔧 search..."
+        )
         handler.delete_message.assert_not_called()
+
+
     
     @pytest.mark.asyncio
     async def test_handle_progress_event_with_delete(self, handler_with_delete):
-        """Test handling progress event with deletion enabled - progress not posted"""
+        """Test handling progress event with deletion enabled - deletes old progress before sending new"""
+
         # Send first progress
         event1 = StreamEvent(
             type=StreamEventType.TOOL_CALL,
@@ -520,9 +527,22 @@ class TestStreamingMessageHandler:
         )
         await handler_with_delete.handle_event(event2)
         
-        # Progress events are silently dropped — no send, no delete
-        handler_with_delete.send_message.assert_not_called()
-        handler_with_delete.delete_message.assert_not_called()
+        # First progress is sent, second progress deletes first and sends new
+        assert handler_with_delete.send_message.call_count == 2
+        assert handler_with_delete.delete_message.call_count == 1
+        
+        # Verify the calls
+        calls = handler_with_delete.send_message.call_args_list
+        assert calls[0][0] == ("!test:matrix.example.com", "🔧 search...")
+        assert calls[1][0] == ("!test:matrix.example.com", "✅ search")
+        
+        # Verify delete was called for the first message
+        handler_with_delete.delete_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "$event_123"
+        )
+
+
     
     @pytest.mark.asyncio
     async def test_handle_final_event(self, handler):
@@ -648,17 +668,21 @@ class TestStreamingMessageHandler:
     
     @pytest.mark.asyncio
     async def test_cleanup_with_delete(self, handler_with_delete):
-        """Test cleanup when delete_progress=True but no progress was sent"""
-        # Progress events are no longer sent to chat, so no event_id to delete
+        """Test cleanup when delete_progress=True - deletes progress message"""
+
+        # Progress events are sent to chat, so event_id is stored
         event = StreamEvent(
             type=StreamEventType.TOOL_CALL,
             metadata={"tool_name": "test"}
         )
         await handler_with_delete.handle_event(event)
         
-        # Cleanup — no progress event_id stored since progress isn't posted
+        # Cleanup should delete the progress message since delete_progress=True
         await handler_with_delete.cleanup()
-        handler_with_delete.delete_message.assert_not_called()
+        handler_with_delete.delete_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "$event_123"
+        )
     
     @pytest.mark.asyncio
     async def test_cleanup_no_progress_to_delete(self, handler_with_delete):
@@ -727,12 +751,16 @@ class TestIntegration:
         
         await handler.cleanup()
         
-        # Verify: 1 message sent (assistant only — progress is silently dropped)
-        assert len(sent_messages) == 1
-        assert "I found the information" in sent_messages[0]["content"]
+        # Verify: 3 messages sent (2 progress + 1 assistant)
+        assert len(sent_messages) == 3
+        # First two are progress messages
+        assert "🔧 archival_memory_search" in sent_messages[0]["content"]
+        assert "✅ archival_memory_search" in sent_messages[1]["content"]
+        # Last one is the final assistant message
+        assert "I found the information" in sent_messages[2]["content"]
         
-        # Verify: No messages deleted (delete_progress=False)
-        assert len(deleted_messages) == 0
+        # Verify: 1 message deleted (old progress message replaced by new one)
+        assert len(deleted_messages) == 1
     
     @pytest.mark.asyncio
     async def test_separate_final_message_handler(self):
@@ -773,8 +801,9 @@ class TestIntegration:
         for event in events:
             await handler.handle_event(event)
         
-        # Verify: No progress went through regular send_message (progress is silently dropped)
-        assert len(regular_messages) == 0
+        # Verify: Progress went through regular send_message
+        assert len(regular_messages) == 1
+        assert "🔧 search" in regular_messages[0]["content"]
         
         # Verify: Final message went through send_final_message (for rich reply support)
         assert len(final_messages) == 1

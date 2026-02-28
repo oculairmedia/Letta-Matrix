@@ -562,6 +562,14 @@ class StreamingMessageHandler:
                 logger.warning(f"Failed to cleanup progress message: {e}")
             self._progress_event_id = None
 
+    async def show_progress(self, line: str) -> Optional[str]:
+        """No-op for non-live-edit handler."""
+        return None
+
+    async def update_last_progress(self, line: str) -> None:
+        """No-op for non-live-edit handler."""
+        pass
+
 
 class LiveEditStreamingHandler:
     """
@@ -655,16 +663,15 @@ class LiveEditStreamingHandler:
         return None
 
     async def _send_final(self, content: str) -> str:
-        # Delete the progress message and send a clean final response
+        # Replace progress message with final response (avoids redacted blocks)
         if self._event_id:
-            if self.delete_message:
-                try:
-                    await self.delete_message(self.room_id, self._event_id)
-                except Exception:
-                    pass
+            await self.edit_message(self.room_id, self._event_id, content)
+            eid = self._event_id
             self._event_id = None
             self._lines.clear()
+            return eid
 
+        # No progress message existed — send fresh
         eid = await self.send_final_message(self.room_id, content)
         return eid
 
@@ -678,6 +685,28 @@ class LiveEditStreamingHandler:
 
     def _build_body(self) -> str:
         return "\n".join(self._lines)
+
+    async def show_progress(self, line: str) -> Optional[str]:
+        """Add a progress line and update the live-edit message."""
+        import time
+        self._lines.append(line)
+        if self._event_id is None:
+            body = self._build_body()
+            eid = await self.send_message(self.room_id, body)
+            self._event_id = eid
+            self._last_edit_time = time.monotonic()
+            return eid
+        await self._do_edit()
+        return self._event_id
+
+    async def update_last_progress(self, line: str) -> None:
+        """Replace the last progress line and edit the message."""
+        if self._lines:
+            self._lines[-1] = line
+        else:
+            self._lines.append(line)
+        if self._event_id:
+            await self._do_edit()
 
     async def _cleanup_no_reply(self) -> None:
         if self._event_id and self.delete_message:

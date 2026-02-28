@@ -177,23 +177,41 @@ If the host runs out of memory, Tuwunel's RocksDB can get corrupted, causing aut
 - Messages not being forwarded to Letta
 - OpenCode identity routing failures
 
-### Detection
+### Detection & Auto-Recovery
 
-Run the health check script:
+The health check script runs every 15 minutes via cron and **automatically recovers** failed users:
 
 ```bash
-./scripts/health-check-auth.sh
+./scripts/health-check-auth.sh                # Check + auto-recover (default)
+./scripts/health-check-auth.sh --no-recover   # Check only, no recovery
+./scripts/health-check-auth.sh --check-only   # Alias for --no-recover
 ```
+
+**How auto-recovery works:**
+
+1. The script tests login for all critical users (`admin`, `letta`, `oc_letta_v2`, `oc_matrix_synapse_deployment_v2`)
+2. If any user fails, recovery is attempted in two tiers:
+
+   **Tier 1 — Admin Room Reset (no downtime, ~5s):**
+   - Uses a *healthy* user to log in and send `!admin users reset-password` to `#admins:matrix.oculair.ca`
+   - Tuwunel processes the command and resets the password
+   - Login is verified after reset
+   - Each healthy user is tried in turn until one succeeds
+
+   **Tier 2 — CLI Reset (fallback, ~20-30s downtime):**
+   - Used when Tier 1 fails (e.g., no healthy users in admin room, or all users are broken)
+   - Stops Tuwunel, resets passwords via CLI, restarts
+   - Volume path **must** be absolute — `docker run` does not support relative paths like `./`
+   - All remaining failed users are batched into a single stop/start cycle
+
+3. A lock file (`/tmp/matrix-health-recovery.lock`) prevents concurrent recovery attempts
+4. ntfy alert is sent with the outcome:
+   - Recovery succeeded: low-priority notification, no action needed
+   - Recovery failed: urgent notification, manual intervention required
 
 ### Auto-Recovery (Identity Bridge)
 
-The identity bridge (`matrix-messaging-mcp`) now handles password resets automatically via Tuwunel's admin room. When an identity fails to authenticate, the bridge:
-
-1. Sends `!admin users reset-password <localpart> <password>` to `#admins:matrix.oculair.ca`
-2. Tuwunel processes the command and resets the password
-3. The bridge then logs in with the new password
-
-This happens transparently during identity provisioning/recovery.
+The identity bridge (`matrix-messaging-mcp`) also handles password resets independently via Tuwunel's admin room. When an identity fails to authenticate during provisioning, the bridge resets the password automatically. This is a separate mechanism from the health check.
 
 ### Manual Recovery Steps
 
@@ -201,7 +219,7 @@ If auto-recovery fails or you need to reset passwords manually:
 
 **Option A: Admin Room (Tuwunel running)**
 
-Send commands to `#admins:matrix.oculair.ca` as the admin user:
+Send commands to `#admins:matrix.oculair.ca` as any user who is a member of the admin room:
 
 ```
 !admin users reset-password <localpart> <new_password>
@@ -215,12 +233,12 @@ Send commands to `#admins:matrix.oculair.ca` as the admin user:
    docker compose stop tuwunel
    ```
 
-2. **Reset failed user passwords**:
+2. **Reset failed user passwords** (volume path **must** be absolute — `docker run` does not support relative paths like `./`):
 
    ```bash
    timeout 60 docker run --rm --entrypoint "" \
      -e TUWUNEL_SERVER_NAME=matrix.oculair.ca \
-     -v ./tuwunel-data:/var/lib/tuwunel \
+     -v /opt/stacks/matrix-synapse-deployment/tuwunel-data:/var/lib/tuwunel \
      ghcr.io/oculairmedia/tuwunel-docker2010:latest \
      /usr/local/bin/tuwunel -c /var/lib/tuwunel/tuwunel.toml \
      -O 'server_name="matrix.oculair.ca"' \
@@ -241,11 +259,21 @@ Send commands to `#admins:matrix.oculair.ca` as the admin user:
 
 4. **Verify recovery**:
    ```bash
-   ./scripts/health-check-auth.sh
+   ./scripts/health-check-auth.sh --check-only
    ```
+
+### Regression Tests
+
+Run the recovery regression tests to verify the mechanism works:
+
+```bash
+./scripts/tests/test-health-recovery.sh
+```
+
+Tests cover: login validation, admin room resolution, message delivery, full reset cycle, flag behavior, and lock file concurrency.
 
 ### Prevention
 
 - Monitor host memory usage
 - Set resource limits on memory-hungry processes (e.g., OpenCode sessions)
-- Run health check periodically via cron
+- Health check runs automatically via cron (`*/15 * * * *`)

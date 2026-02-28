@@ -1011,6 +1011,6 @@ class TestRichReplies:
             assert "m.mentions" not in sent_data['json']
             
             # Verify basic message structure
-            assert sent_data['json']['msgtype'] == "m.text"
+            assert sent_data['json']['msgtype'] == "m.notice"
             assert sent_data['json']['body'] == message
 

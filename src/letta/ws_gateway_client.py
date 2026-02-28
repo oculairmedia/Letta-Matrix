@@ -82,6 +82,7 @@ class GatewayClient:
         agent_id: str,
         message: str,
         conversation_id: Optional[str] = None,
+        source: Optional[Dict[str, str]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Send a message through the gateway and yield raw WS events as dicts.
@@ -93,11 +94,14 @@ class GatewayClient:
         request_id = str(uuid.uuid4())
 
         try:
-            msg_payload = json.dumps({
+            payload: Dict[str, Any] = {
                 "type": "message",
                 "content": message,
                 "request_id": request_id,
-            })
+            }
+            if source:
+                payload["source"] = source
+            msg_payload = json.dumps(payload)
             await entry.ws.send(msg_payload)
             entry.last_used = time.monotonic()
 
@@ -142,6 +146,7 @@ class GatewayClient:
         agent_id: str,
         message: str,
         conversation_id: Optional[str] = None,
+        source: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Send a message and collect all stream events until the result event.
@@ -154,6 +159,7 @@ class GatewayClient:
             agent_id=agent_id,
             message=message,
             conversation_id=conversation_id,
+            source=source,
         ):
             if event.get("type") == "result":
                 result = event
