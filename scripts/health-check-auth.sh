@@ -52,6 +52,7 @@ COMPOSE_FILE_ARGS="-f ${PROJECT_DIR}/docker-compose.tuwunel.yml"
 # Agent identity discovery
 IDENTITY_BRIDGE_DATA="${PROJECT_DIR}/mcp-servers/matrix-identity-bridge/data"
 IDENTITIES_FILE="${IDENTITY_BRIDGE_DATA}/archive/identities.json"
+MATRIX_CLIENT_DB="postgresql://letta:letta@192.168.50.90:5432/matrix_letta"
 MAX_PARALLEL_CHECKS=10    # concurrent login checks for agent identities
 
 # Parse flags
@@ -76,6 +77,8 @@ RECOVERED_USERS=()
 RECOVERY_FAILED_USERS=()
 
 # Agent identity tracking (separate from core users)
+# AGENT_PASSWORDS is an associative array: localpart -> password
+declare -A AGENT_PASSWORDS
 AGENT_IDENTITIES=()
 FAILED_AGENTS=()
 RECOVERED_AGENTS=()
@@ -356,19 +359,49 @@ attempt_recovery() {
     [[ ${#RECOVERY_FAILED_USERS[@]} -gt 0 ]] && log "  Still failing: ${RECOVERY_FAILED_USERS[*]}"
 }
 
-# Discover agent identities from the identity bridge storage.
-# Reads archive/identities.json and extracts localparts for type=letta identities.
-# Convention: password = localpart (e.g., agent_4a9392fc_... / agent_4a9392fc_...)
+# Discover agent identities from BOTH sources:
+#   1. Matrix-client PostgreSQL DB (authoritative — has actual passwords)
+#   2. Identity bridge storage (fallback — uses localpart=password convention)
+# Populates AGENT_IDENTITIES (list) and AGENT_PASSWORDS (associative array).
 discover_agent_identities() {
-    if [[ ! -f "$IDENTITIES_FILE" ]]; then
-        log "[Agents] Identity file not found: $IDENTITIES_FILE — skipping agent checks"
-        return 1
+    local from_db=0 from_file=0
+
+    # Source 1: Matrix-client PostgreSQL DB (has actual stored passwords)
+    local db_entries
+    db_entries=$(python3 -c "
+import sys
+try:
+    import psycopg2
+    conn = psycopg2.connect('${MATRIX_CLIENT_DB}')
+    cur = conn.cursor()
+    cur.execute('SELECT matrix_user_id, matrix_password FROM agent_mappings WHERE removed_at IS NULL AND matrix_user_id LIKE %s', ('@agent_%',))
+    for row in cur:
+        localpart = row[0].split(':')[0].lstrip('@')
+        password = row[1]
+        print(f'{localpart}|{password}')
+    cur.close()
+    conn.close()
+except ImportError:
+    # psycopg2 not available, skip DB source
+    pass
+except Exception as e:
+    print(f'DB_ERROR: {e}', file=sys.stderr)
+" 2>/dev/null)
+
+    if [[ -n "$db_entries" ]]; then
+        while IFS='|' read -r localpart password; do
+            if [[ -n "$localpart" && -n "$password" ]]; then
+                AGENT_PASSWORDS["$localpart"]="$password"
+                AGENT_IDENTITIES+=("$localpart")
+                from_db=$((from_db + 1))
+            fi
+        done <<< "$db_entries"
     fi
 
-    # Extract localparts from mxid field for letta-type identities
-    # mxid format: @agent_xxxx:matrix.oculair.ca → localpart: agent_xxxx
-    local localparts
-    localparts=$(python3 -c "
+    # Source 2: Identity bridge storage (for agents not already found in DB)
+    if [[ -f "$IDENTITIES_FILE" ]]; then
+        local localparts
+        localparts=$(python3 -c "
 import json, sys
 try:
     with open('${IDENTITIES_FILE}') as f:
@@ -382,20 +415,29 @@ except Exception as e:
     sys.exit(1)
 " 2>/dev/null)
 
-    if [[ -z "$localparts" ]]; then
-        log "[Agents] No agent identities found in $IDENTITIES_FILE"
+        if [[ -n "$localparts" ]]; then
+            while IFS= read -r localpart; do
+                if [[ -z "${AGENT_PASSWORDS[$localpart]+x}" ]]; then
+                    # Not in DB — use localpart=password convention
+                    AGENT_PASSWORDS["$localpart"]="$localpart"
+                    AGENT_IDENTITIES+=("$localpart")
+                    from_file=$((from_file + 1))
+                fi
+            done <<< "$localparts"
+        fi
+    fi
+
+    if [[ ${#AGENT_IDENTITIES[@]} -eq 0 ]]; then
+        log "[Agents] No agent identities found from DB or identity bridge"
         return 1
     fi
 
-    while IFS= read -r localpart; do
-        AGENT_IDENTITIES+=("$localpart")
-    done <<< "$localparts"
-
-    log "[Agents] Discovered ${#AGENT_IDENTITIES[@]} agent identities"
+    log "[Agents] Discovered ${#AGENT_IDENTITIES[@]} agent identities (${from_db} from DB, ${from_file} from identity bridge)"
     return 0
 }
 
 # Check agent identities in parallel batches.
+# Uses AGENT_PASSWORDS associative array for per-agent passwords.
 # Populates FAILED_AGENTS with any that fail login.
 check_agent_identities() {
     local total=${#AGENT_IDENTITIES[@]}
@@ -407,9 +449,10 @@ check_agent_identities() {
     tmpdir=$(mktemp -d)
 
     for localpart in "${AGENT_IDENTITIES[@]}"; do
+        local agent_pw="${AGENT_PASSWORDS[$localpart]}"
         # Launch login check in background, write result to temp file
         (
-            if check_user_login "$localpart" "$localpart" > /dev/null 2>&1; then
+            if check_user_login "$localpart" "$agent_pw" > /dev/null 2>&1; then
                 echo "OK" > "${tmpdir}/${localpart}"
             else
                 echo "FAIL" > "${tmpdir}/${localpart}"
@@ -509,7 +552,8 @@ attempt_agent_recovery() {
     # Step 2: Send ALL reset commands (no waiting between them)
     local sent=0
     for agent in "${failed_agents_arr[@]}"; do
-        local reset_cmd="!admin users reset-password ${agent} ${agent}"
+        local agent_pw="${AGENT_PASSWORDS[$agent]}"
+        local reset_cmd="!admin users reset-password ${agent} ${agent_pw}"
         if send_room_message "$token" "$room_id" "$reset_cmd"; then
             sent=$((sent + 1))
         else
@@ -532,7 +576,8 @@ attempt_agent_recovery() {
 
     for agent in "${failed_agents_arr[@]}"; do
         (
-            if check_user_login "$agent" "$agent" > /dev/null 2>&1; then
+            local pw="${AGENT_PASSWORDS[$agent]}"
+            if check_user_login "$agent" "$pw" > /dev/null 2>&1; then
                 echo "OK" > "${tmpdir}/${agent}"
             else
                 echo "FAIL" > "${tmpdir}/${agent}"
