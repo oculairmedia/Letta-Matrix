@@ -12,9 +12,11 @@ const WS_RECONNECT_BASE_MS = 1000;
 const WS_RECONNECT_MAX_MS = 30000;
 const MESSAGE_INJECT_TIMEOUT_MS = 10_000; // 10s — if session.idle hasn't fired, inject anyway
 
-// Debug logging to file since console.log doesn't appear in OpenCode logs
+// Debug logging — disabled in production. Set MATRIX_PLUGIN_DEBUG=1 to enable.
 const DEBUG_LOG_PATH = path.join(os.homedir(), ".local", "share", "opencode", "matrix-plugin-debug.log");
+const DEBUG_ENABLED = process.env.MATRIX_PLUGIN_DEBUG === "1";
 function debugLog(message: string): void {
+  if (!DEBUG_ENABLED) return;
   const timestamp = new Date().toISOString();
   const line = `[${timestamp}] ${message}\n`;
   try {
