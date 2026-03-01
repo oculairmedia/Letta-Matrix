@@ -26,6 +26,8 @@ interface OpenCodeRegistration {
   registeredAt: number;
   lastSeen: number;
   ws: WebSocket | null;
+  status: 'connected' | 'degraded' | 'disconnected';
+  messageQueue: QueuedMessage[];
 }
 
 interface AgentMapping {
@@ -61,6 +63,15 @@ interface OpenCodeRoomMapping {
   room_id: string;
   identity_id: string;
   identity_mxid: string;
+}
+
+interface QueuedMessage {
+  roomId: string;
+  sender: string;
+  senderMxid: string;
+  body: string;
+  eventId: string;
+  queuedAt: number;
 }
 
 let openCodeRoomMappings: Record<string, OpenCodeRoomMapping> = {};
@@ -134,6 +145,8 @@ const AGENT_MAPPINGS_CACHE_TTL = 300000;
 
 const MATRIX_DOMAIN = process.env.MATRIX_DOMAIN || "matrix.oculair.ca";
 const STALE_TIMEOUT = 900000; // 15 minutes (was 5min - too aggressive, caused reconnect storms)
+const MAX_QUEUE_SIZE = 50;
+const QUEUE_MESSAGE_TTL_MS = 300000; // 5 minutes
 
 function deriveMatrixIdentities(directory: string): string[] {
   const dirName = directory.split("/").filter((p) => p).pop() || "default";
@@ -231,7 +244,10 @@ function forwardToOpenCode(
   body: string,
   eventId: string
 ): boolean {
-  if (!registration.ws || registration.ws.readyState !== WebSocket.OPEN) return false;
+  if (!registration.ws || registration.ws.readyState !== WebSocket.OPEN) {
+    console.warn(`[Bridge] Cannot forward to ${registration.id}: WebSocket ${!registration.ws ? 'is null' : `readyState=${registration.ws.readyState}`}`);
+    return false;
+  }
 
   const message: WsMatrixMessage = {
     type: "matrix_message",
@@ -249,6 +265,54 @@ function forwardToOpenCode(
   } catch (err) {
     console.error(`[Bridge] Failed to forward to WebSocket for ${registration.id}:`, err);
     return false;
+  }
+}
+
+function queueMessage(
+  registration: OpenCodeRegistration,
+  roomId: string,
+  sender: string,
+  senderMxid: string,
+  body: string,
+  eventId: string
+): void {
+  const now = Date.now();
+  registration.messageQueue = registration.messageQueue.filter(m => now - m.queuedAt < QUEUE_MESSAGE_TTL_MS);
+
+  if (registration.messageQueue.length >= MAX_QUEUE_SIZE) {
+    console.warn(`[Bridge] Queue full for ${registration.id} (${MAX_QUEUE_SIZE} messages), dropping oldest`);
+    registration.messageQueue.shift();
+  }
+
+  registration.messageQueue.push({ roomId, sender, senderMxid, body, eventId, queuedAt: now });
+  console.log(`[Bridge] Queued message for ${registration.id} (queue: ${registration.messageQueue.length})`);
+}
+
+function drainMessageQueue(registration: OpenCodeRegistration): void {
+  if (registration.messageQueue.length === 0) return;
+
+  const now = Date.now();
+  const validMessages = registration.messageQueue.filter(m => now - m.queuedAt < QUEUE_MESSAGE_TTL_MS);
+  registration.messageQueue = [];
+
+  if (validMessages.length === 0) return;
+
+  console.log(`[Bridge] Draining ${validMessages.length} queued messages for ${registration.id}`);
+
+  let delivered = 0;
+  for (const msg of validMessages) {
+    if (forwardToOpenCode(registration, msg.roomId, msg.sender, msg.senderMxid, msg.body, msg.eventId)) {
+      delivered++;
+    } else {
+      const remaining = validMessages.slice(validMessages.indexOf(msg));
+      registration.messageQueue = remaining;
+      console.warn(`[Bridge] WS dropped during drain for ${registration.id}, re-queued ${remaining.length} messages`);
+      break;
+    }
+  }
+
+  if (delivered > 0) {
+    console.log(`[Bridge] Drained ${delivered}/${validMessages.length} messages for ${registration.id}`);
   }
 }
 
@@ -287,7 +351,10 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
       return;
     }
     const forwarded = forwardToOpenCode(roomRegistration, roomId, senderName, senderMxid, body, eventId);
-    console.log(`[Bridge] Room-registered forward to ${roomRegistration.id}: ${forwarded ? 'SUCCESS' : 'FAILED'} - "${body.substring(0, 80)}..."`);
+    if (!forwarded) {
+      queueMessage(roomRegistration, roomId, senderName, senderMxid, body, eventId);
+    }
+    console.log(`[Bridge] Room-registered forward to ${roomRegistration.id}: ${forwarded ? 'SUCCESS' : 'QUEUED'} - "${body.substring(0, 80)}"`);
     return;
   }
 
@@ -300,26 +367,38 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
     if (mention === senderMxid) continue;
 
     const registration = identityToRegistration.get(mention);
-    if (registration && forwardToOpenCode(registration, roomId, senderName, senderMxid, body, eventId)) {
-      console.log(`[Bridge] Mention-based forward to ${registration.id} for ${mention}: SUCCESS`);
+    if (registration) {
+      if (forwardToOpenCode(registration, roomId, senderName, senderMxid, body, eventId)) {
+        console.log(`[Bridge] Mention-based forward to ${registration.id} for ${mention}: SUCCESS`);
+      } else {
+        queueMessage(registration, roomId, senderName, senderMxid, body, eventId);
+        console.log(`[Bridge] Mention-based forward to ${registration.id} for ${mention}: QUEUED`);
+      }
       continue;
     }
-    // Fallback: scan all registrations for a matching active WebSocket
+    // Fallback: scan all registrations for a matching identity
     let forwarded = false;
+    let matchedReg: OpenCodeRegistration | null = null;
     for (const [, reg] of registrations) {
-      if (!reg.ws || reg.ws.readyState !== WebSocket.OPEN) continue;
       const identities = deriveMatrixIdentities(reg.directory);
       if (identities.includes(mention)) {
-        console.log(`[Bridge] Found active WebSocket via ${reg.id} for ${mention}`);
-        if (forwardToOpenCode(reg, roomId, senderName, senderMxid, body, eventId)) {
-          identityToRegistration.set(mention, reg);
-          forwarded = true;
-          break;
+        matchedReg = reg;
+        if (reg.ws && reg.ws.readyState === WebSocket.OPEN) {
+          console.log(`[Bridge] Found active WebSocket via ${reg.id} for ${mention}`);
+          if (forwardToOpenCode(reg, roomId, senderName, senderMxid, body, eventId)) {
+            identityToRegistration.set(mention, reg);
+            forwarded = true;
+            break;
+          }
         }
       }
     }
-    if (!forwarded) {
-      console.log(`[Bridge] No active WebSocket for ${mention} in any registration`);
+    if (!forwarded && matchedReg) {
+      queueMessage(matchedReg, roomId, senderName, senderMxid, body, eventId);
+      identityToRegistration.set(mention, matchedReg);
+      console.log(`[Bridge] No active WebSocket for ${mention}, queued on ${matchedReg.id}`);
+    } else if (!forwarded) {
+      console.log(`[Bridge] No registration found for ${mention}`);
     }
   }
 }
@@ -336,7 +415,9 @@ async function initMatrix(): Promise<void> {
   matrixClient.on(sdk.RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
     if (toStartOfTimeline) return;
     if (room) {
-      handleMatrixMessage(event, room).catch(() => {});
+      handleMatrixMessage(event, room).catch((err) => {
+        console.error(`[Bridge] Error handling Matrix message in ${room?.roomId}:`, err);
+      });
     }
   });
 
@@ -344,7 +425,8 @@ async function initMatrix(): Promise<void> {
     if (member.membership === "invite" && member.userId === matrixClient?.getUserId()) {
       try {
         await matrixClient?.joinRoom(member.roomId);
-      } catch {
+      } catch (err: any) {
+        console.warn(`[Bridge] Failed to auto-join room ${member.roomId}:`, err?.message || err);
       }
     }
   });
@@ -370,7 +452,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     res.end(JSON.stringify({
       status: "ok",
       registrations: registrations.size,
-      connectedPlugins: Array.from(registrations.values()).filter(r => r.ws?.readyState === WebSocket.OPEN).length,
+      connectedPlugins: Array.from(registrations.values()).filter(r => r.status === 'connected').length,
+      degradedPlugins: Array.from(registrations.values()).filter(r => r.status === 'degraded').length,
       matrixConnected: matrixClient?.isLoggedIn() || false,
     }));
     return;
@@ -387,7 +470,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         rooms: r.rooms,
         registeredAt: r.registeredAt,
         lastSeen: r.lastSeen,
-        wsConnected: r.ws?.readyState === WebSocket.OPEN,
+        status: r.status,
+        wsConnected: r.status === 'connected',
+        queuedMessages: r.messageQueue.length,
       })),
     }));
     return;
@@ -441,6 +526,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         const existing = registrations.get(id);
         if (existing) {
           existing.lastSeen = Date.now();
+          if (!existing.messageQueue) (existing as any).messageQueue = [];
+          if (!existing.status) (existing as any).status = existing.ws?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected';
           for (const oldRoom of existing.rooms) {
             roomToRegistration.delete(oldRoom);
           }
@@ -467,6 +554,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           registeredAt: Date.now(),
           lastSeen: Date.now(),
           ws: null,
+          status: 'disconnected',
+          messageQueue: [],
         };
 
         registrations.set(id, registration);
@@ -521,7 +610,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
             success: true,
             id: registration.id,
             lastSeen: registration.lastSeen,
-            wsConnected: registration.ws?.readyState === WebSocket.OPEN,
+            status: registration.status,
+            wsConnected: registration.status === 'connected',
+            queuedMessages: registration.messageQueue?.length || 0,
           }));
         } else {
           res.writeHead(404, { "Content-Type": "application/json" });
@@ -696,13 +787,20 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           eventId
         );
 
-        console.log(`[Bridge] /notify to ${registration.id}: ${forwarded ? 'SUCCESS' : 'FAILED'} from ${senderName}`);
+        let queued = false;
+        if (!forwarded) {
+          queueMessage(registration, registration.rooms[0] || "", senderName, sender || "notify", message, eventId);
+          queued = true;
+        }
 
-        res.writeHead(forwarded ? 200 : 503, { "Content-Type": "application/json" });
+        console.log(`[Bridge] /notify to ${registration.id}: ${forwarded ? 'SUCCESS' : 'QUEUED'} from ${senderName}`);
+
+        res.writeHead(forwarded ? 200 : 202, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           success: forwarded,
-          forwarded_to: forwarded ? registration.id : undefined,
-          error: forwarded ? undefined : "WebSocket not connected"
+          queued,
+          forwarded_to: registration.id,
+          error: !forwarded && !queued ? "WebSocket not connected" : undefined,
         }));
       } catch (e) {
         res.writeHead(400, { "Content-Type": "application/json" });
@@ -759,6 +857,7 @@ function handleWebSocketConnection(ws: WebSocket): void {
           if (registration.ws && registration.ws !== ws) registration.ws.close();
           registration.ws = ws;
           registration.lastSeen = Date.now();
+          registration.status = 'connected';
           directoryToRegistration.set(registration.directory, registration);
           authenticatedRegistration = registration;
           
@@ -768,6 +867,7 @@ function handleWebSocketConnection(ws: WebSocket): void {
           
           ws.send(JSON.stringify({ type: "auth_success", registrationId: registration.id }));
           console.log(`[Bridge] WebSocket authenticated: ${registration.id}`);
+          drainMessageQueue(registration);
         } else {
           ws.send(JSON.stringify({ type: "auth_error", error: "Registration not found" }));
           console.log(`[Bridge] WebSocket auth failed: registration not found for ${authMsg.registrationId}`);
@@ -790,6 +890,8 @@ function handleWebSocketConnection(ws: WebSocket): void {
     console.log(`[Bridge] WebSocket closed for ${regId}: code=${code}, reason=${reason?.toString() || 'none'}`);
     if (authenticatedRegistration?.ws === ws) {
       authenticatedRegistration.ws = null;
+      authenticatedRegistration.status = 'degraded';
+      console.warn(`[Bridge] Registration ${authenticatedRegistration.id} degraded: WebSocket closed (code=${code})`);
     }
   });
 
