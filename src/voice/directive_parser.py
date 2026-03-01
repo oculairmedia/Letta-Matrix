@@ -53,13 +53,15 @@ _VIDEO_DIRECTIVE_REGEX = re.compile(
 
 
 def parse_directives(text: str) -> ParseResult:
-    match = _ACTIONS_BLOCK_REGEX.search(text)
-    if not match:
+    matches = list(_ACTIONS_BLOCK_REGEX.finditer(text))
+    if not matches:
         return ParseResult(clean_text=text, directives=[])
 
-    actions_content = match.group(1)
-    # Remove the entire <actions>...</actions> block from the text
-    clean_text = (text[:match.start()] + text[match.end():]).strip()
+    # Collect content from ALL <actions> blocks
+    actions_content = "\n".join(m.group(1) for m in matches)
+
+    # Remove all <actions>...</actions> blocks from the text
+    clean_text = _ACTIONS_BLOCK_REGEX.sub("", text).strip()
     directives: List[Union[VoiceDirective, ImageDirective, FileDirective, VideoDirective]] = []
 
     for voice_match in _VOICE_DIRECTIVE_REGEX.finditer(actions_content):
@@ -92,4 +94,4 @@ def parse_directives(text: str) -> ParseResult:
 
 
 def strip_actions_block(text: str) -> str:
-    return _ACTIONS_BLOCK_REGEX.sub("", text, count=1).strip()
+    return _ACTIONS_BLOCK_REGEX.sub("", text).strip()
