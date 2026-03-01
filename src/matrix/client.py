@@ -602,20 +602,8 @@ async def handle_letta_code_command(
         
         fs_run_prompt = prompt_text
         if event.sender.startswith("@oc_"):
-            opencode_mxid = event.sender
-            fs_run_prompt = f"""[MESSAGE FROM OPENCODE USER]
-
-{prompt_text}
-
----
-RESPONSE INSTRUCTION (OPENCODE BRIDGE):
-This message is from an OpenCode user: {opencode_mxid}
-When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
-in your response so the OpenCode bridge can route your reply to them.
-
-Example: "{opencode_mxid} Here is my response..."
-"""
-            logger.info(f"[OPENCODE-FS-RUN] Injected @mention instruction for /fs-run command")
+            fs_run_prompt = matrix_formatter.wrap_opencode_routing(prompt_text, event.sender)
+            logger.info("[OPENCODE-FS-RUN] Injected @mention instruction for /fs-run command")
         
         await run_letta_code_task(
             room_id=room.room_id,
@@ -2409,6 +2397,8 @@ async def _process_letta_message(
         
         is_agent_mail_message = False
         agent_mail_metadata = None
+        reply_to_event_id_for_envelope = None
+        reply_to_sender_for_envelope = None
         
         if event_source and isinstance(event_source, dict):
             content = event_source.get("content", {})
@@ -2423,6 +2413,20 @@ async def _process_letta_message(
             if agent_mail_metadata:
                 is_agent_mail_message = True
                 logger.info(f"[REVERSE-BRIDGE] Detected Agent Mail message from {agent_mail_metadata.get('sender_friendly_name', 'Unknown')}")
+
+            # Extract reply threading context
+            relates_to = content.get("m.relates_to", {})
+            in_reply_to = relates_to.get("m.in_reply_to", {}) if isinstance(relates_to, dict) else {}
+            reply_to_event_id_for_envelope = in_reply_to.get("event_id") if isinstance(in_reply_to, dict) else None
+            reply_to_sender_for_envelope = content.get("m.letta.reply_to_sender")  # custom field if set
+            if not reply_to_sender_for_envelope and reply_to_event_id_for_envelope:
+                # Try to extract from Matrix reply fallback body
+                body_text = content.get("body", "")
+                if body_text.startswith("> <@"):
+                    try:
+                        reply_to_sender_for_envelope = body_text.split(">", 2)[1].strip().strip("<>")
+                    except (IndexError, ValueError):
+                        pass
         
         if not is_inter_agent_message:
             sender_agent_mapping = get_mapping_by_matrix_user(event_sender)
@@ -2447,6 +2451,8 @@ async def _process_letta_message(
                 chat_id=room_id,
                 message_id=original_event_id,
                 timestamp=event_timestamp,
+                reply_to_event_id=reply_to_event_id_for_envelope,
+                reply_to_sender=reply_to_sender_for_envelope,
             )
             logger.info(f"[INTER-AGENT CONTEXT] Enhanced message for receiving agent:")
             logger.info(f"[INTER-AGENT CONTEXT] Sender: {from_agent_name} ({from_agent_id})")
@@ -2462,6 +2468,8 @@ async def _process_letta_message(
                 chat_id=room_id,
                 message_id=original_event_id,
                 timestamp=event_timestamp,
+                reply_to_event_id=reply_to_event_id_for_envelope,
+                reply_to_sender=reply_to_sender_for_envelope,
             )
             logger.info(f"[OPENCODE] Detected message from OpenCode identity: {opencode_mxid}")
             logger.info(f"[OPENCODE] Injected @mention instruction for response routing")
@@ -2478,6 +2486,8 @@ async def _process_letta_message(
                 is_group=True,
                 group_name=room_display,
                 is_mentioned=False,
+                reply_to_event_id=reply_to_event_id_for_envelope,
+                reply_to_sender=reply_to_sender_for_envelope,
             )
             logger.debug(f"[MATRIX-CONTEXT] Added context for sender {event_sender}")
 

@@ -29,6 +29,7 @@ from src.matrix.document_parser import (
     parse_document, format_document_for_agent,
     is_parseable_document, DocumentParseConfig,
 )
+from src.matrix.formatter import wrap_opencode_routing
 
 # Import Letta SDK
 from letta_client import Letta
@@ -357,20 +358,8 @@ class LettaFileHandler:
             
             # Add OpenCode routing instruction if sender is an OpenCode identity
             if metadata.sender and metadata.sender.startswith("@oc_"):
-                opencode_mxid = metadata.sender
-                message_text = f"""[MESSAGE FROM OPENCODE USER]
-
-{message_text}
-
----
-RESPONSE INSTRUCTION (OPENCODE BRIDGE):
-This message is from an OpenCode user: {opencode_mxid}
-When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
-in your response so the OpenCode bridge can route your reply to them.
-
-Example: "{opencode_mxid} Here is my response..."
-"""
-                logger.info(f"[OPENCODE-IMAGE] Injected @mention instruction for image upload")
+                message_text = wrap_opencode_routing(message_text, metadata.sender)
+                logger.info("[OPENCODE-IMAGE] Injected @mention instruction for image upload")
             
             input_content = [
                 {
@@ -463,20 +452,8 @@ Example: "{opencode_mxid} Here is my response..."
             
             # Add OpenCode routing instruction if sender is an OpenCode identity
             if metadata.sender and metadata.sender.startswith("@oc_"):
-                opencode_mxid = metadata.sender
-                formatted = f"""[MESSAGE FROM OPENCODE USER]
-
-{formatted}
-
----
-RESPONSE INSTRUCTION (OPENCODE BRIDGE):
-This message is from an OpenCode user: {opencode_mxid}
-When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
-in your response so the OpenCode bridge can route your reply to them.
-
-Example: "{opencode_mxid} Here is my response..."
-"""
-                logger.info(f"[OPENCODE-DOC] Injected @mention instruction for document upload")
+                formatted = wrap_opencode_routing(formatted, metadata.sender)
+                logger.info("[OPENCODE-DOC] Injected @mention instruction for document upload")
             
             logger.info(f"Document extraction complete for {metadata.file_name}, returning {len(formatted)} chars to agent")
             return formatted
