@@ -25,6 +25,10 @@ from dataclasses import dataclass
 import aiohttp
 from nio import Event
 from src.voice.transcription import transcribe_audio
+from src.matrix.document_parser import (
+    parse_document, format_document_for_agent,
+    is_parseable_document, DocumentParseConfig,
+)
 
 # Import Letta SDK
 from letta_client import Letta
@@ -39,6 +43,17 @@ SUPPORTED_FILE_TYPES = {
     'text/markdown': '.md',
     'text/x-markdown': '.md',
     'application/json': '.json',
+    # Document types (MarkItDown)
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+    'application/vnd.ms-powerpoint': '.ppt',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'application/vnd.ms-excel': '.xls',
+    'text/csv': '.csv',
+    'text/html': '.html',
+    'application/xhtml+xml': '.xhtml',
+    'application/epub+zip': '.epub',
     # Image types (for vision-capable models)
     'image/jpeg': '.jpg',
     'image/jpg': '.jpg',
@@ -62,6 +77,8 @@ SUPPORTED_FILE_TYPES = {
 SUPPORTED_EXTENSIONS = {
     # Documents
     '.pdf', '.txt', '.md', '.json', '.markdown',
+    '.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls',
+    '.csv', '.html', '.htm', '.xhtml', '.epub', '.rtf', '.odt',
     # Images
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif',
     '.ogg', '.mp3', '.m4a', '.wav', '.webm', '.flac', '.aac', '.oga'
@@ -112,7 +129,8 @@ class LettaFileHandler:
         embedding_dim: int = 1536,
         embedding_chunk_size: int = 300,
         max_retries: int = 3,
-        retry_delay: float = 1.0
+        retry_delay: float = 1.0,
+        document_parsing_config: Optional[DocumentParseConfig] = None
     ):
         """
         Initialize the file handler
@@ -155,6 +173,9 @@ class LettaFileHandler:
         logger.info(f"LettaFileHandler initialized - matrix_access_token present: {bool(self.matrix_access_token)}, length: {len(self.matrix_access_token) if self.matrix_access_token else 0}")
         logger.info(f"Embedding config: model={embedding_model}, endpoint={embedding_endpoint}, dim={embedding_dim}")
         logger.info(f"Using Letta SDK for API calls")
+        # Document parsing config (MarkItDown)
+        self.document_parsing_config = document_parsing_config or DocumentParseConfig.from_env()
+        logger.info(f"Document parsing: enabled={self.document_parsing_config.enabled}, ocr={self.document_parsing_config.ocr_enabled}")
     
     async def _run_sync(self, func, *args, **kwargs):
         """Run a synchronous function in a thread pool"""
@@ -216,8 +237,8 @@ class LettaFileHandler:
             
         Returns:
             list: Multimodal content for image uploads (to be sent via normal message pipeline)
-            str: Transcribed text wrapper for voice uploads
-            bool: Success/failure for document uploads handled internally
+            str: Transcribed text wrapper for voice uploads, or extracted document text
+            bool: Success/failure for unsupported uploads handled internally
             None: Nothing to do
         """
         try:
@@ -247,8 +268,13 @@ class LettaFileHandler:
                 logger.info(f"Image uploaded: {metadata.file_name}. Building multimodal message content.")
                 return await self._handle_image_upload(metadata, room_id, agent_id)
             
-            # For documents (PDF, text, etc.) - use file upload flow
-            await self._notify(room_id, f"📄 Processing document: {metadata.file_name}")
+            # For documents (PDF, DOCX, text, etc.) - extract text with MarkItDown
+            if is_parseable_document(metadata.file_type, metadata.file_name):
+                logger.info(f"Document uploaded: {metadata.file_name}. Extracting text with MarkItDown.")
+                return await self._handle_document_upload(metadata, room_id, agent_id)
+            
+            # Fallback for unknown file types - use Letta source upload flow
+            await self._notify(room_id, f"📄 Processing file: {metadata.file_name}")
             
             # Download file from Matrix
             file_path = await self._download_matrix_file(metadata)
@@ -281,7 +307,6 @@ class LettaFileHandler:
                 if file_path and os.path.exists(file_path):
                     os.unlink(file_path)
                     logger.debug(f"Cleaned up temporary file {file_path}")
-                    
         except Exception as e:
             logger.error(f"Error handling file event: {e}", exc_info=True)
             raise FileUploadError(f"Failed to process file upload: {e}")
@@ -393,6 +418,75 @@ Example: "{opencode_mxid} Here is my response..."
                 os.unlink(file_path)
                 logger.debug(f"Cleaned up temporary file {file_path}")
     
+    async def _handle_document_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> str:
+        """
+        Handle document upload by extracting text with MarkItDown.
+        
+        Follows the same pattern as _handle_audio_upload:
+        download → extract text → return formatted string → sent to Letta as message.
+        
+        Args:
+            metadata: File metadata
+            room_id: Room ID where document was uploaded
+            agent_id: Agent ID to send document to
+            
+        Returns:
+            Formatted string with extracted document text for the agent
+        """
+        # Notify user that we're processing the document
+        await self._notify(room_id, f"📄 Reading document: {metadata.file_name}...")
+        
+        # Download file from Matrix
+        file_path = await self._download_matrix_file(metadata)
+        
+        try:
+            # Parse document with MarkItDown
+            result = await parse_document(
+                file_path=file_path,
+                filename=metadata.file_name,
+                config=self.document_parsing_config,
+            )
+            
+            if result.error:
+                logger.warning(f"Document parsing failed for {metadata.file_name}: {result.error}")
+                await self._notify(room_id, f"⚠️ Could not extract text from {metadata.file_name}: {result.error}")
+            else:
+                page_info = f" ({result.page_count} pages)" if result.page_count else ""
+                ocr_info = " (OCR)" if result.was_ocr else ""
+                await self._notify(
+                    room_id,
+                    f"✅ Document processed: {metadata.file_name}{page_info}{ocr_info} — {len(result.text)} chars extracted"
+                )
+            
+            # Format for agent message (includes error handling in format)
+            formatted = format_document_for_agent(result, caption=metadata.caption)
+            
+            # Add OpenCode routing instruction if sender is an OpenCode identity
+            if metadata.sender and metadata.sender.startswith("@oc_"):
+                opencode_mxid = metadata.sender
+                formatted = f"""[MESSAGE FROM OPENCODE USER]
+
+{formatted}
+
+---
+RESPONSE INSTRUCTION (OPENCODE BRIDGE):
+This message is from an OpenCode user: {opencode_mxid}
+When you respond to this message, you MUST include their @mention ({opencode_mxid}) 
+in your response so the OpenCode bridge can route your reply to them.
+
+Example: "{opencode_mxid} Here is my response..."
+"""
+                logger.info(f"[OPENCODE-DOC] Injected @mention instruction for document upload")
+            
+            logger.info(f"Document extraction complete for {metadata.file_name}, returning {len(formatted)} chars to agent")
+            return formatted
+            
+        finally:
+            # Clean up temporary file
+            if file_path and os.path.exists(file_path):
+                os.unlink(file_path)
+                logger.debug(f"Cleaned up temporary file {file_path}")
+
     async def _send_multimodal_message(self, agent_id: str, content: list) -> Optional[Any]:
         """
         Send a multimodal message (with images) to a Letta agent.
@@ -588,6 +682,25 @@ Example: "{opencode_mxid} Here is my response..."
                 metadata.file_type = 'audio/flac'
             elif ext == '.aac':
                 metadata.file_type = 'audio/aac'
+            # Document types
+            elif ext == '.docx':
+                metadata.file_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            elif ext == '.doc':
+                metadata.file_type = 'application/msword'
+            elif ext == '.pptx':
+                metadata.file_type = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+            elif ext == '.ppt':
+                metadata.file_type = 'application/vnd.ms-powerpoint'
+            elif ext == '.xlsx':
+                metadata.file_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            elif ext == '.xls':
+                metadata.file_type = 'application/vnd.ms-excel'
+            elif ext == '.csv':
+                metadata.file_type = 'text/csv'
+            elif ext in ['.html', '.htm']:
+                metadata.file_type = 'text/html'
+            elif ext == '.epub':
+                metadata.file_type = 'application/epub+zip'
 
         return None
     

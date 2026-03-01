@@ -10,6 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libssl-dev \
     libolm-dev \
+    # Document parsing dependencies (MarkItDown + OCR)
+    libmagic1 \
+    exiftool \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -34,5 +40,11 @@ ENV LETTA_API_URL=https://letta.oculair.ca
 ENV LETTA_TOKEN=lettaSecurePass123
 ENV LETTA_AGENT_ID=agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444
 
+
+# Document parsing configuration defaults
+ENV DOCUMENT_PARSING_ENABLED=true
+ENV DOCUMENT_PARSING_MAX_FILE_SIZE_MB=50
+ENV DOCUMENT_PARSING_TIMEOUT_SECONDS=120
+ENV DOCUMENT_PARSING_OCR_ENABLED=true
 # Run the application
 CMD ["python", "-m", "src.matrix.client"]

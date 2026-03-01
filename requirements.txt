@@ -43,3 +43,9 @@ markdown>=3.5.0
 
 # Image processing for thumbnails
 Pillow>=10.0.0
+
+# Document parsing (MarkItDown) for extracting text from uploaded files
+# Selective extras: pdf, docx, pptx, xlsx, xls (skip azure, audio, youtube)
+markitdown[pdf,docx,pptx,xlsx,xls]>=0.1.0
+pymupdf>=1.24.0  # PDF page rendering for OCR fallback
+pytesseract>=0.3.10  # OCR fallback for scanned PDFs

@@ -16,6 +16,7 @@ from src.matrix.auth import MatrixAuthManager
 
 # Import file handler
 from src.matrix.file_handler import LettaFileHandler, FileUploadError
+from src.matrix.document_parser import DocumentParseConfig
 from src.matrix import formatter as matrix_formatter
 
 # Import agent user manager
@@ -248,6 +249,13 @@ class Config:
     letta_gateway_api_key: str = ""  # API key for gateway auth (X-Api-Key header)
     letta_gateway_idle_timeout: float = 300.0  # Close idle WS connections after 5 minutes
     letta_gateway_max_connections: int = 20  # Max concurrent WS connections
+    # Document parsing configuration (MarkItDown)
+    document_parsing_enabled: bool = True  # Extract text from uploaded documents
+    document_parsing_max_file_size_mb: int = 50  # Max file size for parsing
+    document_parsing_timeout: float = 120.0  # Timeout for document conversion
+    document_parsing_ocr_enabled: bool = True  # OCR fallback for scanned PDFs
+    document_parsing_ocr_dpi: int = 200  # DPI for rendering PDF pages to images
+    document_parsing_max_text_length: int = 50000  # Truncate extracted text beyond this
     
     @classmethod
     def from_env(cls) -> "Config":
@@ -284,6 +292,13 @@ class Config:
                 letta_gateway_api_key=os.getenv("LETTA_GATEWAY_API_KEY", ""),
                 letta_gateway_idle_timeout=float(os.getenv("LETTA_GATEWAY_IDLE_TIMEOUT", "300.0")),
                 letta_gateway_max_connections=int(os.getenv("LETTA_GATEWAY_MAX_CONNECTIONS", "20")),
+                # Document parsing configuration
+                document_parsing_enabled=os.getenv("DOCUMENT_PARSING_ENABLED", "true").lower() == "true",
+                document_parsing_max_file_size_mb=int(os.getenv("DOCUMENT_PARSING_MAX_FILE_SIZE_MB", "50")),
+                document_parsing_timeout=float(os.getenv("DOCUMENT_PARSING_TIMEOUT_SECONDS", "120.0")),
+                document_parsing_ocr_enabled=os.getenv("DOCUMENT_PARSING_OCR_ENABLED", "true").lower() == "true",
+                document_parsing_ocr_dpi=int(os.getenv("DOCUMENT_PARSING_OCR_DPI", "200")),
+                document_parsing_max_text_length=int(os.getenv("DOCUMENT_PARSING_MAX_TEXT_LENGTH", "50000")),
             )
         except Exception as e:
             raise ConfigurationError(f"Failed to load configuration: {e}")
@@ -3093,6 +3108,16 @@ async def main():
     matrix_token = client.access_token
     logger.info(f"Matrix access token available: {bool(matrix_token)}, length: {len(matrix_token) if matrix_token else 0}")
     
+    # Build document parsing config from env
+    doc_parse_config = DocumentParseConfig(
+        enabled=config.document_parsing_enabled,
+        max_file_size_mb=config.document_parsing_max_file_size_mb,
+        timeout_seconds=config.document_parsing_timeout,
+        ocr_enabled=config.document_parsing_ocr_enabled,
+        ocr_dpi=config.document_parsing_ocr_dpi,
+        max_text_length=config.document_parsing_max_text_length,
+    )
+    
     file_handler = LettaFileHandler(
         homeserver_url=config.homeserver_url,
         letta_api_url=config.letta_api_url,
@@ -3103,7 +3128,8 @@ async def main():
         embedding_endpoint=config.embedding_endpoint or None,
         embedding_endpoint_type=config.embedding_endpoint_type,
         embedding_dim=config.embedding_dim,
-        embedding_chunk_size=config.embedding_chunk_size
+        embedding_chunk_size=config.embedding_chunk_size,
+        document_parsing_config=doc_parse_config,
     )
     logger.info(f"File handler initialized with embedding: model={config.embedding_model}, endpoint={config.embedding_endpoint or 'default'}, dim={config.embedding_dim}")
 
