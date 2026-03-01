@@ -6,6 +6,7 @@ from src.matrix.formatter import (
     format_inter_agent_envelope,
     format_opencode_envelope,
     wrap_opencode_routing,
+    is_no_reply,
     _extract_localpart,
     _build_reply_context_lines,
 )
@@ -257,3 +258,28 @@ class TestEnvelopeSectionOrder:
         reply_pos = result.index("## Reply Context")
         oc_pos = result.index("## OpenCode Context")
         assert meta_pos < ctx_pos < reply_pos < oc_pos
+
+
+class TestIsNoReply:
+    def test_exact_match(self):
+        assert is_no_reply("<no-reply/>") is True
+
+    def test_with_space(self):
+        assert is_no_reply("<no-reply />") is True
+
+    def test_with_whitespace(self):
+        assert is_no_reply("  <no-reply/>  ") is True
+        assert is_no_reply("\n<no-reply/>\n") is True
+
+    def test_empty(self):
+        assert is_no_reply("") is False
+        assert is_no_reply(None) is False
+
+    def test_normal_text(self):
+        assert is_no_reply("Hello world") is False
+
+    def test_embedded_not_matched(self):
+        assert is_no_reply("Some text <no-reply/> more text") is False
+
+    def test_case_sensitive(self):
+        assert is_no_reply("<NO-REPLY/>") is False

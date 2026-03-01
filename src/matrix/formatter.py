@@ -142,6 +142,14 @@ def format_opencode_envelope(opencode_mxid, text, chat_id, message_id, timestamp
     body = text or ""
     return f"{reminder}\n\n{body}" if body else reminder
 
+def is_no_reply(text: str) -> bool:
+    """Check if an agent response is the <no-reply/> directive.
+
+    Agents use this to signal they choose not to reply. The bridge should
+    silently discard the message instead of posting it to Matrix.
+    """
+    stripped = (text or "").strip()
+    return stripped in ("<no-reply/>", "<no-reply />")
 
 def wrap_opencode_routing(content: str, opencode_mxid: str) -> str:
     """
@@ -170,3 +178,4 @@ def wrap_opencode_routing(content: str, opencode_mxid: str) -> str:
         f"\n"
         f'Example: "{opencode_mxid} Here is my response..."\n'
     )
+

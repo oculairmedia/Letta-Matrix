@@ -2535,58 +2535,62 @@ async def _process_letta_message(
                     logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
         else:
             letta_response = await send_to_letta_api(message_to_send, event_sender, config, logger, room_id)
-            
-            if opencode_mxid and opencode_mxid not in letta_response:
-                logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_mxid}")
-                letta_response = f"{opencode_mxid} {letta_response}"
-            
-            sent_as_agent = False
-            
-            poll_handled, remaining_text, poll_event_id = await process_agent_response(
-                room_id=room_id,
-                response_text=letta_response,
-                config=config,
-                logger_instance=logger,
-                reply_to_event_id=None,
-                reply_to_sender=None
-            )
-            
-            if poll_handled:
-                logger.info(f"[POLL] Poll command handled, event_id: {poll_event_id}")
-                if remaining_text:
-                    letta_response = remaining_text
-                else:
-                    sent_as_agent = True
-                    letta_response = ""
-            
-            if not poll_handled or remaining_text:
-                sent_as_agent = await send_as_agent(
-                    room_id, 
-                    letta_response, 
-                    config, 
-                    logger,
+
+            # Suppress <no-reply/> responses — agent chose not to reply
+            if matrix_formatter.is_no_reply(letta_response):
+                logger.info(f"[DIRECT-API] Agent chose not to reply (no-reply marker) in {room_id}")
+            else:
+                if opencode_mxid and opencode_mxid not in letta_response:
+                    logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_mxid}")
+                    letta_response = f"{opencode_mxid} {letta_response}"
+
+                sent_as_agent = False
+
+                poll_handled, remaining_text, poll_event_id = await process_agent_response(
+                    room_id=room_id,
+                    response_text=letta_response,
+                    config=config,
+                    logger_instance=logger,
                     reply_to_event_id=None,
                     reply_to_sender=None
                 )
-            
-            if not sent_as_agent:
-                if client:
-                    logger.warning("Failed to send as agent, falling back to main client")
-                    message_content: Dict[str, Any] = {"msgtype": "m.text", "body": letta_response}
-                    await client.room_send(
+
+                if poll_handled:
+                    logger.info(f"[POLL] Poll command handled, event_id: {poll_event_id}")
+                    if remaining_text:
+                        letta_response = remaining_text
+                    else:
+                        sent_as_agent = True
+                        letta_response = ""
+
+                if not poll_handled or remaining_text:
+                    sent_as_agent = await send_as_agent(
                         room_id,
-                        "m.room.message",
-                        message_content
+                        letta_response,
+                        config,
+                        logger,
+                        reply_to_event_id=None,
+                        reply_to_sender=None
                     )
-                else:
-                    logger.error("No client available and agent send failed")
-            
-            logger.info("Successfully sent response to Matrix", extra={
-                "response_length": len(letta_response),
-                "room_id": room_id,
-                "sent_as_agent": sent_as_agent,
-                "reply_to": original_event_id
-            })
+
+                if not sent_as_agent:
+                    if client:
+                        logger.warning("Failed to send as agent, falling back to main client")
+                        message_content: Dict[str, Any] = {"msgtype": "m.text", "body": letta_response}
+                        await client.room_send(
+                            room_id,
+                            "m.room.message",
+                            message_content
+                        )
+                    else:
+                        logger.error("No client available and agent send failed")
+
+                logger.info("Successfully sent response to Matrix", extra={
+                    "response_length": len(letta_response),
+                    "room_id": room_id,
+                    "sent_as_agent": sent_as_agent,
+                    "reply_to": original_event_id
+                })
         
         if is_agent_mail_message and agent_mail_metadata and room_agent_id:
             try:

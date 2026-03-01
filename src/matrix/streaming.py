@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
 
 from letta_client import Letta
+from src.matrix.formatter import is_no_reply
 
 logger = logging.getLogger("matrix_client.streaming")
 
@@ -504,8 +505,7 @@ class StreamingMessageHandler:
         
         elif event.is_final:
             # Suppress <no-reply/> responses — agent chose not to reply
-            content = (event.content or "").strip()
-            if content == "<no-reply/>" or content == "<no-reply />":
+            if is_no_reply(event.content):
                 logger.info(f"[Streaming] Agent chose not to reply (no-reply marker) in {self.room_id}")
                 return None
             # Send final assistant response (not deleted) - use send_final_message
@@ -613,8 +613,7 @@ class LiveEditStreamingHandler:
             return None
 
         if event.is_final:
-            content = (event.content or "").strip()
-            if content == "<no-reply/>" or content == "<no-reply />":
+            if is_no_reply(event.content):
                 logger.info(f"[LiveEdit] Agent chose not to reply (no-reply marker) in {self.room_id}")
                 await self._cleanup_no_reply()
                 return None
