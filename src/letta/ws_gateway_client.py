@@ -175,6 +175,22 @@ class GatewayClient:
         result["events"] = events
         return result
 
+    async def abort(self, agent_id: str) -> bool:
+        """
+        Send an abort frame to the gateway for the given agent.
+        Returns True if the abort was sent, False if no active connection.
+        """
+        async with self._pool_lock:
+            entry = self._pool.get(agent_id)
+            if not entry or not entry.healthy:
+                return False
+            try:
+                await entry.ws.send(json.dumps({"type": "abort"}))
+                logger.info(f"[WS-GATEWAY] Sent abort for agent {agent_id} (keeping connection alive)")
+                return True
+            except Exception as exc:
+                logger.warning(f"[WS-GATEWAY] Failed to send abort for {agent_id}: {exc}")
+                return False
     # ── pool internals ────────────────────────────────────────────
 
     async def _get_or_create(

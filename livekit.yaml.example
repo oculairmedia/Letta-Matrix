@@ -1,0 +1,37 @@
+# LiveKit SFU Configuration
+# https://docs.livekit.io/home/self-hosting/
+#
+# Copy to livekit.yaml and fill in your API key/secret:
+#   cp livekit.yaml.example livekit.yaml
+
+port: 7880
+rtc:
+  # No direct UDP port exposure — all media goes through TURN-over-TLS
+  tcp_port: 7881
+  # Use ICE lite for server-side simplicity
+  use_ice_lite: true
+  # Force TURN relay to avoid any direct UDP attempts (required for Pangolin proxy)
+  force_tcp: true
+
+turn:
+  enabled: true
+  domain: livekit.oculair.ca
+  tls_port: 443
+  # Use external TLS termination (Pangolin handles TLS)
+  external_tls: true
+
+room:
+  # Disable auto-create: lk-jwt-service handles room creation for full-access users only
+  auto_create: false
+
+keys:
+  YOUR_LIVEKIT_API_KEY: YOUR_LIVEKIT_API_SECRET
+
+logging:
+  level: info
+  json: true
+
+# Webhook configuration (optional, for future monitoring)
+# webhook:
+#   urls:
+#     - http://matrix-messaging-mcp:3101/livekit-webhook

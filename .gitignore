@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# LiveKit config (contains API secrets)
+livekit.yaml
+
 # Database files
 postgres-data/
 synapse-data/*.db

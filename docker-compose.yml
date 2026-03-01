@@ -293,6 +293,61 @@ services:
        - homepage.icon=mdi-bell-ring
        - homepage.description=Forwards ntfy alerts to PM agent for triage
 
+  # ── LiveKit SFU (video/voice calling) ────────────────────────────
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
+    command: ["--config", "/etc/livekit.yaml", "--node-ip=0.0.0.0"]
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    environment:
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+    networks:
+      - matrix-internal
+    ports:
+      - "7880:7880"   # HTTP API (internal, proxied via Pangolin)
+      - "7881:7881"   # TURN/TCP (proxied via Pangolin TLS)
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:7880"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    labels:
+      - homepage.group=Communication
+      - homepage.name=LiveKit SFU
+      - homepage.icon=mdi-video
+      - homepage.href=http://192.168.50.90:7880
+      - homepage.description=LiveKit SFU for Matrix video/voice calls
+
+  # ── lk-jwt-service (Matrix ↔ LiveKit auth bridge) ───────────────
+  lk-jwt-service:
+    image: ghcr.io/element-hq/lk-jwt-service:latest
+    restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
+    environment:
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_SECRET=${LIVEKIT_API_SECRET}
+      - LK_JWT_PORT=8080
+      - LIVEKIT_FULL_ACCESS_HOMESERVERS=matrix.oculair.ca
+    networks:
+      - matrix-internal
+    depends_on:
+      livekit:
+        condition: service_healthy
+    # Note: scratch container has no shell/tools — use process liveness only
+    # Health verified externally via nginx: wget http://lk-jwt-service:8080/healthz
+    labels:
+      - homepage.group=Communication
+      - homepage.name=LK JWT Service
+      - homepage.icon=mdi-key
+      - homepage.description=Matrix-LiveKit JWT auth bridge
+
 networks:
   matrix-internal:
     driver: bridge

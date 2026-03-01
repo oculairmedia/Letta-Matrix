@@ -2857,6 +2857,33 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             "message_preview": event.body[:100] + "..." if len(event.body) > 100 else event.body
         })
 
+        # /stop command — cancel active task + abort gateway session
+        if event.body.strip().lower() == '/stop':
+            existing = _active_letta_tasks.get((room.room_id, room_agent_id or 'unknown'))
+            stopped = False
+            if existing and not existing.done():
+                existing.cancel()
+                _active_letta_tasks.pop((room.room_id, room_agent_id or 'unknown'), None)
+                stopped = True
+                logger.info(f'[STOP] Cancelled active task for {room_agent_name} in {room.room_id}')
+            # Also abort the WS gateway session
+            if room_agent_id:
+                try:
+                    from src.letta.ws_gateway_client import get_gateway_client
+                    gw = await get_gateway_client(
+                        gateway_url=config.letta_gateway_url,
+                        api_key=config.letta_gateway_api_key,
+                    )
+                    aborted = await gw.abort(room_agent_id)
+                    if aborted:
+                        stopped = True
+                        logger.info(f'[STOP] Sent gateway abort for agent {room_agent_id}')
+                except Exception as e:
+                    logger.warning(f'[STOP] Gateway abort failed: {e}')
+            msg = '\u23f9 Stopped.' if stopped else 'Nothing running to stop.'
+            await send_as_agent(room.room_id, msg, config, logger)
+            return
+
         task_key = (room.room_id, room_agent_id or "unknown")
         existing_task = _active_letta_tasks.get(task_key)
         if existing_task and not existing_task.done():
