@@ -299,7 +299,7 @@ services:
     restart: unless-stopped
     mem_limit: 1g
     memswap_limit: 1g
-    command: ["--config", "/etc/livekit.yaml", "--node-ip=0.0.0.0"]
+    command: ["--config", "/etc/livekit.yaml", "--node-ip=192.168.50.90"]
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
     environment:
@@ -330,13 +330,15 @@ services:
     mem_limit: 256m
     memswap_limit: 256m
     environment:
-      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_URL=wss://matrix.oculair.ca/livekit/sfu
       - LIVEKIT_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_SECRET=${LIVEKIT_API_SECRET}
       - LK_JWT_PORT=8080
       - LIVEKIT_FULL_ACCESS_HOMESERVERS=matrix.oculair.ca
     networks:
       - matrix-internal
+    ports:
+      - "8087:8080"   # JWT service (proxied via Pangolin as lk-jwt.oculair.ca)
     depends_on:
       livekit:
         condition: service_healthy
@@ -347,6 +349,25 @@ services:
       - homepage.name=LK JWT Service
       - homepage.icon=mdi-key
       - homepage.description=Matrix-LiveKit JWT auth bridge
+
+  # ── Element Call (self-hosted call widget) ──────────────────────
+  element-call:
+    image: ghcr.io/element-hq/element-call:latest
+    restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
+    ports:
+      - "8096:8080"
+    volumes:
+      - ./element-call-config.json:/app/config.json:ro
+    networks:
+      - matrix-internal
+    labels:
+      - homepage.group=Communication
+      - homepage.name=Element Call
+      - homepage.icon=mdi-phone-voip
+      - homepage.href=https://call.oculair.ca
+      - homepage.description=Self-hosted Element Call for Matrix voice/video
 
 networks:
   matrix-internal:

@@ -32,7 +32,7 @@
         "feature_element_call_video_rooms": true
     },
     "element_call": {
-        "url": "https://call.element.io",
+        "url": "https://call.oculair.ca",
         "use_exclusively": true,
         "participant_limit": 8,
         "brand": "Element Call"

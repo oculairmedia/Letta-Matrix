@@ -120,6 +120,8 @@ services:
   whisper:
     image: ghcr.io/speaches-ai/speaches:latest-cuda-12.6.3
     restart: unless-stopped
+    ports:
+      - "8890:8000"   # OpenAI-compatible STT API (used by LiveKit agent worker)
     environment:
       - WHISPER__INFERENCE_DEVICE=cuda
       - WHISPER__COMPUTE_TYPE=float16

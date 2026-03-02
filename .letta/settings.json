@@ -17,7 +17,14 @@
       "Bash(cd /opt/stacks/matrix-synapse-deployment && \\\nsource .env 2>/dev/null && \\\n./scripts/register-webhooks.sh 2>&1)",
       "Bash(# Check if there's a way to determine if an agent has webhooks enabled\ncurl -s \"http://192.168.50.90:8283/v1/agents/agent-597b5756-2915-4560-ba6b-91005f085166/webhook\" \\\n  -H \"Authorization: Bearer lettaSecurePass123\" | jq '{url: .url, enabled: .enabled}')",
       "Bash(tail:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(ls:*)",
+      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }
