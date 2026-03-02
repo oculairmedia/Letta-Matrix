@@ -491,9 +491,6 @@ class LettaFileHandler:
                 if eid:
                     self._pending_cleanup_event_ids.append(eid)
                 self._status_summary = f"📄 {metadata.file_name}{page_info}{ocr_info} — {char_count:,} chars indexed ✓"
-                # Ensure the agent has the search_documents tool attached
-                if agent_id:
-                    await self._ensure_search_tool_attached(agent_id)
                 # Return a brief notification to the agent — NOT the full text
                 caption_note = ""
                 if metadata.caption:
@@ -1118,7 +1115,7 @@ class LettaFileHandler:
                 async with session.post(
                     hayhooks_url,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=120),
+                    timeout=aiohttp.ClientTimeout(total=600),  # Large docs (400+ pages) need time for chunking + embedding
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
@@ -1159,18 +1156,16 @@ class LettaFileHandler:
             logger.error(f"Unexpected error ingesting {filename} to Haystack: {e}", exc_info=True)
             return False
 
-    async def _ensure_search_tool_attached(self, agent_id: str) -> None:
+    async def ensure_search_tool_attached(self, agent_id: str) -> None:
         """
         Ensure the search_documents tool is attached to the given agent.
         
-        Looks up the tool by name, checks if the agent already has it,
-        and attaches it if missing. This runs after every successful
-        document ingestion so the agent can immediately search the store,
-        even if the toolselector pruned the tool between uploads.
+        Called as an explicit prerequisite in file_callback() BEFORE the agent
+        run starts. Looks up the tool by name, checks if the agent already has
+        it, and attaches it if missing.
         
-        Failures are logged but never raised — this must not block the
-        document upload flow.
-        """
+        Raises on failure so the caller can decide whether to proceed.
+"""
         try:
             # Find the search_documents tool by name
             tools_page = await self._run_sync(
@@ -1196,7 +1191,7 @@ class LettaFileHandler:
             
             # Attach it
             await self._run_sync(
-                self.letta_client.agents.tools.attach, agent_id, search_tool_id
+                self.letta_client.agents.tools.attach, search_tool_id, agent_id=agent_id
             )
             logger.info(f"Auto-attached search_documents tool to agent {agent_id}")
             

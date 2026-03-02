@@ -890,7 +890,7 @@ async def send_to_letta_api_streaming(
             await typing_manager.start()
         
         event_source = None
-        if use_gateway and gateway_client and not isinstance(message_body, list):
+        if use_gateway and gateway_client:
             from src.letta.gateway_stream_reader import stream_via_gateway
             from src.letta.ws_gateway_client import GatewayUnavailableError
             try:
@@ -904,7 +904,7 @@ async def send_to_letta_api_streaming(
                 )
                 logger.info("[STREAMING] Using WS gateway as event source")
             except GatewayUnavailableError as gw_err:
-                logger.warning(f"[STREAMING] Gateway unavailable, falling back: {gw_err}")
+                logger.error(f"[STREAMING] Gateway unavailable, falling back to direct API — conversation continuity may break: {gw_err}")
                 event_source = None
 
         if event_source is None:
@@ -916,7 +916,7 @@ async def send_to_letta_api_streaming(
                 idle_data_timeout=config.letta_streaming_idle_timeout,
                 max_tool_calls=config.letta_max_tool_calls,
             )
-            logger.info("[STREAMING] Using direct Letta API as event source")
+            logger.error("[STREAMING] Using direct Letta API as event source — GATEWAY BYPASS, conversation continuity at risk")
             event_source = fallback_reader.stream_message(
                 agent_id=agent_id_to_use,
                 message=message_body,
@@ -1707,7 +1707,7 @@ async def send_to_letta_api(
             await typing_manager.start()
         
         gateway_result: Optional[str] = None
-        if config.letta_gateway_enabled and not isinstance(message_body, list):
+        if config.letta_gateway_enabled:
             try:
                 from src.letta.ws_gateway_client import get_gateway_client, GatewayUnavailableError
                 from src.letta.gateway_stream_reader import collect_via_gateway
@@ -1727,7 +1727,7 @@ async def send_to_letta_api(
                 if gateway_result:
                     logger.info(f"[API] Got response via WS gateway ({len(gateway_result)} chars)")
             except Exception as gw_err:
-                logger.warning(f"[API] Gateway failed, falling back to direct API: {gw_err}")
+                logger.error(f"[API] Gateway failed, falling back to direct API — conversation continuity may break: {gw_err}")
                 gateway_result = None
 
         if gateway_result:
@@ -2350,21 +2350,29 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
         file_result = await file_handler.handle_file_event(event, room.room_id, agent_id)
         cleanup_event_ids, status_summary = file_handler.pop_cleanup_event_ids()
 
+        # Step 1: Ensure search_documents tool is attached BEFORE the agent run
+        if agent_id:
+            try:
+                await file_handler.ensure_search_tool_attached(agent_id)
+                logger.info(f"[FILE] search_documents tool verified for agent {agent_id}")
+            except Exception as attach_err:
+                logger.error(f"[FILE] Failed to attach search_documents tool: {attach_err}")
+
         if isinstance(file_result, (list, str)):
             if config.letta_streaming_enabled:
                 await send_to_letta_api_streaming(file_result, event.sender, config, logger, room.room_id)
             else:
                 await send_to_letta_api(file_result, event.sender, config, logger, room.room_id)
             
-            # Rewrite status messages: edit first to summary, delete the rest
+            # Rewrite status messages: edit first to summary, edit rest to blank
             for i, eid in enumerate(cleanup_event_ids):
                 try:
                     if i == 0 and status_summary:
                         # Edit the first status message into a compact summary
                         await edit_message_as_agent(room.room_id, eid, status_summary, config, logger)
                     else:
-                        # Delete subsequent status messages
-                        await delete_message_as_agent(room.room_id, eid, config, logger)
+                        # Edit subsequent status messages to blank (avoids "Message deleted")
+                        await edit_message_as_agent(room.room_id, eid, "\u200b", config, logger)
                 except Exception as cleanup_err:
                     logger.debug(f"[FILE-CLEANUP] Failed to clean up status message {eid}: {cleanup_err}")
     

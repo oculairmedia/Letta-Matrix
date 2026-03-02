@@ -201,7 +201,7 @@ def _ocr_pdf_pages(file_path: str, dpi: int = 200) -> str:
 
     return "\n\n".join(texts)
 
-def _is_text_low_quality(text: str) -> bool:
+def _is_text_low_quality(text: str, page_count: Optional[int] = None) -> bool:
     """
     Determine if extracted text is too low-quality to be useful.
     
@@ -219,6 +219,13 @@ def _is_text_low_quality(text: str) -> bool:
     # Very short text (likely just metadata headers)
     if len(stripped) < 50:
         return True
+    
+    # Low chars-per-page ratio — a readable page typically has 1500+ chars.
+    # A scanned PDF with only embedded metadata will have very few.
+    if page_count and page_count > 0:
+        chars_per_page = len(stripped) / page_count
+        if chars_per_page < 500:
+            return True
     
     # Check text quality: ratio of alphanumeric chars to total
     # Scanned PDFs often produce garbled sequences like "%$#@\x00\x01"
@@ -296,7 +303,7 @@ async def parse_document(
         else:
             text = fitz_text
             page_count = fitz_page_count
-            if not _is_text_low_quality(text):
+            if not _is_text_low_quality(text, fitz_page_count):
                 logger.info(f"PyMuPDF extraction succeeded for {filename} ({len(text)} chars, pages={page_count})")
             else:
                 logger.info(
@@ -309,7 +316,7 @@ async def parse_document(
     max_retries = 3
     last_error = None
 
-    should_run_markitdown = (not is_pdf) or _is_text_low_quality(text)
+    should_run_markitdown = (not is_pdf) or _is_text_low_quality(text, page_count)
     if should_run_markitdown:
         for attempt in range(max_retries):
             try:
@@ -360,7 +367,7 @@ async def parse_document(
     if (
         config.ocr_enabled
         and is_pdf
-        and _is_text_low_quality(text)
+        and _is_text_low_quality(text, page_count)
     ):
         logger.info(f"MarkItDown returned low-quality text for {filename} ({len(text)} chars), attempting OCR fallback")
         try:
@@ -385,24 +392,15 @@ async def parse_document(
             error="No text could be extracted from the document",
         )
 
-    # Truncate if needed
-    truncated = False
-    if len(text) > config.max_text_length:
-        text = text[:config.max_text_length]
-        truncated = True
-        logger.info(f"Truncated extracted text for {filename} to {config.max_text_length} chars")
+    # Note: No truncation applied here. Documents are chunked + embedded
+    # by the Hayhooks ingest pipeline, so full text is needed for complete indexing.
 
-    # Build final result
     result = DocumentParseResult(
         text=text,
         filename=filename,
         page_count=page_count,
         was_ocr=was_ocr,
     )
-
-    # Add truncation note to text
-    if truncated:
-        result.text += f"\n\n[... truncated at {config.max_text_length} characters]"
 
     logger.info(
         f"Document parsed successfully: {filename} "

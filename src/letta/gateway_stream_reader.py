@@ -121,7 +121,7 @@ async def stream_via_gateway(
 async def collect_via_gateway(
     client: GatewayClient,
     agent_id: str,
-    message: str,
+    message: Union[str, list],
     conversation_id: Optional[str] = None,
     source: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
