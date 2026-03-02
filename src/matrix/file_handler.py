@@ -28,6 +28,7 @@ from src.voice.transcription import transcribe_audio
 from src.matrix.document_parser import (
     parse_document, format_document_for_agent,
     is_parseable_document, DocumentParseConfig,
+    DocumentParseResult,
 )
 from src.matrix.formatter import wrap_opencode_routing
 
@@ -123,7 +124,7 @@ class LettaFileHandler:
         letta_api_url: str,
         letta_token: str,
         matrix_access_token: Optional[str] = None,
-        notify_callback: Optional[Callable[[str, str], Awaitable[None]]] = None,
+        notify_callback: Optional[Callable[[str, str], Awaitable[Optional[str]]]] = None,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         embedding_endpoint: Optional[str] = None,
         embedding_endpoint_type: str = "openai",
@@ -165,6 +166,8 @@ class LettaFileHandler:
         self._source_cache: Dict[str, str] = {}  # room_id -> source_id cache
         self._folder_cache = self._source_cache  # Alias for backward compatibility
         self._cache_lock = asyncio.Lock()  # Protect cache from race conditions
+        self._pending_cleanup_event_ids: list = []  # Status message event_ids to edit/delete after agent responds
+        self._status_summary: Optional[str] = None  # Final compact summary to replace status messages
         
         # Initialize Letta SDK client
         # SDK v1.x uses api_key instead of token
@@ -186,14 +189,29 @@ class LettaFileHandler:
             functools.partial(func, *args, **kwargs)
         )
     
-    async def _notify(self, room_id: str, message: str):
-        """Send notification to Matrix room if callback is configured"""
+    async def _notify(self, room_id: str, message: str) -> Optional[str]:
+        """Send notification to Matrix room if callback is configured. Returns event_id."""
         if self.notify_callback:
             try:
-                await self.notify_callback(room_id, message)
+                return await self.notify_callback(room_id, message)
             except Exception as e:
                 logger.error(f"Failed to send notification: {e}")
-    
+        return None
+
+    def pop_cleanup_event_ids(self) -> tuple[list, Optional[str]]:
+        """Return and clear pending status message event_ids and summary for cleanup after agent responds.
+        
+        Returns:
+            Tuple of (event_ids_list, summary_string_or_none).
+            The first event_id should be EDITED to show the summary.
+            Remaining event_ids should be DELETED.
+        """
+        ids = self._pending_cleanup_event_ids.copy()
+        summary = self._status_summary
+        self._pending_cleanup_event_ids.clear()
+        self._status_summary = None
+        return ids, summary
+
     async def _retry_async(self, func: Callable[[], Awaitable[Any]], operation_name: str) -> Any:
         """
         Retry an async operation with exponential backoff
@@ -409,10 +427,15 @@ class LettaFileHandler:
     
     async def _handle_document_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> str:
         """
-        Handle document upload by extracting text with MarkItDown.
+        Handle document upload by extracting text with MarkItDown,
+        then ingesting into the shared Haystack document store (Weaviate)
+        instead of dumping the full text into agent context.
         
-        Follows the same pattern as _handle_audio_upload:
-        download → extract text → return formatted string → sent to Letta as message.
+        Flow:
+        1. Download file from Matrix
+        2. Extract text with MarkItDown (OCR fallback for scanned PDFs)
+        3. POST extracted text to Hayhooks ingest_document pipeline
+        4. Return a brief notification to the agent (NOT the full text)
         
         Args:
             metadata: File metadata
@@ -420,10 +443,12 @@ class LettaFileHandler:
             agent_id: Agent ID to send document to
             
         Returns:
-            Formatted string with extracted document text for the agent
+            Formatted string with document summary for the agent
         """
         # Notify user that we're processing the document
-        await self._notify(room_id, f"📄 Reading document: {metadata.file_name}...")
+        eid = await self._notify(room_id, f"📄 Reading document: {metadata.file_name}...")
+        if eid:
+            self._pending_cleanup_event_ids.append(eid)
         
         # Download file from Matrix
         file_path = await self._download_matrix_file(metadata)
@@ -437,26 +462,75 @@ class LettaFileHandler:
             )
             
             if result.error:
+                self._status_summary = f"⚠️ {metadata.file_name} — extraction failed"
                 logger.warning(f"Document parsing failed for {metadata.file_name}: {result.error}")
                 await self._notify(room_id, f"⚠️ Could not extract text from {metadata.file_name}: {result.error}")
-            else:
-                page_info = f" ({result.page_count} pages)" if result.page_count else ""
-                ocr_info = " (OCR)" if result.was_ocr else ""
-                await self._notify(
-                    room_id,
-                    f"✅ Document processed: {metadata.file_name}{page_info}{ocr_info} — {len(result.text)} chars extracted"
-                )
+                # Still return error info to agent
+                formatted = format_document_for_agent(result, caption=metadata.caption)
+                if metadata.sender and metadata.sender.startswith("@oc_"):
+                    formatted = wrap_opencode_routing(formatted, metadata.sender)
+                return formatted
             
-            # Format for agent message (includes error handling in format)
-            formatted = format_document_for_agent(result, caption=metadata.caption)
+            page_info = f" ({result.page_count} pages)" if result.page_count else ""
+            ocr_info = " (OCR)" if result.was_ocr else ""
+            char_count = len(result.text)
+            
+            # Ingest into shared Haystack document store via Hayhooks
+            ingest_success = await self._ingest_to_haystack(
+                text=result.text,
+                filename=metadata.file_name,
+                room_id=room_id,
+                sender=metadata.sender or "",
+            )
+            
+            if ingest_success:
+                eid = await self._notify(
+                    room_id,
+                    f"✅ Document indexed: {metadata.file_name}{page_info}{ocr_info} — {char_count} chars stored in shared document library"
+                )
+                if eid:
+                    self._pending_cleanup_event_ids.append(eid)
+                self._status_summary = f"📄 {metadata.file_name}{page_info}{ocr_info} — {char_count:,} chars indexed ✓"
+                # Ensure the agent has the search_documents tool attached
+                if agent_id:
+                    await self._ensure_search_tool_attached(agent_id)
+                # Return a brief notification to the agent — NOT the full text
+                caption_note = ""
+                if metadata.caption:
+                    caption_note = f"\n\nThe user asked: \"{metadata.caption}\"\nUse the search_documents tool to find relevant content and answer their question."
+                
+                agent_msg = (
+                    f"[Document Indexed: {metadata.file_name}]{page_info}{ocr_info}\n\n"
+                    f"This document ({char_count} chars) has been indexed into the shared document library. "
+                    f"Use the **search_documents** tool with a relevant query to find specific content from this document."
+                    f"{caption_note}"
+                )
+            else:
+                # Fallback: ingest failed, send truncated text directly
+                logger.warning(f"Haystack ingest failed for {metadata.file_name}, falling back to direct text")
+                eid = await self._notify(
+                    room_id,
+                    f"⚠️ Document store unavailable, sending text directly: {metadata.file_name}{page_info}{ocr_info}"
+                )
+                if eid:
+                    self._pending_cleanup_event_ids.append(eid)
+                self._status_summary = f"⚠️ {metadata.file_name}{page_info}{ocr_info} — sent directly (document store unavailable)"
+                # Truncate to a safe size for context (max ~8000 chars)
+                truncated_text = result.text[:8000]
+                if len(result.text) > 8000:
+                    truncated_text += f"\n\n[... truncated from {char_count} chars. Document store was unavailable for full indexing.]"
+                agent_msg = format_document_for_agent(
+                    DocumentParseResult(text=truncated_text, filename=result.filename, page_count=result.page_count, was_ocr=result.was_ocr),
+                    caption=metadata.caption,
+                )
             
             # Add OpenCode routing instruction if sender is an OpenCode identity
             if metadata.sender and metadata.sender.startswith("@oc_"):
-                formatted = wrap_opencode_routing(formatted, metadata.sender)
+                agent_msg = wrap_opencode_routing(agent_msg, metadata.sender)
                 logger.info("[OPENCODE-DOC] Injected @mention instruction for document upload")
             
-            logger.info(f"Document extraction complete for {metadata.file_name}, returning {len(formatted)} chars to agent")
-            return formatted
+            logger.info(f"Document handling complete for {metadata.file_name}, returning {len(agent_msg)} chars to agent")
+            return agent_msg
             
         finally:
             # Clean up temporary file
@@ -1010,3 +1084,121 @@ class LettaFileHandler:
     async def _get_or_create_folder(self, room_id: str, agent_id: Optional[str] = None) -> str:
         """Alias for _get_or_create_source for backward compatibility"""
         return await self._get_or_create_source(room_id, agent_id)
+
+    async def _ingest_to_haystack(self, text: str, filename: str, room_id: str, sender: str) -> bool:
+        """
+        POST extracted document text to the Hayhooks ingest_document pipeline.
+        
+        The pipeline chunks the text, embeds it via LiteLLM, and writes
+        the chunks to the shared Weaviate document store.
+        
+        Args:
+            text: Full extracted text content of the document
+            filename: Original filename of the document
+            room_id: Matrix room ID where the document was uploaded
+            sender: Matrix user ID of the uploader
+            
+        Returns:
+            True on successful ingestion, False on failure
+        """
+        hayhooks_url = os.getenv(
+            "HAYHOOKS_INGEST_URL",
+            "http://192.168.50.90:1416/ingest_document/run"
+        )
+        
+        payload = {
+            "text": text,
+            "filename": filename,
+            "room_id": room_id,
+            "sender": sender,
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    hayhooks_url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=120),
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(
+                            f"Hayhooks ingest failed for {filename}: "
+                            f"HTTP {response.status} - {error_text[:500]}"
+                        )
+                        return False
+                    
+                    result = await response.json()
+                    
+                    # The pipeline returns JSON-encoded string in 'result' key
+                    import json
+                    result_data = result
+                    if isinstance(result.get("result"), str):
+                        result_data = json.loads(result["result"])
+                    
+                    status = result_data.get("status", "")
+                    if status == "ok":
+                        chunks = result_data.get("chunks_stored", 0)
+                        logger.info(
+                            f"Document '{filename}' ingested successfully: "
+                            f"{chunks} chunks stored in Weaviate"
+                        )
+                        return True
+                    else:
+                        detail = result_data.get("detail", "Unknown error")
+                        logger.error(f"Hayhooks ingest error for {filename}: {detail}")
+                        return False
+                        
+        except asyncio.TimeoutError:
+            logger.error(f"Hayhooks ingest timed out for {filename} (120s)")
+            return False
+        except aiohttp.ClientError as e:
+            logger.error(f"Hayhooks connection error for {filename}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error ingesting {filename} to Haystack: {e}", exc_info=True)
+            return False
+
+    async def _ensure_search_tool_attached(self, agent_id: str) -> None:
+        """
+        Ensure the search_documents tool is attached to the given agent.
+        
+        Looks up the tool by name, checks if the agent already has it,
+        and attaches it if missing. This runs after every successful
+        document ingestion so the agent can immediately search the store,
+        even if the toolselector pruned the tool between uploads.
+        
+        Failures are logged but never raised — this must not block the
+        document upload flow.
+        """
+        try:
+            # Find the search_documents tool by name
+            tools_page = await self._run_sync(
+                self.letta_client.tools.list, name="search_documents"
+            )
+            tools_list = list(tools_page)  # SyncArrayPage → list
+            if not tools_list:
+                logger.warning("search_documents tool not found in Letta — cannot auto-attach")
+                return
+            
+            search_tool = tools_list[0]
+            search_tool_id = search_tool.id
+            
+            # Check if agent already has this tool
+            agent_tools_page = await self._run_sync(
+                self.letta_client.agents.tools.list, agent_id
+            )
+            agent_tools = list(agent_tools_page)  # SyncArrayPage → list
+            for t in agent_tools:
+                if t.id == search_tool_id:
+                    logger.debug(f"search_documents already attached to agent {agent_id}")
+                    return
+            
+            # Attach it
+            await self._run_sync(
+                self.letta_client.agents.tools.attach, agent_id, search_tool_id
+            )
+            logger.info(f"Auto-attached search_documents tool to agent {agent_id}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to auto-attach search_documents to agent {agent_id}: {e}")

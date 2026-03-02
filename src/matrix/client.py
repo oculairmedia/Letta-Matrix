@@ -2348,17 +2348,25 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
         
         # Handle the file upload (notifications are sent by file_handler)
         file_result = await file_handler.handle_file_event(event, room.room_id, agent_id)
+        cleanup_event_ids, status_summary = file_handler.pop_cleanup_event_ids()
 
-        if isinstance(file_result, list):
+        if isinstance(file_result, (list, str)):
             if config.letta_streaming_enabled:
                 await send_to_letta_api_streaming(file_result, event.sender, config, logger, room.room_id)
             else:
                 await send_to_letta_api(file_result, event.sender, config, logger, room.room_id)
-        elif isinstance(file_result, str):
-            if config.letta_streaming_enabled:
-                await send_to_letta_api_streaming(file_result, event.sender, config, logger, room.room_id)
-            else:
-                await send_to_letta_api(file_result, event.sender, config, logger, room.room_id)
+            
+            # Rewrite status messages: edit first to summary, delete the rest
+            for i, eid in enumerate(cleanup_event_ids):
+                try:
+                    if i == 0 and status_summary:
+                        # Edit the first status message into a compact summary
+                        await edit_message_as_agent(room.room_id, eid, status_summary, config, logger)
+                    else:
+                        # Delete subsequent status messages
+                        await delete_message_as_agent(room.room_id, eid, config, logger)
+                except Exception as cleanup_err:
+                    logger.debug(f"[FILE-CLEANUP] Failed to clean up status message {eid}: {cleanup_err}")
     
     except FileUploadError as e:
         logger.error(f"File upload error: {e}")
@@ -3135,15 +3143,16 @@ async def main():
     logger.info(f"Joined {agent_rooms_joined} agent rooms")
 
     # Create notification callback for file handler
-    async def notify_room(room_id: str, message: str):
-        """Send notification to room"""
-        sent_as_agent = await send_as_agent(room_id, message, config, logger)
-        if not sent_as_agent and client is not None:
+    async def notify_room(room_id: str, message: str) -> Optional[str]:
+        """Send notification to room and return event_id for later cleanup"""
+        event_id = await send_as_agent_with_event_id(room_id, message, config, logger)
+        if not event_id and client is not None:
             await client.room_send(
                 room_id,
                 "m.room.message",
                 {"msgtype": "m.text", "body": message}
             )
+        return event_id
 
     # Initialize file handler with Matrix access token
     matrix_token = client.access_token

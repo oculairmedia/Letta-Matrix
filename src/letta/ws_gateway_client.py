@@ -87,59 +87,85 @@ class GatewayClient:
         """
         Send a message through the gateway and yield raw WS events as dicts.
 
-        Raises GatewayUnavailableError if connection cannot be established.
+        Automatically retries once on connection failure (dead WS, gateway restart).
+
+        Raises GatewayUnavailableError if connection cannot be established after retry.
         Raises GatewaySessionError on protocol-level errors from the gateway.
         """
-        entry = await self._get_or_create(agent_id, conversation_id)
-        request_id = str(uuid.uuid4())
+        last_error: Optional[Exception] = None
+        for attempt in range(2):  # attempt 0 = normal, attempt 1 = retry after reconnect
+            if attempt > 0:
+                logger.info(f"[WS-GATEWAY] Retrying message for agent {agent_id} (attempt {attempt + 1})")
+                # Evict the dead connection so _get_or_create makes a fresh one
+                await self._evict(agent_id)
 
-        try:
-            payload: Dict[str, Any] = {
-                "type": "message",
-                "content": message,
-                "request_id": request_id,
-            }
-            if source:
-                payload["source"] = source
-            msg_payload = json.dumps(payload)
-            await entry.ws.send(msg_payload)
-            entry.last_used = time.monotonic()
+            entry = await self._get_or_create(agent_id, conversation_id)
+            request_id = str(uuid.uuid4())
 
-            async for raw in entry.ws:
+            try:
+                payload: Dict[str, Any] = {
+                    "type": "message",
+                    "content": message,
+                    "request_id": request_id,
+                }
+                if source:
+                    payload["source"] = source
+                msg_payload = json.dumps(payload)
+                await entry.ws.send(msg_payload)
                 entry.last_used = time.monotonic()
-                try:
-                    event = json.loads(raw)
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning(f"[WS-GATEWAY] Non-JSON frame from gateway: {raw!r:.200}")
-                    continue
 
-                event_type = event.get("type")
-
-                if event_type == "error":
-                    code = event.get("code", "UNKNOWN")
-                    err_msg = event.get("message", "Unknown gateway error")
-                    err_rid = event.get("request_id")
-                    if err_rid and err_rid != request_id:
+                async for raw in entry.ws:
+                    entry.last_used = time.monotonic()
+                    try:
+                        event = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(f"[WS-GATEWAY] Non-JSON frame from gateway: {raw!r:.200}")
                         continue
-                    raise GatewaySessionError(code=code, message=err_msg, request_id=err_rid)
 
-                if event_type == "result":
-                    yield event
-                    break
+                    event_type = event.get("type")
 
-                if event_type in ("stream", "session_init"):
-                    yield event
+                    if event_type == "error":
+                        code = event.get("code", "UNKNOWN")
+                        err_msg = event.get("message", "Unknown gateway error")
+                        err_rid = event.get("request_id")
+                        if err_rid and err_rid != request_id:
+                            continue
+                        raise GatewaySessionError(code=code, message=err_msg, request_id=err_rid)
 
-        except websockets.ConnectionClosed as exc:
-            logger.warning(f"[WS-GATEWAY] Connection closed for agent {agent_id}: {exc}")
-            await self._evict(agent_id)
-            raise GatewayUnavailableError(f"WS connection closed: {exc}") from exc
-        except GatewaySessionError:
-            raise
-        except Exception as exc:
-            logger.error(f"[WS-GATEWAY] Unexpected error for agent {agent_id}: {exc}", exc_info=True)
-            await self._evict(agent_id)
-            raise GatewayUnavailableError(f"Gateway error: {exc}") from exc
+                    if event_type == "result":
+                        yield event
+                        return  # Success — exit both the stream loop and the retry loop
+
+                    if event_type in ("stream", "session_init"):
+                        yield event
+
+                # Stream ended without result — treat as connection issue on first attempt
+                if attempt == 0:
+                    logger.warning(f"[WS-GATEWAY] Stream ended without result for agent {agent_id}, will retry")
+                    last_error = GatewayUnavailableError("Stream ended without result event")
+                    continue
+                raise GatewayUnavailableError("Stream ended without result event after retry")
+
+            except websockets.ConnectionClosed as exc:
+                logger.warning(f"[WS-GATEWAY] Connection closed for agent {agent_id}: {exc}")
+                await self._evict(agent_id)
+                last_error = GatewayUnavailableError(f"WS connection closed: {exc}")
+                if attempt == 0:
+                    continue  # Retry with fresh connection
+                raise last_error from exc
+            except GatewaySessionError:
+                raise
+            except Exception as exc:
+                logger.error(f"[WS-GATEWAY] Unexpected error for agent {agent_id}: {exc}", exc_info=True)
+                await self._evict(agent_id)
+                last_error = GatewayUnavailableError(f"Gateway error: {exc}")
+                if attempt == 0:
+                    continue  # Retry with fresh connection
+                raise last_error from exc
+
+        # Should not reach here, but just in case
+        if last_error:
+            raise last_error
 
     async def send_message_blocking(
         self,
@@ -317,11 +343,14 @@ class GatewayClient:
             await asyncio.sleep(60)
             now = time.monotonic()
             to_evict = []
+            to_ping = []
 
             async with self._pool_lock:
                 for agent_id, entry in list(self._pool.items()):
                     if now - entry.last_used > self._idle_timeout:
                         to_evict.append(agent_id)
+                    else:
+                        to_ping.append((agent_id, entry))
 
                 for agent_id in to_evict:
                     entry = self._pool.pop(agent_id, None)
@@ -329,6 +358,13 @@ class GatewayClient:
                         logger.info(f"[WS-GATEWAY] Closing idle session for agent {agent_id}")
                         await self._close_entry(entry)
 
+            # Proactive health check — ping live connections outside the lock
+            for agent_id, entry in to_ping:
+                try:
+                    await asyncio.wait_for(entry.ws.ping(), timeout=5.0)
+                except Exception:
+                    logger.warning(f"[WS-GATEWAY] Health ping failed for agent {agent_id}, evicting stale connection")
+                    await self._evict(agent_id)
 
 _global_client: Optional[GatewayClient] = None
 _global_lock = asyncio.Lock()

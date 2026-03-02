@@ -14,6 +14,7 @@ import logging
 import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -100,30 +101,68 @@ def is_parseable_document(mime_type: str, filename: str) -> bool:
 _process_pool = ProcessPoolExecutor(max_workers=2)
 
 
-def _convert_with_markitdown(file_path: str) -> tuple[str, Optional[int]]:
+def _get_process_pool(recreate: bool = False) -> ProcessPoolExecutor:
+    """Return a healthy process pool, recreating when requested."""
+    global _process_pool
+    is_broken = bool(getattr(_process_pool, "_broken", False))
+    if recreate or is_broken:
+        try:
+            _process_pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        _process_pool = ProcessPoolExecutor(max_workers=2)
+    return _process_pool
+
+
+def _convert_with_markitdown(file_path: str) -> tuple[str, Optional[int], Optional[str]]:
     """
     Synchronous MarkItDown conversion (runs in process pool).
 
-    Returns (text_content, page_count).
+    Returns (text_content, page_count, error_message).
+    Exceptions are caught and returned as strings to avoid pickle issues
+    with traceback objects across process boundaries.
     """
-    from markitdown import MarkItDown
+    try:
+        from markitdown import MarkItDown
 
-    md = MarkItDown()
-    result = md.convert(file_path)
-    text = (result.text_content or "").strip()
+        md = MarkItDown()
+        result = md.convert(file_path)
+        text = (result.text_content or "").strip()
 
-    # Try to get page count for PDFs
-    page_count = None
-    if file_path.lower().endswith(".pdf"):
+        # Try to get page count for PDFs
+        page_count = None
+        if file_path.lower().endswith(".pdf"):
+            try:
+                import fitz
+                doc = fitz.open(file_path)
+                page_count = len(doc)
+                doc.close()
+            except Exception:
+                pass
+
+        return text, page_count, None
+    except Exception as e:
+        return "", None, f"{type(e).__name__}: {e}"
+
+
+def _extract_pdf_with_fitz(file_path: str) -> tuple[str, Optional[int], Optional[str]]:
+    """Extract PDF text page-by-page with PyMuPDF in a memory-efficient way."""
+    try:
+        import fitz
+
+        page_texts = []
+        doc = fitz.open(file_path)
         try:
-            import fitz
-            doc = fitz.open(file_path)
             page_count = len(doc)
+            for page in doc:
+                page_texts.append(page.get_text() or "")
+        finally:
             doc.close()
-        except Exception:
-            pass
 
-    return text, page_count
+        text = "\n".join(page_texts).strip()
+        return text, page_count, None
+    except Exception as e:
+        return "", None, f"{type(e).__name__}: {e}"
 
 
 def _ocr_pdf_pages(file_path: str, dpi: int = 200) -> str:
@@ -244,48 +283,89 @@ async def parse_document(
             error=f"Cannot read file: {e}",
         )
 
-    # Run MarkItDown conversion in a thread pool with timeout + retry
+    is_pdf = file_path.lower().endswith(".pdf")
+
+    text = ""
+    page_count = None
+
+    # Use fitz as primary extractor for PDFs (runs in main process)
+    if is_pdf:
+        fitz_text, fitz_page_count, fitz_error = _extract_pdf_with_fitz(file_path)
+        if fitz_error:
+            logger.warning(f"PyMuPDF extraction failed for {filename}: {fitz_error}")
+        else:
+            text = fitz_text
+            page_count = fitz_page_count
+            if not _is_text_low_quality(text):
+                logger.info(f"PyMuPDF extraction succeeded for {filename} ({len(text)} chars, pages={page_count})")
+            else:
+                logger.info(
+                    f"PyMuPDF returned low-quality text for {filename} ({len(text)} chars), "
+                    "falling back to MarkItDown"
+                )
+
+    # Run MarkItDown conversion in a process pool with timeout + retry
     loop = asyncio.get_event_loop()
     max_retries = 3
     last_error = None
-    
-    for attempt in range(max_retries):
-        try:
-            text, page_count = await asyncio.wait_for(
-                loop.run_in_executor(_process_pool, _convert_with_markitdown, file_path),
-                timeout=config.timeout_seconds,
-            )
-            break  # Success
-        except asyncio.TimeoutError:
-            last_error = f"Parsing timed out after {config.timeout_seconds}s"
-            logger.warning(f"Document parsing attempt {attempt + 1}/{max_retries} timed out for {filename}")
-        except Exception as e:
-            last_error = f"Conversion failed: {e}"
-            logger.warning(f"Document parsing attempt {attempt + 1}/{max_retries} failed for {filename}: {e}")
-        
-        if attempt < max_retries - 1:
-            delay = 1.0 * (2 ** attempt)  # 1s, 2s backoff
-            logger.info(f"Retrying document parsing in {delay}s...")
-            await asyncio.sleep(delay)
-    else:
-        # All retries exhausted
-        logger.error(f"Document parsing failed after {max_retries} attempts for {filename}: {last_error}")
-        return DocumentParseResult(
-            text="", filename=filename,
-            error=last_error or "Parsing failed after retries",
-        )
+
+    should_run_markitdown = (not is_pdf) or _is_text_low_quality(text)
+    if should_run_markitdown:
+        for attempt in range(max_retries):
+            try:
+                text, page_count, conv_error = await asyncio.wait_for(
+                    loop.run_in_executor(_get_process_pool(), _convert_with_markitdown, file_path),
+                    timeout=config.timeout_seconds,
+                )
+                if conv_error:
+                    # Exception occurred inside the worker process
+                    last_error = f"Conversion failed: {conv_error}"
+                    logger.warning(
+                        f"Document parsing attempt {attempt + 1}/{max_retries} failed for {filename}: {conv_error}"
+                    )
+                    if "not usable anymore" in conv_error.lower():
+                        _get_process_pool(recreate=True)
+                else:
+                    break  # Success
+            except asyncio.TimeoutError:
+                last_error = f"Parsing timed out after {config.timeout_seconds}s"
+                logger.warning(f"Document parsing attempt {attempt + 1}/{max_retries} timed out for {filename}")
+            except BrokenProcessPool as e:
+                last_error = f"Conversion failed: {e}"
+                logger.warning(
+                    f"Document parsing attempt {attempt + 1}/{max_retries} hit BrokenProcessPool for {filename}: {e}"
+                )
+                _get_process_pool(recreate=True)
+            except Exception as e:
+                last_error = f"Conversion failed: {e}"
+                logger.warning(f"Document parsing attempt {attempt + 1}/{max_retries} failed for {filename}: {e}")
+                if "not usable anymore" in str(e).lower():
+                    _get_process_pool(recreate=True)
+
+            if attempt < max_retries - 1:
+                delay = 1.0 * (2 ** attempt)  # 1s, 2s backoff
+                logger.info(f"Retrying document parsing in {delay}s...")
+                await asyncio.sleep(delay)
+        else:
+            if not text:
+                # All retries exhausted and no fallback text available
+                logger.error(f"Document parsing failed after {max_retries} attempts for {filename}: {last_error}")
+                return DocumentParseResult(
+                    text="", filename=filename,
+                    error=last_error or "Parsing failed after retries",
+                )
 
     # OCR fallback for PDFs with no/useful text
     was_ocr = False
     if (
         config.ocr_enabled
-        and file_path.lower().endswith(".pdf")
+        and is_pdf
         and _is_text_low_quality(text)
     ):
         logger.info(f"MarkItDown returned low-quality text for {filename} ({len(text)} chars), attempting OCR fallback")
         try:
             ocr_text = await asyncio.wait_for(
-                loop.run_in_executor(_process_pool, _ocr_pdf_pages, file_path, config.ocr_dpi),
+                loop.run_in_executor(_get_process_pool(), _ocr_pdf_pages, file_path, config.ocr_dpi),
                 timeout=config.timeout_seconds,
             )
             if ocr_text.strip():
