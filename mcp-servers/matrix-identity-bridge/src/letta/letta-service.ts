@@ -29,6 +29,7 @@ export class LettaService {
   private agentNameIndex: Map<string, string> = new Map(); // lowercase name -> agent_id
   private lastIndexRefresh: number = 0;
   private readonly INDEX_TTL = 60000; // Refresh name index every 60 seconds
+  private toolAttachmentCache: Set<string> = new Set();
 
   constructor(
     config: LettaConfig,
@@ -125,28 +126,28 @@ export class LettaService {
     }
 
     const searchLower = nameOrId.toLowerCase().trim();
+
+    // 1 & 2. Use name index for O(1) exact/case-insensitive lookup
+    const indexedId = this.agentNameIndex.get(searchLower);
+    if (indexedId) {
+      const agent = this.agentCache.get(indexedId);
+      if (agent) {
+        const isExact = agent.name === nameOrId;
+        return {
+          agent_id: agent.id,
+          agent_name: agent.name,
+          match_type: isExact ? 'exact_name' : 'case_insensitive',
+          confidence: isExact ? 1.0 : 0.95
+        };
+      }
+    }
+
+    // 3. Partial match (only if index lookup missed)
     const agents = Array.from(this.agentCache.values());
-
-    // 1. Exact name match (case-sensitive)
-    for (const agent of agents) {
-      if (agent.name === nameOrId) {
-        return { agent_id: agent.id, agent_name: agent.name, match_type: 'exact_name', confidence: 1.0 };
-      }
-    }
-
-    // 2. Case-insensitive exact match
-    for (const agent of agents) {
-      if (agent.name.toLowerCase() === searchLower) {
-        return { agent_id: agent.id, agent_name: agent.name, match_type: 'case_insensitive', confidence: 0.95 };
-      }
-    }
-
-    // 3. Partial match (name contains search or search contains name)
     const partialMatches: Array<{ agent: LettaAgentInfo; score: number }> = [];
     for (const agent of agents) {
       const nameLower = agent.name.toLowerCase();
       if (nameLower.includes(searchLower) || searchLower.includes(nameLower)) {
-        // Score based on how much of the name matches
         const score = Math.min(searchLower.length, nameLower.length) / Math.max(searchLower.length, nameLower.length);
         partialMatches.push({ agent, score });
       }
@@ -165,7 +166,7 @@ export class LettaService {
       const distance = this.levenshteinDistance(searchLower, agent.name.toLowerCase());
       const maxLen = Math.max(searchLower.length, agent.name.length);
       const similarity = 1 - (distance / maxLen);
-      if (similarity > 0.6) { // At least 60% similar
+      if (similarity > 0.6) {
         fuzzyMatches.push({ agent, distance });
       }
     }
@@ -346,6 +347,11 @@ export class LettaService {
     const MATRIX_MESSAGING_TOOL_NAME = 'matrix_messaging';
 
     try {
+      // Check cache first — once attached, stays attached
+      if (this.toolAttachmentCache.has(agentId)) {
+        return { attached: true, alreadyHad: true, toolId: MATRIX_MESSAGING_TOOL_ID };
+      }
+
       // First, check if the agent already has the tool
       // The SDK returns a paginated result, need to iterate through it
       const agentToolsPage = this.client.agents.tools.list(agentId);
@@ -359,6 +365,7 @@ export class LettaService {
       }
 
       if (hasMatrixTool) {
+        this.toolAttachmentCache.add(agentId);
         console.log(`[LettaService] Agent ${agentId} already has matrix_messaging tool`);
         return { attached: true, alreadyHad: true, toolId: MATRIX_MESSAGING_TOOL_ID };
       }
@@ -366,6 +373,7 @@ export class LettaService {
       // Attach the tool - SDK signature is attach(toolId, {agent_id})
       console.log(`[LettaService] Attaching matrix_messaging tool to agent ${agentId}`);
       await this.client.agents.tools.attach(MATRIX_MESSAGING_TOOL_ID, { agent_id: agentId });
+      this.toolAttachmentCache.add(agentId);
       
       console.log(`[LettaService] Successfully attached matrix_messaging tool to agent ${agentId}`);
       return { attached: true, alreadyHad: false, toolId: MATRIX_MESSAGING_TOOL_ID };

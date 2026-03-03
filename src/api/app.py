@@ -540,6 +540,92 @@ async def get_agent_room(agent_id: str):
         logger.error(f"Error getting agent room for {agent_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+class AgentMappingUpsertRequest(BaseModel):
+    agent_name: str
+    matrix_user_id: str
+    matrix_password: str
+    room_id: Optional[str] = None
+    room_created: bool = False
+
+
+class AgentMappingUpdateRequest(BaseModel):
+    agent_name: Optional[str] = None
+    matrix_user_id: Optional[str] = None
+    matrix_password: Optional[str] = None
+    room_id: Optional[str] = None
+    room_created: Optional[bool] = None
+
+
+@app.put("/agents/{agent_id}/mapping")
+async def upsert_agent_mapping(agent_id: str, request: AgentMappingUpsertRequest):
+    """Create or update an agent mapping (upsert). This is the write endpoint for MCP bridge."""
+    try:
+        from src.core.mapping_service import upsert_mapping
+        mapping = upsert_mapping(
+            agent_id=agent_id,
+            agent_name=request.agent_name,
+            matrix_user_id=request.matrix_user_id,
+            matrix_password=request.matrix_password,
+            room_id=request.room_id,
+            room_created=request.room_created
+        )
+        if not mapping:
+            raise HTTPException(status_code=500, detail="Failed to upsert mapping")
+        return {
+            "success": True,
+            "agent_id": agent_id,
+            "mapping": mapping
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error upserting mapping for {agent_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.patch("/agents/{agent_id}/mapping")
+async def update_agent_mapping(agent_id: str, request: AgentMappingUpdateRequest):
+    """Partially update an agent mapping. Use this to sync passwords after reset."""
+    try:
+        from src.core.mapping_service import get_mapping_by_agent_id
+        from src.models.agent_mapping import AgentMappingDB
+        existing = get_mapping_by_agent_id(agent_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+        
+        db = AgentMappingDB()
+        update_kwargs = {}
+        if request.agent_name is not None:
+            update_kwargs["agent_name"] = request.agent_name
+        if request.matrix_user_id is not None:
+            update_kwargs["matrix_user_id"] = request.matrix_user_id
+        if request.matrix_password is not None:
+            update_kwargs["matrix_password"] = request.matrix_password
+        if request.room_id is not None:
+            update_kwargs["room_id"] = request.room_id
+        if request.room_created is not None:
+            update_kwargs["room_created"] = request.room_created
+        
+        if not update_kwargs:
+            return {"success": True, "agent_id": agent_id, "message": "No fields to update"}
+        
+        updated = db.update(agent_id, **update_kwargs)
+        if not updated:
+            raise HTTPException(status_code=500, detail="Update failed")
+        
+        from src.core.mapping_service import invalidate_cache
+        invalidate_cache()
+        
+        return {
+            "success": True,
+            "agent_id": agent_id,
+            "mapping": updated.to_dict()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating mapping for {agent_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 @app.post("/rooms/auto-join")
 async def auto_join_rooms(request: AutoJoinRequest):
     """Auto-join a user to all agent rooms they're invited to."""

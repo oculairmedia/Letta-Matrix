@@ -46,7 +46,7 @@ class GatewayClient:
     def __init__(
         self,
         gateway_url: str,
-        idle_timeout: float = 300.0,
+        idle_timeout: float = 3600.0,  # 1 hour — avoid cold-start subprocess spawns
         max_connections: int = 20,
         connect_timeout: float = 10.0,
         api_key: Optional[str] = None,

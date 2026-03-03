@@ -1,49 +1,37 @@
-import fs from 'fs/promises';
-import path from 'path';
-import { AgentMappingStore } from './agent-mapping-store.ts';
+/**
+ * Agent Room Management
+ * 
+ * Uses the AgentMappingApiClient to read/write agent mappings from the
+ * centralized PostgreSQL database via the matrix-api REST service.
+ * 
+ * This replaces the old JSON file + separate REST client approach.
+ * The database (via mapping_service) is the SINGLE SOURCE OF TRUTH.
+ */
+
+import { getAgentMappingApi, type AgentMappingRecord } from './agent-mapping-api.js';
 import type { ToolContext } from './tool-context.js';
 
-export type AgentMapping = {
-  agent_id: string;
-  agent_name?: string;
-  matrix_user_id?: string;
-  matrix_password?: string;
-  created?: boolean;
-  room_id?: string;
-  room_created?: boolean;
-  matrix_room_id?: string;
-  invitation_status?: Record<string, string>;
-};
+export type AgentMapping = AgentMappingRecord;
 
-const getAgentMappingsPath = (): string => {
-  if (process.env.AGENT_USER_MAPPINGS_PATH) {
-    return process.env.AGENT_USER_MAPPINGS_PATH;
+// --- In-memory cache for hot-path lookups (TTL-based) ---
+let cachedMappings: Record<string, AgentMappingRecord> | null = null;
+let cacheTimestamp = 0;
+const CACHE_TTL = 30_000; // 30 seconds — DB is source of truth, cache is just for perf
+
+const getCachedMappings = async (): Promise<Record<string, AgentMappingRecord>> => {
+  if (cachedMappings && Date.now() - cacheTimestamp < CACHE_TTL) {
+    return cachedMappings;
   }
-
-  const dataDir = process.env.DATA_DIR || '/app/data';
-  return path.join(dataDir, 'agent_user_mappings.json');
+  const api = getAgentMappingApi();
+  cachedMappings = await api.getAll();
+  cacheTimestamp = Date.now();
+  return cachedMappings;
 };
 
-const loadAgentMappings = async (): Promise<Record<string, AgentMapping>> => {
-  const mappingsPath = getAgentMappingsPath();
-
-  try {
-    const raw = await fs.readFile(mappingsPath, 'utf-8');
-    const data = JSON.parse(raw) as Record<string, AgentMapping>;
-    return data && typeof data === 'object' ? data : {};
-  } catch (error: any) {
-    if (error?.code === 'ENOENT') {
-      return {};
-    }
-    console.error('[MatrixMessaging] Failed to load agent mappings:', error);
-    return {};
-  }
-};
-
-const saveAgentMappings = async (mappings: Record<string, AgentMapping>): Promise<void> => {
-  const mappingsPath = getAgentMappingsPath();
-  await fs.mkdir(path.dirname(mappingsPath), { recursive: true });
-  await fs.writeFile(mappingsPath, JSON.stringify(mappings, null, 2), 'utf-8');
+/** Invalidate local cache after a write */
+const invalidateCache = (): void => {
+  cachedMappings = null;
+  cacheTimestamp = 0;
 };
 
 export const getOrCreateAgentRoom = async (
@@ -52,13 +40,11 @@ export const getOrCreateAgentRoom = async (
   callerIdentity: { mxid: string },
   ctx: ToolContext
 ): Promise<string> => {
-  const matrixApiUrl = process.env.MATRIX_API_URL || 'http://matrix-api:8000';
-  const mappingStore = new AgentMappingStore({ apiUrl: matrixApiUrl });
-  const apiMapping = await mappingStore.getMappingByAgentId(agentId);
+  const api = getAgentMappingApi();
 
-  const mappings = await loadAgentMappings();
-  const existing = mappings[agentId];
-  const existingRoom = apiMapping?.room_id || apiMapping?.matrix_room_id || existing?.room_id || existing?.matrix_room_id;
+  // Check DB for existing mapping
+  const dbMapping = await api.getByAgentId(agentId);
+  const existingRoom = dbMapping?.room_id;
 
   if (!ctx.lettaService) {
     throw new Error('Letta service not available for agent room provisioning');
@@ -88,22 +74,17 @@ export const getOrCreateAgentRoom = async (
       console.error('[MatrixMessaging] Failed to invite caller to agent room:', error);
     }
 
-    mappings[agentId] = {
-      ...existing,
+    // Write mapping to DB (upsert — creates or updates)
+    await api.upsert({
       agent_id: agentId,
       agent_name: agentName,
       matrix_user_id: agentIdentity.mxid,
-      matrix_password: agentIdentity.password,
-      created: true,
+      matrix_password: agentIdentity.password || '',
       room_id: roomId,
       room_created: true,
-      invitation_status: {
-        ...(existing?.invitation_status ?? {}),
-        [callerIdentity.mxid]: 'invited',
-      },
-    };
+    });
+    invalidateCache();
 
-    await saveAgentMappings(mappings);
     console.log(`[MatrixMessaging] Created agent room ${roomId} for ${agentName}`);
     return roomId;
   };
@@ -118,19 +99,6 @@ export const getOrCreateAgentRoom = async (
 
     try {
       await ctx.roomManager.inviteUser(agentIdentityId, existingRoom, callerIdentity.mxid);
-      mappings[agentId] = {
-        ...existing,
-        agent_id: agentId,
-        agent_name: agentName,
-        matrix_user_id: agentIdentity.mxid,
-        matrix_password: agentIdentity.password,
-        room_id: existingRoom,
-        invitation_status: {
-          ...(existing?.invitation_status ?? {}),
-          [callerIdentity.mxid]: 'invited',
-        },
-      };
-      await saveAgentMappings(mappings);
       return existingRoom;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

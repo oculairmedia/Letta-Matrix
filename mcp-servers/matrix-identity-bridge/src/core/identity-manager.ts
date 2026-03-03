@@ -5,6 +5,7 @@
 import type { MatrixIdentity, IdentityProvisionRequest } from '../types/index.js';
 import type { Storage } from './storage.js';
 import { getAdminToken } from './admin-auth.js';
+import { getAgentMappingApi } from './agent-mapping-api.js';
 
 interface SynapseUserCreateRequest {
   password?: string;
@@ -129,6 +130,10 @@ export class IdentityManager {
     // Save to storage
     await this.storage.saveIdentity(identity);
 
+    // Sync password to agent mapping DB (for letta agents)
+    if (request.type === 'letta') {
+      await this.syncPasswordToDb(request.localpart, password);
+    }
     console.log('[IdentityManager] Provisioned identity:', {
       id: identity.id,
       mxid: identity.mxid,
@@ -206,7 +211,9 @@ export class IdentityManager {
           // Try to reset password via admin API (may not work on all servers)
           try {
             await this.resetUserPassword(localpart, password);
-            console.log('[IdentityManager] Password reset succeeded, logging in...');
+            console.log('[IdentityManager] Password reset succeeded, syncing to DB...');
+            // Sync new password to agent mapping DB so matrix-client stays in sync
+            await this.syncPasswordToDb(localpart, password);
             const resetLoginToken = await this.loginUser(localpart, password);
             return { name: localpart, displayname: displayName, access_token: resetLoginToken };
           } catch (resetErr) {
@@ -381,6 +388,33 @@ export class IdentityManager {
     
     this.adminRoomId = room_id;
     return room_id;
+  }
+
+  /**
+   * Sync password to the agent mapping database.
+   * Called after password reset or new user provisioning so the
+   * matrix-client (Python) always has the correct password.
+   * 
+   * Localpart format: agent_{uuid_with_underscores}
+   * Agent ID format: agent-{uuid_with_hyphens}
+   */
+  private async syncPasswordToDb(localpart: string, password: string): Promise<void> {
+    try {
+      // Convert localpart back to agent ID: agent_{uuid} -> agent-{uuid}
+      if (!localpart.startsWith('agent_')) {
+        // Not a Letta agent localpart — skip DB sync
+        return;
+      }
+      const uuidPart = localpart.substring(6).replace(/_/g, '-');
+      const agentId = `agent-${uuidPart}`;
+      
+      const api = getAgentMappingApi();
+      await api.update(agentId, { matrix_password: password });
+      console.log(`[IdentityManager] Synced password to DB for ${agentId}`);
+    } catch (error) {
+      // Non-fatal: log but don't throw — the identity was still created/updated successfully
+      console.warn('[IdentityManager] Failed to sync password to DB (non-fatal):', error);
+    }
   }
 
   /**

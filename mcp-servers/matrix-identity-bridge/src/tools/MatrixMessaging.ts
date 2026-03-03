@@ -16,6 +16,18 @@ import { getOrCreateOpenCodeRoom, updateBridgeRegistration } from '../core/openc
 import { autoRegisterWithBridge } from '../core/opencode-bridge';
 import { getAdminToken, getAdminConfig } from '../core/admin-auth.js';
 
+// Room membership cache — tracks known room members to skip redundant join/invite cycles
+const roomMembershipCache = new Map<string, Set<string>>();
+const isKnownMember = (roomId: string, mxid: string): boolean => {
+  return roomMembershipCache.get(roomId)?.has(mxid) ?? false;
+};
+const markAsMember = (roomId: string, mxid: string): void => {
+  if (!roomMembershipCache.has(roomId)) {
+    roomMembershipCache.set(roomId, new Set());
+  }
+  roomMembershipCache.get(roomId)!.add(mxid);
+};
+
 // All supported operations
 const operations = [
   'send', 'read', 'react', 'edit', 'typing', 'subscribe', 'unsubscribe',
@@ -136,95 +148,12 @@ export type Input = InferSchema<typeof schema>;
 
 export const metadata: ToolMetadata = {
   name: 'matrix_messaging',
-  description: `Matrix messaging tool - talk to AI agents and send messages.
+  description: `Matrix messaging tool - talk to AI agents and send messages via Matrix rooms.
 
-═══════════════════════════════════════════════════════════════════════════════
-★ REQUIRED: ALWAYS INCLUDE caller_directory ★
-═══════════════════════════════════════════════════════════════════════════════
+REQUIRED: Always include caller_directory to identify yourself.
 
-You MUST include caller_directory (your working directory) in EVERY call.
-This identifies YOU to the agent so they can respond back to you.
-
-▶ CORRECT USAGE:
-  {
-    operation: "talk_to_agent",
-    agent: "Meridian",
-    message: "Hello!",
-    caller_directory: "/opt/stacks/my-project"  ← REQUIRED!
-  }
-
-▶ WITHOUT caller_directory: Agent cannot route response back to you!
-
-═══════════════════════════════════════════════════════════════════════════════
-★ TALKING TO AGENTS ★
-═══════════════════════════════════════════════════════════════════════════════
-
-▶ USE talk_to_agent (RECOMMENDED - supports names!):
-  {operation: "talk_to_agent", agent: "Meridian", message: "Hello!", caller_directory: "/your/path"}
-  {operation: "talk_to_agent", agent: "BMO", message: "What's up?", caller_directory: "/your/path"}
-  
-  • Just use the agent's NAME - no need to look up UUIDs!
-  • Supports fuzzy matching: "meridian", "MERIDIAN", "Merid" all work
-  • Also accepts agent_id if you have it
-
-▶ COMMON AGENTS:
-  • Meridian - Companion agent (opus-4-5)
-  • BMO - Personal assistant (claude-sonnet-4)
-  • GraphitiExplorer - Knowledge graph agent
-
-═══════════════════════════════════════════════════════════════════════════════
-ALTERNATIVE METHODS
-═══════════════════════════════════════════════════════════════════════════════
-
-▶ letta_chat (if you have the agent_id):
-  {operation: "letta_chat", agent_id: "agent-uuid", message: "Hello!"}
-  {operation: "letta_chat", agent_name: "Meridian", message: "Hello!"} ← also works!
-
-▶ letta_list (to see all agents):
-  {operation: "letta_list"}
-  Returns all agents with their agent_id, name, and room info
-
-▶ send (to a specific room):
-  {operation: "send", room_id: "!roomId:matrix.oculair.ca", message: "Hello!"}
-
-═══════════════════════════════════════════════════════════════════════════════
-ALL OPERATIONS
-═══════════════════════════════════════════════════════════════════════════════
-
-LETTA AGENTS (PRIMARY):
-  • talk_to_agent ★ - Easiest! Just needs agent name + message
-  • letta_chat     - Send to agent's room (accepts agent_id OR agent_name)
-  • letta_list     - List all agents with their rooms
-  • letta_lookup   - Get agent details
-
-OPENCODE MESSAGING (for agents talking to OpenCode instances):
-  • opencode_list    - List active OpenCode instances
-  • talk_to_opencode - Send message to an active OpenCode instance by project name
-
-OTHER OPERATIONS:
-  • Messaging: send, read, react, edit, typing
-  • Rooms: room_list, room_info, room_join, room_leave, room_create, room_invite
-  • Identity: identity_list, identity_get, identity_create
-  • OpenCode: opencode_connect, opencode_send, opencode_notify, opencode_status
-
-═══════════════════════════════════════════════════════════════════════════════
-HOW IT WORKS
-═══════════════════════════════════════════════════════════════════════════════
-
-Messages go to the AGENT'S ROOM (not DMs):
-  1. You send: {operation: "talk_to_agent", agent: "Meridian", message: "Hi"}
-  2. Message appears in Meridian's Matrix room
-  3. Matrix bridge forwards to Letta
-  4. Agent responds in the same room
-  5. Response visible in Matrix clients (Element, etc.)
-
-═══════════════════════════════════════════════════════════════════════════════
-TIPS
-═══════════════════════════════════════════════════════════════════════════════
-
-• Use agent NAMES: "Meridian" not "agent-597b5756-..."
-• Fuzzy matching: "meridian", "MERIDIAN", "Merid" all work
-• Responses are async - agent replies appear in Matrix`,
+Primary: talk_to_agent (agent name + message + caller_directory)
+Also: letta_chat, letta_list, send, read, react, edit, room_list, room_create, identity_list, opencode_list, talk_to_opencode`,
 };
 
 const getHeaders = () => {
@@ -851,6 +780,11 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const { homeserverUrl } = getAdminConfig();
 
         const ensureJoinForIdentity = async (identityId: string, mxid: string): Promise<boolean> => {
+          // Check membership cache first — skip all API calls if already known
+          if (isKnownMember(roomId, mxid)) {
+            return true;
+          }
+
           const client = await ctx.clientPool.getClientById(identityId);
           if (!client) {
             console.warn(`[MatrixMessaging] Client missing for identity ${identityId}`);
@@ -859,6 +793,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
 
           try {
             await client.joinRoom(roomId);
+            markAsMember(roomId, mxid);
             console.log(`[MatrixMessaging] ${mxid} joined room ${roomId}`);
             return true;
           } catch (joinError: unknown) {
@@ -883,12 +818,14 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
                 const membershipState = membership?.membership;
 
                 if (membershipState === 'join') {
+                  markAsMember(roomId, mxid);
                   console.log(`[MatrixMessaging] ${mxid} already joined ${roomId}`);
                   return true;
                 }
 
                 if (membershipState === 'invite') {
                   await client.joinRoom(roomId);
+                  markAsMember(roomId, mxid);
                   console.log(`[MatrixMessaging] ${mxid} joined room after existing invite`);
                   return true;
                 }
@@ -912,6 +849,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
               }
 
               await client.joinRoom(roomId);
+              markAsMember(roomId, mxid);
               console.log(`[MatrixMessaging] ${mxid} joined room after admin invite`);
               return true;
             } catch (inviteError: unknown) {
@@ -985,21 +923,20 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const opencodeSender = (callerIdentity.mxid.startsWith('@oc_') || callerIdentity.mxid.startsWith('@cc_'))
           ? callerIdentity.mxid
           : undefined;
-        try {
-          await fetch(`${matrixApiUrl}/conversations/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              agent_id, 
-              matrix_event_id: eventId, 
-              matrix_room_id: roomId,
-              opencode_sender: opencodeSender
-            })
-          });
+        fetch(`${matrixApiUrl}/conversations/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            agent_id, 
+            matrix_event_id: eventId, 
+            matrix_room_id: roomId,
+            opencode_sender: opencodeSender
+          })
+        }).then(() => {
           console.log(`[MatrixMessaging] Registered conversation for ${agent_id}, opencode_sender=${opencodeSender}`);
-        } catch (regError) {
+        }).catch((regError) => {
           console.warn(`[MatrixMessaging] Failed to register conversation: ${regError}`);
-        }
+        });
         
         // Start tracking this conversation for cross-run handling
                 const { getConversationTracker } = await import('../core/conversation-tracker.ts');

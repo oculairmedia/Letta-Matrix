@@ -24,6 +24,7 @@ export class Storage {
   
   private identities: Map<string, MatrixIdentity> = new Map();
   private dmRooms: Map<string, DMRoomMapping> = new Map();
+  private mxidIndex: Map<string, string> = new Map(); // mxid -> identity.id
   private metadata: StorageMetadata = {
     version: 1,
     updatedAt: Date.now()
@@ -83,6 +84,13 @@ export class Storage {
       const data = await fs.readFile(this.identitiesFile, 'utf-8');
       const parsed = JSON.parse(data) as Record<string, MatrixIdentity>;
       this.identities = new Map(Object.entries(parsed));
+      // Build MXID index for O(1) lookups
+      this.mxidIndex.clear();
+      for (const [id, identity] of this.identities) {
+        if (identity.mxid) {
+          this.mxidIndex.set(identity.mxid, id);
+        }
+      }
     } catch (error: any) {
       if (error.code === 'ENOENT') {
         console.log('[Storage] No existing identities file, starting fresh');
@@ -182,14 +190,16 @@ export class Storage {
       console.warn('[Storage] Sync getIdentityByMXID called with API mode - use getIdentityByMXIDAsync');
       return undefined;
     }
-    return Array.from(this.identities.values()).find(i => i.mxid === mxid);
+    const id = this.mxidIndex.get(mxid);
+    return id ? this.identities.get(id) : undefined;
   }
 
   async getIdentityByMXIDAsync(mxid: string): Promise<MatrixIdentity | undefined> {
     if (this.useIdentityApi && this.identityApiClient) {
       return await this.identityApiClient.getIdentityByMXID(mxid);
     }
-    return Array.from(this.identities.values()).find(i => i.mxid === mxid);
+    const id = this.mxidIndex.get(mxid);
+    return id ? this.identities.get(id) : undefined;
   }
 
   getAllIdentities(): MatrixIdentity[] {
@@ -215,6 +225,9 @@ export class Storage {
       return;
     }
     this.identities.set(identity.id, identity);
+    if (identity.mxid) {
+      this.mxidIndex.set(identity.mxid, identity.id);
+    }
     await this.saveIdentities();
     console.log('[Storage] Saved identity:', identity.id, '->', identity.mxid);
   }
@@ -224,6 +237,10 @@ export class Storage {
       const result = await this.identityApiClient.deleteIdentity(id);
       if (result) console.log('[Storage] Deleted identity via API:', id);
       return result;
+    }
+    const existing = this.identities.get(id);
+    if (existing?.mxid) {
+      this.mxidIndex.delete(existing.mxid);
     }
     const deleted = this.identities.delete(id);
     if (deleted) {
@@ -354,6 +371,13 @@ export class Storage {
     this.identities = new Map(Object.entries(data.identities));
     this.dmRooms = new Map(Object.entries(data.dmRooms));
     this.metadata = data.metadata;
+    // Rebuild MXID index
+    this.mxidIndex.clear();
+    for (const [id, identity] of this.identities) {
+      if (identity.mxid) {
+        this.mxidIndex.set(identity.mxid, id);
+      }
+    }
 
     await this.saveIdentities();
     await this.saveDMRooms();
@@ -370,6 +394,7 @@ export class Storage {
    */
   async clearAll(): Promise<void> {
     this.identities.clear();
+    this.mxidIndex.clear();
     this.dmRooms.clear();
     
     await this.saveIdentities();

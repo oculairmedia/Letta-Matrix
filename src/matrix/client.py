@@ -247,7 +247,7 @@ class Config:
     letta_gateway_enabled: bool = False  # Feature flag for WS gateway
     letta_gateway_url: str = "ws://192.168.50.90:8407/api/v1/agent-gateway"  # WebSocket gateway URL
     letta_gateway_api_key: str = ""  # API key for gateway auth (X-Api-Key header)
-    letta_gateway_idle_timeout: float = 300.0  # Close idle WS connections after 5 minutes
+    letta_gateway_idle_timeout: float = 3600.0  # Close idle WS connections after 1 hour
     letta_gateway_max_connections: int = 20  # Max concurrent WS connections
     # Document parsing configuration (MarkItDown)
     document_parsing_enabled: bool = True  # Extract text from uploaded documents
@@ -290,7 +290,7 @@ class Config:
                 letta_gateway_enabled=os.getenv("LETTA_GATEWAY_ENABLED", "false").lower() == "true",
                 letta_gateway_url=os.getenv("LETTA_GATEWAY_URL", "ws://192.168.50.90:8407/api/v1/agent-gateway"),
                 letta_gateway_api_key=os.getenv("LETTA_GATEWAY_API_KEY", ""),
-                letta_gateway_idle_timeout=float(os.getenv("LETTA_GATEWAY_IDLE_TIMEOUT", "300.0")),
+                letta_gateway_idle_timeout=float(os.getenv("LETTA_GATEWAY_IDLE_TIMEOUT", "3600.0")),
                 letta_gateway_max_connections=int(os.getenv("LETTA_GATEWAY_MAX_CONNECTIONS", "20")),
                 # Document parsing configuration
                 document_parsing_enabled=os.getenv("DOCUMENT_PARSING_ENABLED", "true").lower() == "true",
@@ -807,12 +807,6 @@ async def send_to_letta_api_streaming(
     except Exception as e:
         raise LettaApiError(f"Gateway unavailable — cannot process message: {e}")
 
-    try:
-        from src.letta.approval_manager import disable_all_tool_approvals
-        disable_all_tool_approvals(letta_client, agent_id_to_use)
-    except Exception as e:
-        logger.debug(f"[APPROVAL] Pre-message approval disable skipped: {e}")
-    
     async def send_message(rid: str, content: str) -> str:
         """Send a progress message and return event_id (no reply context)"""
         event_id = await send_as_agent_with_event_id(rid, content, config, logger)
@@ -2452,6 +2446,25 @@ async def _process_letta_message(
             from src.letta.message_retry_buffer import get_retry_buffer, PendingMessage
             buffer = get_retry_buffer()
 
+            stash_conversation_id: Optional[str] = None
+            try:
+                from src.letta.client import get_letta_client, LettaConfig
+                from src.core.conversation_service import get_conversation_service
+                sdk_cfg = LettaConfig(
+                    base_url=config.letta_api_url,
+                    api_key=config.letta_token,
+                    timeout=10.0,
+                    max_retries=1,
+                )
+                conv_svc = get_conversation_service(get_letta_client(sdk_cfg))
+                stash_conversation_id, _ = await conv_svc.get_or_create_room_conversation(
+                    room_id=room_id,
+                    agent_id=room_agent_id or config.letta_agent_id,
+                    room_member_count=3,
+                )
+            except Exception:
+                pass
+
             async def _reply_cb(rid, text, cfg, log):
                 await send_as_agent(rid, text, cfg, log)
 
@@ -2460,9 +2473,9 @@ async def _process_letta_message(
 
             pending = PendingMessage(
                 room_id=room_id,
-                agent_id=room_agent_id or "unknown",
+                agent_id=room_agent_id or config.letta_agent_id,
                 message_body=message_to_send,
-                conversation_id=None,
+                conversation_id=stash_conversation_id,
                 sender=event_sender,
                 config=config,
                 is_streaming=config.letta_streaming_enabled,

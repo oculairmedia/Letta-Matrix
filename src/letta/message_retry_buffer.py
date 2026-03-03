@@ -23,6 +23,7 @@ logger = logging.getLogger("matrix_client.retry_buffer")
 MAX_BUFFER_SIZE = 50
 MESSAGE_TTL_SECONDS = 300.0
 RETRY_INTERVAL_SECONDS = 5.0
+PROBE_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass
@@ -55,11 +56,8 @@ class MessageRetryBuffer:
         return len(self._buffer)
 
     async def stash(self, msg: PendingMessage) -> int:
-        """
-        Add a message to the retry buffer.
-        Returns the current buffer size.
-        Starts the retry loop if not already running.
-        """
+        dropped: Optional[PendingMessage] = None
+
         async with self._lock:
             if len(self._buffer) >= MAX_BUFFER_SIZE:
                 dropped = self._buffer.popleft()
@@ -67,20 +65,21 @@ class MessageRetryBuffer:
                     f"[RETRY-BUFFER] Buffer full ({MAX_BUFFER_SIZE}), "
                     f"dropping oldest message for room {dropped.room_id}"
                 )
-                if dropped.error_callback:
-                    try:
-                        await dropped.error_callback(
-                            dropped.room_id,
-                            "Your earlier message was dropped because the system was "
-                            "recovering from a connection issue. Please resend it.",
-                            dropped.config,
-                            logger,
-                        )
-                    except Exception:
-                        pass
 
             self._buffer.append(msg)
             size = len(self._buffer)
+
+        if dropped and dropped.error_callback:
+            try:
+                await dropped.error_callback(
+                    dropped.room_id,
+                    "Your earlier message was dropped because the system was "
+                    "recovering from a connection issue. Please resend it.",
+                    dropped.config,
+                    logger,
+                )
+            except Exception:
+                pass
 
         logger.info(
             f"[RETRY-BUFFER] Stashed message for room {msg.room_id} "
@@ -111,31 +110,54 @@ class MessageRetryBuffer:
 
             msg = self._buffer[0]
 
-            try:
-                from src.letta.ws_gateway_client import get_gateway_client, GatewayUnavailableError
-                gw_client = await get_gateway_client(
-                    gateway_url=msg.config.letta_gateway_url,
-                    idle_timeout=msg.config.letta_gateway_idle_timeout,
-                    max_connections=msg.config.letta_gateway_max_connections,
-                    api_key=msg.config.letta_gateway_api_key or msg.config.letta_token,
-                )
-                logger.info("[RETRY-BUFFER] Gateway appears reachable, replaying buffer")
-            except Exception as e:
-                logger.debug(f"[RETRY-BUFFER] Gateway still down: {e}")
+            if not await self._probe_gateway(msg.config):
                 continue
 
-            await self._replay_all(gw_client)
+            logger.info("[RETRY-BUFFER] Gateway reachable, replaying buffer")
+            await self._replay_all()
 
-    async def _replay_all(self, gw_client):
-        """Replay all buffered messages through the gateway."""
+    async def _probe_gateway(self, config) -> bool:
+        try:
+            import websockets
+            import websockets
+
+            extra_headers = {}
+            api_key = config.letta_gateway_api_key or config.letta_token
+            if api_key:
+                extra_headers["X-Api-Key"] = api_key
+
+            ws = await asyncio.wait_for(
+                websockets.connect(
+                    config.letta_gateway_url,
+                    additional_headers=extra_headers,
+                    close_timeout=2,
+                ),
+                timeout=PROBE_TIMEOUT_SECONDS,
+            )
+            await ws.close()
+            return True
+        except Exception as e:
+            logger.debug(f"[RETRY-BUFFER] Gateway still down: {e}")
+            return False
+
+    async def _replay_all(self):
         async with self._lock:
             messages = list(self._buffer)
             self._buffer.clear()
 
-        success_count = 0
-        fail_count = 0
-
+        # Group messages by agent_id and replay SEQUENTIALLY within each agent
+        # to prevent WS connection races (two concurrent _get_or_create for the
+        # same agent evict each other's sessions, causing infinite retry loops).
+        # Different agents can still replay concurrently.
+        from collections import defaultdict
+        agent_groups: Dict[str, list] = defaultdict(list)
         for msg in messages:
+            agent_groups[msg.agent_id].append(msg)
+
+        results = {"success": 0, "fail": 0, "restashed": []}
+        results_lock = asyncio.Lock()
+
+        async def _replay_one(msg: PendingMessage):
             msg.attempt_count += 1
             elapsed = time.monotonic() - msg.created_at
 
@@ -144,31 +166,37 @@ class MessageRetryBuffer:
                     f"[RETRY-BUFFER] Message for room {msg.room_id} expired "
                     f"({elapsed:.0f}s > {MESSAGE_TTL_SECONDS:.0f}s TTL)"
                 )
-                if msg.error_callback:
-                    try:
-                        await msg.error_callback(
-                            msg.room_id,
-                            "I couldn't process your message in time due to a "
-                            "temporary connection issue. Please resend it.",
-                            msg.config,
-                            logger,
-                        )
-                    except Exception:
-                        pass
-                fail_count += 1
-                continue
+                await self._notify_error(
+                    msg, "I couldn't process your message in time due to a "
+                    "temporary connection issue. Please resend it."
+                )
+                async with results_lock:
+                    results["fail"] += 1
+                return
 
             try:
-                if msg.is_streaming:
-                    result = await self._replay_streaming(gw_client, msg)
-                else:
-                    result = await self._replay_blocking(gw_client, msg)
+                from src.letta.gateway_stream_reader import collect_via_gateway
+                from src.letta.ws_gateway_client import get_gateway_client
+                gw_client = await get_gateway_client(
+                    gateway_url=msg.config.letta_gateway_url,
+                    idle_timeout=msg.config.letta_gateway_idle_timeout,
+                    max_connections=msg.config.letta_gateway_max_connections,
+                    api_key=msg.config.letta_gateway_api_key or msg.config.letta_token,
+                )
+                result = await collect_via_gateway(
+                    client=gw_client,
+                    agent_id=msg.agent_id,
+                    message=msg.message_body,
+                    conversation_id=msg.conversation_id,
+                    source={"channel": "matrix", "chatId": msg.room_id},
+                )
 
                 if result and msg.reply_callback:
                     await msg.reply_callback(
                         msg.room_id, result, msg.config, logger
                     )
-                success_count += 1
+                async with results_lock:
+                    results["success"] += 1
                 logger.info(
                     f"[RETRY-BUFFER] Replayed message for room {msg.room_id} "
                     f"(attempt {msg.attempt_count}, {elapsed:.0f}s old)"
@@ -179,51 +207,43 @@ class MessageRetryBuffer:
                     f"[RETRY-BUFFER] Replay failed for room {msg.room_id}: {e}"
                 )
                 if elapsed < MESSAGE_TTL_SECONDS:
-                    async with self._lock:
-                        self._buffer.append(msg)
-                    fail_count += 1
+                    async with results_lock:
+                        results["restashed"].append(msg)
+                        results["fail"] += 1
                 else:
-                    if msg.error_callback:
-                        try:
-                            await msg.error_callback(
-                                msg.room_id,
-                                "I couldn't process your message after multiple "
-                                "attempts. Please try again.",
-                                msg.config,
-                                logger,
-                            )
-                        except Exception:
-                            pass
-                    fail_count += 1
+                    await self._notify_error(
+                        msg, "I couldn't process your message after multiple "
+                        "attempts. Please try again."
+                    )
+                    async with results_lock:
+                        results["fail"] += 1
+
+        async def _replay_agent_group(agent_msgs: list):
+            """Replay all messages for a single agent sequentially."""
+            for msg in agent_msgs:
+                await _replay_one(msg)
+
+        # Concurrent across agents, sequential within each agent
+        await asyncio.gather(*[
+            _replay_agent_group(group) for group in agent_groups.values()
+        ])
+
+        if results["restashed"]:
+            async with self._lock:
+                for msg in results["restashed"]:
+                    self._buffer.append(msg)
 
         logger.info(
-            f"[RETRY-BUFFER] Replay complete: {success_count} succeeded, "
-            f"{fail_count} failed/expired, {len(self._buffer)} re-stashed"
+            f"[RETRY-BUFFER] Replay complete: {results['success']} succeeded, "
+            f"{results['fail']} failed/expired, {len(results['restashed'])} re-stashed"
         )
 
-    async def _replay_streaming(self, gw_client, msg: PendingMessage) -> Optional[str]:
-        """Replay a message using the streaming path, collecting the final response."""
-        from src.letta.gateway_stream_reader import collect_via_gateway
-
-        return await collect_via_gateway(
-            client=gw_client,
-            agent_id=msg.agent_id,
-            message=msg.message_body,
-            conversation_id=msg.conversation_id,
-            source={"channel": "matrix", "chatId": msg.room_id},
-        )
-
-    async def _replay_blocking(self, gw_client, msg: PendingMessage) -> Optional[str]:
-        """Replay a message using the blocking (non-streaming) path."""
-        from src.letta.gateway_stream_reader import collect_via_gateway
-
-        return await collect_via_gateway(
-            client=gw_client,
-            agent_id=msg.agent_id,
-            message=msg.message_body,
-            conversation_id=msg.conversation_id,
-            source={"channel": "matrix", "chatId": msg.room_id},
-        )
+    async def _notify_error(self, msg: PendingMessage, text: str) -> None:
+        if msg.error_callback:
+            try:
+                await msg.error_callback(msg.room_id, text, msg.config, logger)
+            except Exception:
+                pass
 
     async def _expire_stale(self):
         """Remove and notify for any messages past their TTL."""
