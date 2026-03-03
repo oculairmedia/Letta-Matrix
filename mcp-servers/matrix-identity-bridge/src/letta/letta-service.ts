@@ -74,9 +74,13 @@ export class LettaService {
   /**
    * List all agents
    */
-  async listAgents(): Promise<LettaAgentInfo[]> {
+  async listAgents(pagination?: { limit?: number; after?: string; before?: string }): Promise<LettaAgentInfo[]> {
     try {
-      const response = await this.client.agents.list();
+      const response = await this.client.agents.list(pagination ? {
+        limit: pagination.limit,
+        after: pagination.after,
+        before: pagination.before
+      } : undefined);
       const agents: LettaAgentInfo[] = [];
       
       for await (const agent of response) {
