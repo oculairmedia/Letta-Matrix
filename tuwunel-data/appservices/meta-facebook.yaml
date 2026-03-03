@@ -1,0 +1,16 @@
+id: meta-facebook
+url: http://mautrix-meta-facebook:29319
+as_token: NXo9pp6lY9w4VWtwHmHsXIkaS7em73DzGZ24i193gCTTLdZ05eUQ68wdzC7VOr0N
+hs_token: VzKwGzEhFrjtl79L1EwzzUyzBfwkIGA70HIPoas8VwPsmD9bz8shKPlKgPecXpU0
+sender_localpart: GDjuqgQmzXor1BD9kU0qHVeJmFmovnpb
+namespaces:
+  users:
+  - exclusive: true
+    regex: ^@facebookbot:matrix\.oculair\.ca$
+  - exclusive: true
+    regex: ^@facebook_.*:matrix\.oculair\.ca$
+  - exclusive: false
+    regex: ^@.*:matrix\.oculair\.ca$
+rate_limited: false
+receive_ephemeral: true
+io.element.msc4190: false

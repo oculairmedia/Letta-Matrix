@@ -626,6 +626,72 @@ async def update_agent_mapping(agent_id: str, request: AgentMappingUpdateRequest
     except Exception as e:
         logger.error(f"Error updating mapping for {agent_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# --- Portal Agent Links (bridge room routing) ---
+
+class PortalLinkRequest(BaseModel):
+    room_id: str
+    enabled: bool = True
+
+
+@app.get("/agents/portal-links")
+async def list_all_portal_links():
+    """List all portal agent links."""
+    try:
+        from src.core.mapping_service import get_all_portal_links
+        links = get_all_portal_links()
+        return {"success": True, "links": links, "count": len(links)}
+    except Exception as e:
+        logger.error(f"Error listing portal links: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/agents/{agent_id}/portal-links")
+async def get_agent_portal_links(agent_id: str):
+    """Get all portal links for a specific agent."""
+    try:
+        from src.core.mapping_service import get_portal_links_by_agent
+        links = get_portal_links_by_agent(agent_id)
+        return {"success": True, "agent_id": agent_id, "links": links, "count": len(links)}
+    except Exception as e:
+        logger.error(f"Error getting portal links for {agent_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/agents/{agent_id}/portal-links")
+async def create_agent_portal_link(agent_id: str, request: PortalLinkRequest):
+    """Create a portal link between an agent and a bridged room."""
+    try:
+        from src.core.mapping_service import get_mapping_by_agent_id, create_portal_link
+        mapping = get_mapping_by_agent_id(agent_id)
+        if not mapping:
+            raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+        link = create_portal_link(agent_id, request.room_id, request.enabled)
+        if not link:
+            raise HTTPException(status_code=500, detail="Failed to create portal link")
+        return {"success": True, "link": link}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating portal link: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/agents/{agent_id}/portal-links/{room_id:path}")
+async def delete_agent_portal_link(agent_id: str, room_id: str):
+    """Delete a portal link."""
+    try:
+        from src.core.mapping_service import delete_portal_link
+        result = delete_portal_link(agent_id, room_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Portal link not found")
+        return {"success": True, "message": f"Deleted portal link for agent {agent_id} in room {room_id}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting portal link: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 @app.post("/rooms/auto-join")
 async def auto_join_rooms(request: AutoJoinRequest):
     """Auto-join a user to all agent rooms they're invited to."""

@@ -279,3 +279,102 @@ def get_agents_with_rooms() -> List[dict]:
         m for m in mappings.values()
         if m.get("room_id") and m.get("room_created")
     ]
+
+
+
+# --- Portal Agent Links ---
+
+def get_portal_link_by_room_id(room_id: str) -> Optional[dict]:
+    """
+    Check if a room is linked to an agent via portal_agent_links.
+    Used by message_callback to route messages from bridged portal rooms.
+    
+    Args:
+        room_id: The Matrix room ID (e.g., bridge portal room)
+        
+    Returns:
+        Portal link dict with agent_id, room_id, enabled, created_at or None
+    """
+    try:
+        db = _get_db()
+        return db.get_portal_link_by_room_id(room_id)
+    except Exception as e:
+        logger.error(f"Error getting portal link for room {room_id}: {e}")
+        return None
+
+
+def get_portal_links_by_agent(agent_id: str) -> List[dict]:
+    """
+    Get all portal links for an agent.
+    
+    Args:
+        agent_id: The Letta agent ID
+        
+    Returns:
+        List of portal link dicts
+    """
+    try:
+        db = _get_db()
+        return db.get_portal_links_by_agent(agent_id)
+    except Exception as e:
+        logger.error(f"Error getting portal links for agent {agent_id}: {e}")
+        return []
+
+
+def create_portal_link(agent_id: str, room_id: str, enabled: bool = True) -> Optional[dict]:
+    """
+    Create a portal link between an agent and a bridged room.
+    
+    Args:
+        agent_id: The Letta agent ID
+        room_id: The Matrix room ID of the bridge portal room
+        enabled: Whether the link is active
+        
+    Returns:
+        Created portal link dict or None on error
+    """
+    try:
+        db = _get_db()
+        result = db.create_portal_link(agent_id, room_id, enabled)
+        invalidate_cache()
+        return result
+    except Exception as e:
+        logger.error(f"Error creating portal link for agent {agent_id} room {room_id}: {e}")
+        return None
+
+
+def delete_portal_link(agent_id: str, room_id: str) -> bool:
+    """
+    Delete a portal link.
+    
+    Args:
+        agent_id: The Letta agent ID
+        room_id: The Matrix room ID
+        
+    Returns:
+        True if deleted, False if not found or error
+    """
+    try:
+        db = _get_db()
+        result = db.delete_portal_link(agent_id, room_id)
+        if result:
+            invalidate_cache()
+        return result
+    except Exception as e:
+        logger.error(f"Error deleting portal link for agent {agent_id} room {room_id}: {e}")
+        return False
+
+
+def get_all_portal_links() -> List[dict]:
+    """
+    Get all portal links.
+    
+    Returns:
+        List of all portal link dicts
+    """
+    try:
+        db = _get_db()
+        return db.get_all_portal_links()
+    except Exception as e:
+        logger.error(f"Error getting all portal links: {e}")
+        return []

@@ -762,9 +762,22 @@ async def send_to_letta_api_streaming(
                 agent_name_found = str(mapping.agent_name)
                 logger.info(f"[STREAMING] Found agent mapping: {agent_name_found} ({agent_id_to_use})")
             else:
-                member_result = await get_agent_from_room_members(room_id, config, logger)
-                if member_result:
-                    agent_id_to_use, agent_name_found = member_result
+                # Check portal links for bridged rooms
+                portal_link = db.get_portal_link_by_room_id(room_id)
+                if portal_link:
+                    portal_mapping = db.get_by_agent_id(portal_link['agent_id'])
+                    if portal_mapping:
+                        agent_id_to_use = str(portal_mapping.agent_id)
+                        agent_name_found = str(portal_mapping.agent_name)
+                        logger.info(f"[STREAMING] Portal link match: {agent_name_found} ({agent_id_to_use})")
+                    else:
+                        member_result = await get_agent_from_room_members(room_id, config, logger)
+                        if member_result:
+                            agent_id_to_use, agent_name_found = member_result
+                else:
+                    member_result = await get_agent_from_room_members(room_id, config, logger)
+                    if member_result:
+                        agent_id_to_use, agent_name_found = member_result
         except Exception as e:
             logger.warning(f"[STREAMING] Could not query agent mappings: {e}")
     
@@ -1046,8 +1059,13 @@ async def _get_agent_token(
     Look up agent mapping for a room, login as the agent user, return access token.
     Returns None on any failure (logs the issue).
     """
-    from src.core.mapping_service import get_mapping_by_room_id
+    from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_agent_id, get_portal_link_by_room_id
     agent_mapping = get_mapping_by_room_id(room_id)
+    if not agent_mapping:
+        # Check portal links for bridged rooms
+        portal_link = get_portal_link_by_room_id(room_id)
+        if portal_link:
+            agent_mapping = get_mapping_by_agent_id(portal_link['agent_id'])
     if not agent_mapping:
         logger.warning(f"[{caller}] No agent mapping for room {room_id}")
         return None
@@ -1525,17 +1543,29 @@ async def send_to_letta_api(
                 routing_method = "database_room_id"
                 logger.info(f"Found agent mapping in DB for room {room_id}: {agent_name_found} ({agent_id_to_use})")
             else:
-                logger.info(f"No direct mapping for room {room_id}, checking room members...")
+                # Check portal links for bridged rooms (WhatsApp, FB, Telegram, etc.)
+                portal_link = db.get_portal_link_by_room_id(room_id)
+                if portal_link:
+                    portal_mapping = db.get_by_agent_id(portal_link['agent_id'])
+                    if portal_mapping:
+                        agent_id_to_use = str(portal_mapping.agent_id)
+                        agent_name_found = str(portal_mapping.agent_name)
+                        routing_method = "portal_link"
+                        logger.info(f"Portal link match for room {room_id}: {agent_name_found} ({agent_id_to_use})")
+                    else:
+                        logger.warning(f"Portal link found but agent mapping missing for {portal_link['agent_id']}")
                 
-                member_result = await get_agent_from_room_members(room_id, config, logger)
-                if member_result:
-                    agent_id_to_use, agent_name_found = member_result
-                    routing_method = "room_members"
-                    logger.info(f"Resolved agent via room members: {agent_name_found} ({agent_id_to_use})")
-                else:
-                    all_mappings = db.get_all()
-                    logger.warning(f"No agent mapping found for room {room_id}, using default agent")
-                    logger.info(f"Room has no mapping. Total mappings in DB: {len(all_mappings)}")
+                if routing_method == "default":
+                    logger.info(f"No direct mapping for room {room_id}, checking room members...")
+                    member_result = await get_agent_from_room_members(room_id, config, logger)
+                    if member_result:
+                        agent_id_to_use, agent_name_found = member_result
+                        routing_method = "room_members"
+                        logger.info(f"Resolved agent via room members: {agent_name_found} ({agent_id_to_use})")
+                    else:
+                        all_mappings = db.get_all()
+                        logger.warning(f"No agent mapping found for room {room_id}, using default agent")
+                        logger.info(f"Room has no mapping. Total mappings in DB: {len(all_mappings)}")
                 
         except Exception as e:
             logger.warning(f"Could not query agent mappings database: {e}")
@@ -1937,12 +1967,17 @@ async def send_as_agent_with_event_id(
     Returns the event_id on success, None on failure.
     """
     try:
-        from src.core.mapping_service import get_mapping_by_room_id
+        from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_agent_id, get_portal_link_by_room_id
         agent_mapping = get_mapping_by_room_id(room_id)
 
         if not agent_mapping:
-            logger.warning(f"No agent mapping found for room {room_id}")
-            return None
+            # Check portal links for bridged rooms
+            portal_link = get_portal_link_by_room_id(room_id)
+            if portal_link:
+                agent_mapping = get_mapping_by_agent_id(portal_link['agent_id'])
+            if not agent_mapping:
+                logger.warning(f"No agent mapping found for room {room_id}")
+                return None
 
         agent_name = agent_mapping.get("agent_name", "Unknown")
         logger.debug(f"[SEND_AS_AGENT] Sending as agent: {agent_name} in room {room_id}")
@@ -2577,7 +2612,7 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
         
         # Only process messages in rooms that have a dedicated agent mapping
         # This prevents auto-forwarding content in relay/bridge rooms
-        from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_matrix_user, get_all_mappings
+        from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_matrix_user, get_all_mappings, get_mapping_by_agent_id, get_portal_link_by_room_id
         room_agent_user_id = None
         room_has_agent = False
         room_agent_id = None
@@ -2586,6 +2621,15 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
         
         # Find the agent that owns this room
         room_agent_mapping = get_mapping_by_room_id(room.room_id)
+        is_portal_room = False
+        if not room_agent_mapping:
+            # Check portal links — bridged rooms (WhatsApp, FB, Telegram, etc.)
+            portal_link = get_portal_link_by_room_id(room.room_id)
+            if portal_link:
+                room_agent_mapping = get_mapping_by_agent_id(portal_link['agent_id'])
+                is_portal_room = True
+                if room_agent_mapping:
+                    logger.info(f"Portal link match: room {room.room_id} → agent {portal_link['agent_id']}")
         if room_agent_mapping:
             room_agent_user_id = room_agent_mapping.get("matrix_user_id")
             room_has_agent = True

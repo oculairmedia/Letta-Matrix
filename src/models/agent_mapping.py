@@ -66,6 +66,29 @@ class InvitationStatus(Base):
     agent = relationship("AgentMapping", back_populates="invitations")
 
 
+class PortalAgentLink(Base):
+    """Links agents to additional portal rooms (bridged WhatsApp/FB/Telegram etc.)"""
+    __tablename__ = 'portal_agent_links'
+
+    agent_id = Column(String, ForeignKey('agent_mappings.agent_id', ondelete='CASCADE'), primary_key=True)
+    room_id = Column(String, primary_key=True)
+    enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index('idx_portal_room_id', 'room_id'),
+        Index('idx_portal_agent_id', 'agent_id'),
+    )
+
+    def to_dict(self) -> Dict:
+        return {
+            "agent_id": self.agent_id,
+            "room_id": self.room_id,
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
 # Database connection setup
 _engine = None  # Singleton engine instance
 
@@ -382,3 +405,82 @@ class AgentMappingDB:
             mapping.agent_id: mapping.to_dict()
             for mapping in mappings
         }
+
+    # --- Portal Agent Links ---
+
+    def get_portal_link_by_room_id(self, room_id: str) -> Optional[Dict]:
+        """Get portal link for a room (if room is linked to an agent)."""
+        session = self.Session()
+        try:
+            session.expire_all()
+            link = session.query(PortalAgentLink).filter_by(
+                room_id=room_id, enabled=True
+            ).first()
+            if link:
+                result = link.to_dict()
+                session.expunge(link)
+                return result
+            return None
+        finally:
+            session.close()
+
+    def get_portal_links_by_agent(self, agent_id: str) -> List[Dict]:
+        """Get all portal links for an agent."""
+        session = self.Session()
+        try:
+            session.expire_all()
+            links = session.query(PortalAgentLink).filter_by(
+                agent_id=agent_id
+            ).all()
+            result = [link.to_dict() for link in links]
+            for link in links:
+                session.expunge(link)
+            return result
+        finally:
+            session.close()
+
+    def create_portal_link(self, agent_id: str, room_id: str, enabled: bool = True) -> Dict:
+        """Create a portal link between an agent and a room."""
+        session = self.Session()
+        try:
+            link = PortalAgentLink(
+                agent_id=agent_id,
+                room_id=room_id,
+                enabled=enabled
+            )
+            session.add(link)
+            session.commit()
+            session.refresh(link)
+            result = link.to_dict()
+            session.expunge(link)
+            return result
+        finally:
+            session.close()
+
+    def delete_portal_link(self, agent_id: str, room_id: str) -> bool:
+        """Delete a portal link."""
+        session = self.Session()
+        try:
+            link = session.query(PortalAgentLink).filter_by(
+                agent_id=agent_id, room_id=room_id
+            ).first()
+            if not link:
+                return False
+            session.delete(link)
+            session.commit()
+            return True
+        finally:
+            session.close()
+
+    def get_all_portal_links(self) -> List[Dict]:
+        """Get all portal links."""
+        session = self.Session()
+        try:
+            session.expire_all()
+            links = session.query(PortalAgentLink).all()
+            result = [link.to_dict() for link in links]
+            for link in links:
+                session.expunge(link)
+            return result
+        finally:
+            session.close()
