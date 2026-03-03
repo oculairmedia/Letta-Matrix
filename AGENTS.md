@@ -284,3 +284,42 @@ Tests cover: login validation, admin room resolution, message delivery, full res
 - Monitor host memory usage
 - Set resource limits on memory-hungry processes (e.g., OpenCode sessions)
 - Health check runs automatically via cron (`*/15 * * * *`)
+
+## Bulk Operations in Agent-Listening Rooms
+
+**NEVER send bulk text commands (bridge commands, admin commands, etc.) into rooms where Letta agents are listening via portal links or agent mappings.**
+
+### What Happened
+
+During portal link setup, `set-relay` commands (e.g., `!wa set-relay`, `!fb set-relay`) were sent as text messages into 134 bridged rooms. Because Meridian was already joined and listening via portal links, each command was routed to the Letta agent as a user message — triggering 134 Opus responses and burning through the entire API quota.
+
+### Rules for Bulk Room Operations
+
+1. **Disable agent processing first** — Before sending bulk commands into agent-listening rooms:
+   - Temporarily disable portal links: `DELETE /agents/{id}/portal-links` for affected rooms
+   - Or stop the matrix-client container: `docker compose stop matrix-client`
+   - Or remove the agent from rooms before sending commands
+
+2. **Re-enable after** — Once bulk commands are done:
+   - Re-create portal links: `POST /agents/{id}/portal-links`
+   - Or restart: `docker compose up -d matrix-client`
+
+3. **Prefer bot-level commands** — If possible, send bridge commands as the bridge bot itself (via appservice token) rather than as a user, since bot messages are typically ignored by the routing logic.
+
+4. **Test with ONE room first** — Before any bulk operation, test the command in a single room and verify it doesn't trigger agent responses.
+
+### Quick Reference — Disable/Re-enable Agent Processing
+
+```bash
+# Option 1: Stop message processing entirely
+docker compose stop matrix-client
+# ... do bulk operations ...
+docker compose up -d matrix-client
+
+# Option 2: Disable specific portal links via API
+curl -s -X DELETE "http://localhost:8004/agents/{agent_id}/portal-links/{room_id}"
+# ... do bulk operations in that room ...
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"room_id": "!room:matrix.oculair.ca"}' \
+  "http://localhost:8004/agents/{agent_id}/portal-links"
+```
