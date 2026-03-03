@@ -153,7 +153,14 @@ class GatewayClient:
                 if attempt == 0:
                     continue  # Retry with fresh connection
                 raise last_error from exc
-            except GatewaySessionError:
+            except GatewaySessionError as exc:
+                # Stale session: gateway expired the session but TCP stayed alive.
+                # Evict and retry once — fresh _connect_and_init will send session_start.
+                if attempt == 0 and "session_start" in str(exc).lower():
+                    logger.warning(f"[WS-GATEWAY] Stale session for agent {agent_id}: {exc}, will reconnect")
+                    await self._evict(agent_id)
+                    last_error = exc
+                    continue
                 raise
             except Exception as exc:
                 logger.error(f"[WS-GATEWAY] Unexpected error for agent {agent_id}: {exc}", exc_info=True)

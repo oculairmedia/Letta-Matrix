@@ -744,7 +744,7 @@ async def send_to_letta_api_streaming(
     opencode_sender: Optional[str] = None,
     room_member_count: int = 3,
 ) -> str:
-    from src.matrix.streaming import StepStreamReader, StreamingMessageHandler, StreamEventType
+    from src.matrix.streaming import StreamingMessageHandler, StreamEventType
     from src.letta.client import get_letta_client, LettaConfig
     from src.voice.directive_parser import parse_directives, VoiceDirective, ImageDirective, FileDirective, VideoDirective
     from src.voice.tts import is_tts_configured, synthesize_speech
@@ -794,22 +794,18 @@ async def send_to_letta_api_streaming(
             logger.warning(f"[CONVERSATIONS] Failed to get conversation, falling back to agents API: {e}")
             conversation_id = None
     
-    use_gateway = config.letta_gateway_enabled
-    gateway_client = None
-
-    if use_gateway:
-        try:
-            from src.letta.ws_gateway_client import get_gateway_client
-            gateway_client = await get_gateway_client(
-                gateway_url=config.letta_gateway_url,
-                idle_timeout=config.letta_gateway_idle_timeout,
-                max_connections=config.letta_gateway_max_connections,
-                api_key=config.letta_gateway_api_key or config.letta_token,
-            )
-            logger.info("[STREAMING] Gateway enabled, will attempt WS path first")
-        except Exception as e:
-            logger.warning(f"[STREAMING] Gateway client init failed, falling back to direct API: {e}")
-            use_gateway = False
+    # Gateway is REQUIRED — direct API is deprecated and breaks conversation state
+    from src.letta.ws_gateway_client import get_gateway_client, GatewayUnavailableError
+    try:
+        gateway_client = await get_gateway_client(
+            gateway_url=config.letta_gateway_url,
+            idle_timeout=config.letta_gateway_idle_timeout,
+            max_connections=config.letta_gateway_max_connections,
+            api_key=config.letta_gateway_api_key or config.letta_token,
+        )
+        logger.info("[STREAMING] Gateway connected")
+    except Exception as e:
+        raise LettaApiError(f"Gateway unavailable — cannot process message: {e}")
 
     try:
         from src.letta.approval_manager import disable_all_tool_approvals
@@ -889,39 +885,16 @@ async def send_to_letta_api_streaming(
         if typing_manager:
             await typing_manager.start()
         
-        event_source = None
-        if use_gateway and gateway_client:
-            from src.letta.gateway_stream_reader import stream_via_gateway
-            from src.letta.ws_gateway_client import GatewayUnavailableError
-            try:
-                event_source = stream_via_gateway(
-                    client=gateway_client,
-                    agent_id=agent_id_to_use,
-                    message=message_body,
-                    conversation_id=conversation_id,
-                    max_tool_calls=config.letta_max_tool_calls,
-                    source={"channel": "matrix", "chatId": room_id},
-                )
-                logger.info("[STREAMING] Using WS gateway as event source")
-            except GatewayUnavailableError as gw_err:
-                logger.error(f"[STREAMING] Gateway unavailable, falling back to direct API — conversation continuity may break: {gw_err}")
-                event_source = None
-
-        if event_source is None:
-            fallback_reader = StepStreamReader(
-                letta_client=letta_client,
-                include_reasoning=False,
-                include_pings=True,
-                timeout=config.letta_streaming_timeout,
-                idle_data_timeout=config.letta_streaming_idle_timeout,
-                max_tool_calls=config.letta_max_tool_calls,
-            )
-            logger.error("[STREAMING] Using direct Letta API as event source — GATEWAY BYPASS, conversation continuity at risk")
-            event_source = fallback_reader.stream_message(
-                agent_id=agent_id_to_use,
-                message=message_body,
-                conversation_id=conversation_id,
-            )
+        from src.letta.gateway_stream_reader import stream_via_gateway
+        event_source = stream_via_gateway(
+            client=gateway_client,
+            agent_id=agent_id_to_use,
+            message=message_body,
+            conversation_id=conversation_id,
+            max_tool_calls=config.letta_max_tool_calls,
+            source={"channel": "matrix", "chatId": room_id},
+        )
+        logger.info("[STREAMING] Using WS gateway as event source")
 
         async for event in event_source:
             logger.debug(f"[STREAMING] Event: {event.type.value}")
@@ -1589,200 +1562,35 @@ async def send_to_letta_api(
         "room_id": room_id
     })
 
-    from src.letta.client import get_letta_client, LettaConfig
-    
-    sdk_config = LettaConfig(
-        base_url=config.letta_api_url,
-        api_key=config.letta_token,
-        timeout=300.0,
-        max_retries=3
-    )
-    letta_client = get_letta_client(sdk_config)
-    
-    conversation_id: Optional[str] = None
-    if config.letta_conversations_enabled and room_id:
-        try:
-            from src.core.conversation_service import get_conversation_service
-            conv_service = get_conversation_service(letta_client)
-            conversation_id, created = await conv_service.get_or_create_room_conversation(
-                room_id=room_id,
-                agent_id=agent_id_to_use,
-                room_member_count=room_member_count,
-                user_mxid=sender_id if room_member_count == 2 else None,
-            )
-            logger.info(f"[CONVERSATIONS] Using conversation {conversation_id} (created={created})")
-        except Exception as e:
-            logger.warning(f"[CONVERSATIONS] Failed to get conversation, falling back to agents API: {e}")
-            conversation_id = None
-
-    async def _send_to_letta():
-        current_agent_id = agent_id_to_use
-        
-        logger.warning(f"[DEBUG] SENDING TO LETTA API (SDK) - Agent ID: {current_agent_id}")
-        
-        def _sync_send():
-            if conversation_id:
-                logger.debug(f"[API] Using Conversations API: {conversation_id}")
-                from src.core.retry import is_conversation_busy_error, ConversationBusyError
-                import time
-                
-                max_retries = 3
-                last_error: Optional[Exception] = None
-                
-                for attempt in range(max_retries + 1):
-                    try:
-                        stream = letta_client.conversations.messages.create(
-                            conversation_id=conversation_id,
-                            input=message_body,
-                            streaming=False,
-                        )
-                        messages = list(stream)
-                        return type('Response', (), {'messages': messages})()
-                    except Exception as e:
-                        if is_conversation_busy_error(e):
-                            last_error = e
-                            if attempt < max_retries:
-                                delay = min(1.0 * (2 ** attempt), 8.0)
-                                logger.warning(
-                                    f"[API-RETRY] Conversation {conversation_id} is busy, "
-                                    f"attempt {attempt + 1}/{max_retries + 1}, "
-                                    f"retrying in {delay:.1f}s"
-                                )
-                                time.sleep(delay)
-                                continue
-                            else:
-                                logger.error(
-                                    f"[API-RETRY] Conversation {conversation_id} still busy "
-                                    f"after {max_retries + 1} attempts"
-                                )
-                                raise ConversationBusyError(
-                                    conversation_id=conversation_id,
-                                    attempts=max_retries + 1,
-                                    last_error=e
-                                ) from e
-                        else:
-                            raise
-                
-                raise ConversationBusyError(
-                    conversation_id=conversation_id,
-                    attempts=max_retries + 1,
-                    last_error=last_error
-                )
-            else:
-                logger.debug(f"[API] Using Agents API: {current_agent_id}")
-                if isinstance(message_body, list):
-                    return letta_client.agents.messages.create(
-                        agent_id=current_agent_id,
-                        input=message_body,
-                    )
-                return letta_client.agents.messages.create(
-                    agent_id=current_agent_id,
-                    messages=[{"role": "user", "content": message_body}]
-                )
-        response: Any = await asyncio.to_thread(_sync_send)
-        
-        if hasattr(response, 'model_dump'):
-            result = response.model_dump()
-        elif hasattr(response, 'dict'):
-            result = response.dict()
-        else:
-            result = {"messages": []}
-            if hasattr(response, 'messages'):
-                for msg in response.messages:
-                    if hasattr(msg, 'model_dump'):
-                        result["messages"].append(msg.model_dump())
-                    elif hasattr(msg, 'dict'):
-                        result["messages"].append(msg.dict())
-                    else:
-                        result["messages"].append({"message_type": getattr(msg, 'message_type', 'unknown')})
-        
-        logger.debug(f"Received Letta API response via SDK: {type(response)}")
-        
-        return result
-
+    # Note: letta_client is only needed for conversation_id resolution above.
+    # The actual message delivery goes through the WS gateway exclusively.
     typing_manager = TypingIndicatorManager(room_id, config, logger) if (config.letta_typing_enabled and room_id) else None
     
     try:
         if typing_manager:
             await typing_manager.start()
         
-        gateway_result: Optional[str] = None
-        if config.letta_gateway_enabled:
-            try:
-                from src.letta.ws_gateway_client import get_gateway_client, GatewayUnavailableError
-                from src.letta.gateway_stream_reader import collect_via_gateway
-                gw_client = await get_gateway_client(
-                    gateway_url=config.letta_gateway_url,
-                    idle_timeout=config.letta_gateway_idle_timeout,
-                    max_connections=config.letta_gateway_max_connections,
-                    api_key=config.letta_gateway_api_key or config.letta_token,
-                )
-                gateway_result = await collect_via_gateway(
-                    client=gw_client,
-                    agent_id=agent_id_to_use,
-                    message=message_body,
-                    conversation_id=conversation_id,
-                    source={"channel": "matrix", "chatId": room_id} if room_id else None,
-                )
-                if gateway_result:
-                    logger.info(f"[API] Got response via WS gateway ({len(gateway_result)} chars)")
-            except Exception as gw_err:
-                logger.error(f"[API] Gateway failed, falling back to direct API — conversation continuity may break: {gw_err}")
-                gateway_result = None
-
+        # Gateway is REQUIRED — direct API is deprecated and breaks conversation state
+        from src.letta.ws_gateway_client import get_gateway_client, GatewayUnavailableError
+        from src.letta.gateway_stream_reader import collect_via_gateway
+        gw_client = await get_gateway_client(
+            gateway_url=config.letta_gateway_url,
+            idle_timeout=config.letta_gateway_idle_timeout,
+            max_connections=config.letta_gateway_max_connections,
+            api_key=config.letta_gateway_api_key or config.letta_token,
+        )
+        gateway_result = await collect_via_gateway(
+            client=gw_client,
+            agent_id=agent_id_to_use,
+            message=message_body,
+            conversation_id=conversation_id,
+            source={"channel": "matrix", "chatId": room_id} if room_id else None,
+        )
         if gateway_result:
+            logger.info(f"[API] Got response via WS gateway ({len(gateway_result)} chars)")
             return gateway_result
-
-        response = await retry_with_backoff(_send_to_letta, max_retries=3, logger=logger)
-        
-        if response and 'messages' in response:
-            messages = response['messages']
-            assistant_messages = []
-            
-            # Debug: Log the response structure
-            logger.debug(f"Response has {len(messages)} messages")
-            
-            # Look for assistant messages or tool calls in the response
-            for message in messages:
-                msg_type = message.get('message_type')
-                
-                # Standard assistant message
-                if msg_type == 'assistant_message':
-                    content = message.get('content')
-                    if content:
-                        assistant_messages.append(str(content))
-                        logger.warning(f"[DEBUG] LETTA RESPONSE: {str(content)[:100]}")
-                
-                # Tool call (agent using matrix_agent_message)
-                elif msg_type == 'tool_call_message':
-                    tool_call = message.get('tool_call', {})
-                    if tool_call.get('name') == 'matrix_agent_message':
-                        # Agent is sending inter-agent message - extract the message text
-                        try:
-                            import json as json_lib
-                            args = json_lib.loads(tool_call.get('arguments', '{}'))
-                            inter_msg = args.get('message', '')
-                            if inter_msg:
-                                assistant_messages.append(f"[Sent to another agent]: {inter_msg}")
-                                logger.warning(f"[DEBUG] INTER-AGENT TOOL CALL: {inter_msg[:100]}")
-                        except Exception as e:
-                            logger.warning(f"Failed to parse tool call arguments: {e}")
-            
-            # If we found messages, return them
-            if assistant_messages:
-                result = " ".join(assistant_messages)
-                logger.info("Successfully processed Letta response", extra={
-                    "response_length": len(result),
-                    "message_count": len(assistant_messages)
-                })
-                return result
-            else:
-                logger.warning("No assistant messages or tool calls found in response")
-                logger.warning(f"Response structure: {messages[:3] if len(messages) > 0 else 'empty'}")
-                return "Letta agent responded (check other agent's room for message)."
         else:
-            logger.warning("Empty response from Letta API")
-            return "Letta API connection successful, but no response content."
+            return "Agent processed the request (no text response)."
 
     except aiohttp.ClientResponseError as e:
         # Legacy aiohttp error handling (kept for backward compatibility)
@@ -2633,6 +2441,50 @@ async def _process_letta_message(
                 logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
         
     except LettaApiError as e:
+        from src.letta.ws_gateway_client import GatewayUnavailableError
+        is_gateway_down = (
+            "Gateway unavailable" in str(e)
+            or "Cannot connect to gateway" in str(e)
+            or isinstance(e.__cause__, GatewayUnavailableError)
+        )
+
+        if is_gateway_down:
+            from src.letta.message_retry_buffer import get_retry_buffer, PendingMessage
+            buffer = get_retry_buffer()
+
+            async def _reply_cb(rid, text, cfg, log):
+                await send_as_agent(rid, text, cfg, log)
+
+            async def _error_cb(rid, text, cfg, log):
+                await send_as_agent(rid, text, cfg, log)
+
+            pending = PendingMessage(
+                room_id=room_id,
+                agent_id=room_agent_id or "unknown",
+                message_body=message_to_send,
+                conversation_id=None,
+                sender=event_sender,
+                config=config,
+                is_streaming=config.letta_streaming_enabled,
+                reply_callback=_reply_cb,
+                error_callback=_error_cb,
+            )
+            count = await buffer.stash(pending)
+            logger.warning(
+                f"[RETRY-BUFFER] Gateway down, stashed message for room {room_id} "
+                f"(buffer={count}). Will retry automatically."
+            )
+            try:
+                await send_as_agent(
+                    room_id,
+                    "I'm having a temporary connection issue. Your message has been "
+                    "queued and I'll process it automatically when I reconnect.",
+                    config, logger,
+                )
+            except Exception:
+                pass
+            return
+
         logger.error("Letta API error in background task", extra={
             "error": str(e),
             "status_code": e.status_code,
