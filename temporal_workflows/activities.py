@@ -8,10 +8,11 @@ Activities:
   1. download_file_from_matrix — download via authenticated media API
   2. parse_with_markitdown — extract text from documents (CPU-bound, process pool)
   3. ingest_to_haystack — POST to Hayhooks ingest_document pipeline
-  4. notify_letta_agent — send result message to Letta agent via API
+  4. notify_letta_agent — send result message to Letta agent via WS gateway
   5. update_matrix_status — edit/send Matrix room status messages
 """
 
+import asyncio
 import json
 import os
 import tempfile
@@ -20,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import httpx
+import websockets
 from temporalio import activity
 
 
@@ -32,6 +34,8 @@ MATRIX_ACCESS_TOKEN = os.getenv("MATRIX_ACCESS_TOKEN", "")
 MATRIX_API_URL = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
 LETTA_API_URL = os.getenv("LETTA_API_URL", "http://192.168.50.90:8289")
 LETTA_TOKEN = os.getenv("LETTA_TOKEN", "")
+LETTA_GATEWAY_URL = os.getenv("LETTA_GATEWAY_URL", "ws://192.168.50.90:8407/api/v1/agent-gateway")
+LETTA_GATEWAY_API_KEY = os.getenv("LETTA_GATEWAY_API_KEY", "")
 HAYHOOKS_INGEST_URL = os.getenv(
     "HAYHOOKS_INGEST_URL", "http://192.168.50.90:1416/ingest_document/run"
 )
@@ -166,8 +170,8 @@ class MatrixStatusInput:
     """Input for update_matrix_status activity."""
     room_id: str
     message: str
+    agent_id: str  # Agent ID for send-as-agent endpoint
     event_id: Optional[str] = None  # If set, edit this message; otherwise send new
-
 
 @dataclass
 class MatrixStatusResult:
@@ -395,60 +399,114 @@ async def ingest_to_haystack(input: IngestInput) -> IngestResult:
 @activity.defn
 async def notify_letta_agent(input: NotifyAgentInput) -> NotifyAgentResult:
     """
-    Send a user message to a Letta agent via the Letta REST API.
+    Send a user message to a Letta agent via the lettabot WS gateway.
 
-    This delivers the indexing result notification so the agent knows
-    a new document is available for search.
+    Opens a WebSocket connection to the agent-gateway, sends a session_start
+    followed by the message, and waits for a result event.
 
     Raises:
-        NotifyError: On API failures (retryable for 5xx/timeout).
+        NotifyError: On gateway/connection failures (retryable).
     """
     start = time.monotonic()
-    activity.logger.info(f"Notifying agent {input.agent_id}")
+    activity.logger.info(f"Notifying agent {input.agent_id} via WS gateway")
 
-    headers = {"Content-Type": "application/json"}
-    if LETTA_TOKEN:
-        headers["Authorization"] = f"Bearer {LETTA_TOKEN}"
+    extra_headers = {}
+    if LETTA_GATEWAY_API_KEY:
+        extra_headers["X-Api-Key"] = LETTA_GATEWAY_API_KEY
 
-    payload = {
-        "messages": [{"role": "user", "text": input.message}],
-    }
-
+    ws = None
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{LETTA_API_URL}/v1/agents/{input.agent_id}/messages",
-                json=payload,
-                headers=headers,
+        ws = await websockets.connect(
+            LETTA_GATEWAY_URL,
+            additional_headers=extra_headers,
+            max_size=2**22,  # 4 MB frames
+            close_timeout=5,
+            open_timeout=10,
+        )
+
+        # Step 1: Start session for this agent
+        session_start = json.dumps({
+            "type": "session_start",
+            "agent_id": input.agent_id,
+        })
+        await ws.send(session_start)
+
+        # Wait for session_init acknowledgement
+        raw_init = await asyncio.wait_for(ws.recv(), timeout=15.0)
+        init_event = json.loads(raw_init)
+
+        if init_event.get("type") == "error":
+            raise NotifyError(
+                f"Gateway session error for agent {input.agent_id}: "
+                f"{init_event.get('message', 'Unknown error')}"
+            )
+        if init_event.get("type") != "session_init":
+            raise NotifyError(
+                f"Expected session_init from gateway, got {init_event.get('type')}"
             )
 
-            if response.status_code == 404:
-                # Agent not found — non-retryable
+        activity.logger.info(
+            f"Gateway session established for agent {input.agent_id}, "
+            f"session={init_event.get('session_id')}"
+        )
+
+        # Step 2: Send the message
+        msg_payload = json.dumps({
+            "type": "message",
+            "content": input.message,
+            "request_id": f"temporal-notify-{input.agent_id[:8]}",
+        })
+        await ws.send(msg_payload)
+
+        # Step 3: Consume events until we get a result
+        async for raw in ws:
+            try:
+                event = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            event_type = event.get("type")
+
+            if event_type == "error":
                 raise NotifyError(
-                    f"Agent {input.agent_id} not found (404)"
-                )
-            if response.status_code >= 400:
-                raise NotifyError(
-                    f"Letta API {response.status_code} for agent {input.agent_id}: "
-                    f"{response.text[:500]}"
+                    f"Gateway error for agent {input.agent_id}: "
+                    f"{event.get('message', 'Unknown error')}"
                 )
 
-            elapsed = int((time.monotonic() - start) * 1000)
-            activity.logger.info(
-                f"Notified agent {input.agent_id}, {elapsed}ms"
-            )
-            return NotifyAgentResult(success=True, duration_ms=elapsed)
+            if event_type == "result":
+                elapsed = int((time.monotonic() - start) * 1000)
+                activity.logger.info(
+                    f"Notified agent {input.agent_id} via WS gateway, {elapsed}ms"
+                )
+                return NotifyAgentResult(success=True, duration_ms=elapsed)
+
+            # stream, session_init, etc — just consume and continue
+
+        # Stream ended without result
+        raise NotifyError(
+            f"Gateway stream ended without result for agent {input.agent_id}"
+        )
 
     except NotifyError:
         raise
-    except httpx.TimeoutException as e:
+    except asyncio.TimeoutError as e:
         raise NotifyError(
-            f"Timeout notifying agent {input.agent_id}: {e}"
+            f"Timeout connecting to gateway for agent {input.agent_id}: {e}"
+        ) from e
+    except websockets.ConnectionClosed as e:
+        raise NotifyError(
+            f"Gateway connection closed for agent {input.agent_id}: {e}"
         ) from e
     except Exception as e:
         raise NotifyError(
             f"Error notifying agent {input.agent_id}: {e}"
         ) from e
+    finally:
+        if ws:
+            try:
+                await ws.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -460,8 +518,8 @@ async def update_matrix_status(input: MatrixStatusInput) -> MatrixStatusResult:
     """
     Send or edit a status message in a Matrix room via the Matrix API service.
 
-    Uses the matrix-api HTTP service (not the Matrix C-S API directly) to
-    send/edit messages, since the worker doesn't maintain a Matrix client session.
+    Uses the matrix-api /api/v1/messages/send-as-agent endpoint to send
+    messages as the agent's Matrix identity.
 
     Raises:
         MatrixAPIError: On failures (retryable).
@@ -471,22 +529,47 @@ async def update_matrix_status(input: MatrixStatusInput) -> MatrixStatusResult:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             if input.event_id:
-                # Edit existing message
+                # Edit existing message — use Tuwunel C-S API directly
+                # since matrix-api doesn't have an edit endpoint
                 activity.logger.info(
                     f"Editing status message {input.event_id} in {input.room_id}"
                 )
+                # For edits, fall back to the C-S API with admin token
+                edit_body = {
+                    "msgtype": "m.notice",
+                    "body": f"* {input.message}",
+                    "m.new_content": {
+                        "msgtype": "m.notice",
+                        "body": input.message,
+                    },
+                    "m.relates_to": {
+                        "rel_type": "m.replace",
+                        "event_id": input.event_id,
+                    },
+                }
+                import uuid
+                txn_id = str(uuid.uuid4())
+                headers = {}
+                if MATRIX_ACCESS_TOKEN:
+                    headers["Authorization"] = f"Bearer {MATRIX_ACCESS_TOKEN}"
                 response = await client.put(
-                    f"{MATRIX_API_URL}/rooms/{input.room_id}/messages/{input.event_id}",
-                    json={"body": input.message},
+                    f"{MATRIX_HOMESERVER_URL}/_matrix/client/v3/rooms/{input.room_id}/send/m.room.message/{txn_id}",
+                    json=edit_body,
+                    headers=headers,
                 )
             else:
-                # Send new message
+                # Send new message via matrix-api send-as-agent
                 activity.logger.info(
-                    f"Sending status message to {input.room_id}"
+                    f"Sending status message to {input.room_id} as agent {input.agent_id}"
                 )
                 response = await client.post(
-                    f"{MATRIX_API_URL}/rooms/{input.room_id}/messages",
-                    json={"body": input.message, "msgtype": "m.notice"},
+                    f"{MATRIX_API_URL}/api/v1/messages/send-as-agent",
+                    json={
+                        "agent_id": input.agent_id,
+                        "room_id": input.room_id,
+                        "message": input.message,
+                        "msgtype": "m.notice",
+                    },
                 )
 
             if response.status_code >= 400:

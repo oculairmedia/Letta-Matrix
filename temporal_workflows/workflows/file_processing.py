@@ -196,6 +196,7 @@ class FileProcessingWorkflow:
                     MatrixStatusInput(
                         room_id=input.room_id,
                         message=f"📄 Processing document: {input.file_name}...",
+                        agent_id=input.agent_id,
                     ),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=_STATUS_RETRY,
@@ -244,6 +245,7 @@ class FileProcessingWorkflow:
                         MatrixStatusInput(
                             room_id=input.room_id,
                             message=f"📄 Extracting text from {input.file_name}...",
+                            agent_id=input.agent_id,
                             event_id=self._status_event_id,
                         ),
                         start_to_close_timeout=timedelta(seconds=30),
@@ -283,6 +285,7 @@ class FileProcessingWorkflow:
                         MatrixStatusInput(
                             room_id=input.room_id,
                             message=f"📄 Indexing {input.file_name} ({parse_result.char_count:,} chars)...",
+                            agent_id=input.agent_id,
                             event_id=self._status_event_id,
                         ),
                         start_to_close_timeout=timedelta(seconds=30),
@@ -363,6 +366,7 @@ class FileProcessingWorkflow:
                     MatrixStatusInput(
                         room_id=input.room_id,
                         message=final_msg,
+                        agent_id=input.agent_id,
                         event_id=self._status_event_id,
                     ),
                     start_to_close_timeout=timedelta(seconds=30),
@@ -397,6 +401,7 @@ class FileProcessingWorkflow:
                     MatrixStatusInput(
                         room_id=input.room_id,
                         message=error_msg,
+                        agent_id=input.agent_id,
                         event_id=self._status_event_id,
                     ),
                     start_to_close_timeout=timedelta(seconds=30),
