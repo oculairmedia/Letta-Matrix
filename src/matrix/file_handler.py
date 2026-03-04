@@ -18,6 +18,7 @@ import asyncio
 import functools
 import logging
 import os
+import uuid
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, Callable, Awaitable, Union
@@ -171,7 +172,21 @@ class LettaFileHandler:
         self._cache_lock = asyncio.Lock()  # Protect cache from race conditions
         self._pending_cleanup_event_ids: list = []  # Status message event_ids to edit/delete after agent responds
         self._status_summary: Optional[str] = None  # Final compact summary to replace status messages
-        
+
+        # Temporal async file processing
+        self._temporal_client = None  # Lazy-initialized
+        self._temporal_lock = asyncio.Lock()
+        self._temporal_enabled = os.environ.get('TEMPORAL_FILE_PROCESSING_ENABLED', 'false').lower() in ('true', '1', 'yes')
+        if self._temporal_enabled:
+            try:
+                import temporalio  # noqa: F401
+                logger.info("Temporal async file processing: ENABLED")
+            except ImportError:
+                logger.warning("TEMPORAL_FILE_PROCESSING_ENABLED=true but temporalio not installed — falling back to inline")
+                self._temporal_enabled = False
+        else:
+            logger.info("Temporal async file processing: disabled (set TEMPORAL_FILE_PROCESSING_ENABLED=true to enable)")
+
         # Initialize Letta SDK client
         # SDK v1.x uses api_key instead of token
         self.letta_client = Letta(base_url=letta_api_url, api_key=letta_token)
@@ -290,13 +305,19 @@ class LettaFileHandler:
                 logger.info(f"Image uploaded: {metadata.file_name}. Building multimodal message content.")
                 return await self._handle_image_upload(metadata, room_id, agent_id)
             
-            # For all non-image, non-audio files - try MarkItDown first.
-            # MarkItDown's PlainTextConverter handles any text-like file as fallback.
-            logger.info(f"File uploaded: {metadata.file_name} ({metadata.file_type}). Trying MarkItDown.")
+            # For all non-image, non-audio files - try document processing
+            # If Temporal is enabled, start async workflow; otherwise process inline
+            logger.info(f"File uploaded: {metadata.file_name} ({metadata.file_type}).")
+
+            if self._temporal_enabled and agent_id:
+                logger.info(f"Temporal enabled — starting async workflow for {metadata.file_name}")
+                return await self._start_temporal_workflow(metadata, room_id, agent_id)
+
+            # Fallback: inline processing (Temporal disabled or no agent_id)
+            logger.info(f"Processing {metadata.file_name} inline with MarkItDown.")
             result = await self._handle_document_upload(metadata, room_id, agent_id)
             if result:
                 return result
-            
             logger.info(f"MarkItDown returned empty for {metadata.file_name}, falling back to Letta source upload")
             # Fallback for unknown file types - use Letta source upload flow
             await self._notify(room_id, f"📄 Processing file: {metadata.file_name}")
@@ -431,6 +452,97 @@ class LettaFileHandler:
                 os.unlink(file_path)
                 logger.debug(f"Cleaned up temporary file {file_path}")
     
+    # ------------------------------------------------------------------
+    # Temporal async file processing
+    # ------------------------------------------------------------------
+
+    async def _get_temporal_client(self):
+        """Lazy-initialize the Temporal client (async, thread-safe via asyncio.Lock)."""
+        if self._temporal_client is not None:
+            return self._temporal_client
+
+        async with self._temporal_lock:
+            # Double-check after acquiring lock
+            if self._temporal_client is not None:
+                return self._temporal_client
+
+            from temporalio.client import Client as TemporalClient
+
+            host = os.environ.get('TEMPORAL_HOST', '192.168.50.90:7233')
+            namespace = os.environ.get('TEMPORAL_NAMESPACE', 'matrix')
+
+            logger.info(f"Connecting Temporal client to {host}, namespace={namespace}")
+            self._temporal_client = await TemporalClient.connect(
+                host,
+                namespace=namespace,
+            )
+            logger.info("Temporal client connected")
+            return self._temporal_client
+
+    async def _start_temporal_workflow(
+        self, metadata: FileMetadata, room_id: str, agent_id: str
+    ) -> None:
+        """
+        Start a Temporal FileProcessingWorkflow for a document upload.
+
+        Sends an acknowledgement to the Matrix room, then fires the workflow
+        and returns None immediately (async processing).
+        """
+        from temporal_workflows.workflows.file_processing import (
+            FileProcessingWorkflow,
+            FileProcessingInput,
+        )
+
+        # Pre-attach search tool so it's available by the time the document is indexed
+        try:
+            await self.ensure_search_tool_attached(agent_id)
+        except Exception as e:
+            logger.warning(f"Failed to pre-attach search tool for {agent_id}: {e}")
+
+        # Send immediate acknowledgement to user
+        eid = await self._notify(
+            room_id,
+            f"\U0001f4c4 Processing document: {metadata.file_name} (async)..."
+        )
+        if eid:
+            self._pending_cleanup_event_ids.append(eid)
+        self._status_summary = f"\U0001f4c4 {metadata.file_name} — processing asynchronously"
+
+        # Build workflow input
+        task_queue = os.environ.get('TEMPORAL_TASK_QUEUE', 'matrix-file-queue')
+        workflow_input = FileProcessingInput(
+            mxc_url=metadata.file_url,
+            file_name=metadata.file_name,
+            file_type=metadata.file_type,
+            room_id=room_id,
+            sender=metadata.sender,
+            event_id=metadata.event_id,
+            agent_id=agent_id,
+            caption=metadata.caption,
+        )
+
+        workflow_id = f"file-{room_id}-{metadata.event_id}-{uuid.uuid4().hex[:8]}"
+
+        try:
+            client = await self._get_temporal_client()
+            handle = await client.start_workflow(
+                FileProcessingWorkflow.run,
+                workflow_input,
+                id=workflow_id,
+                task_queue=task_queue,
+            )
+            logger.info(
+                f"Started Temporal workflow {handle.id} for {metadata.file_name} "
+                f"(queue={task_queue})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to start Temporal workflow for {metadata.file_name}: {e}", exc_info=True)
+            # Notify room of failure, fall through to return None
+            await self._notify(room_id, f"\u26a0\ufe0f Failed to queue document processing: {e}")
+
+        # Return None — document processing is async via Temporal
+        return None
+
     async def _handle_document_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> Optional[str]:
         """
         Handle document upload by extracting text with MarkItDown,
