@@ -213,7 +213,7 @@ class FileProcessingWorkflow:
                 if input.caption:
                     heads_up_msg += f'\n\nThe user asked: "{input.caption}"'
 
-                await workflow.execute_activity(
+                heads_up_result: NotifyAgentResult = await workflow.execute_activity(
                     notify_letta_agent,
                     NotifyAgentInput(
                         agent_id=input.agent_id,
@@ -222,6 +222,24 @@ class FileProcessingWorkflow:
                     start_to_close_timeout=timedelta(seconds=60),
                     retry_policy=_NOTIFY_RETRY,
                 )
+
+                # Update the processing status message with agent's response
+                if heads_up_result.response_text:
+                    try:
+                        status_update = await workflow.execute_activity(
+                            update_matrix_status,
+                            MatrixStatusInput(
+                                room_id=input.room_id,
+                                message=heads_up_result.response_text,
+                                agent_id=input.agent_id,
+                                event_id=self._status_event_id,  # Edit the processing status message
+                                msgtype="m.text",
+                            ),
+                            start_to_close_timeout=timedelta(seconds=30),
+                            retry_policy=_NOTIFY_RETRY,
+                        )
+                    except Exception as e:
+                        workflow.logger.warning(f"Failed to update status with agent response: {e}")
             except Exception as e:
                 # Heads-up is best-effort — don't fail the workflow
                 workflow.logger.warning(f"Failed to send agent heads-up: {e}")
@@ -372,6 +390,24 @@ class FileProcessingWorkflow:
                 retry_policy=_NOTIFY_RETRY,
             )
             result.notify_ms = notify_result.duration_ms
+
+            # Post agent's completion response to the Matrix room
+            if notify_result.response_text:
+                try:
+                    await workflow.execute_activity(
+                        update_matrix_status,
+                        MatrixStatusInput(
+                            room_id=input.room_id,
+                            message=notify_result.response_text,
+                            agent_id=input.agent_id,
+                            event_id=None,  # New message, not edit
+                            msgtype="m.text",  # Agent reply, not status notice
+                        ),
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_NOTIFY_RETRY,
+                    )
+                except Exception as e:
+                    workflow.logger.warning(f"Failed to post agent completion response: {e}")
 
             # ---------------------------------------------------------------
             # Step 5: Update final status in room

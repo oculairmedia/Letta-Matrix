@@ -163,6 +163,7 @@ class NotifyAgentResult:
     success: bool
     duration_ms: int = 0
     error: Optional[str] = None
+    response_text: Optional[str] = None
 
 
 @dataclass
@@ -172,6 +173,7 @@ class MatrixStatusInput:
     message: str
     agent_id: str  # Agent ID for send-as-agent endpoint
     event_id: Optional[str] = None  # If set, edit this message; otherwise send new
+    msgtype: str = "m.notice"  # Message type: m.notice for status, m.text for agent replies
 
 @dataclass
 class MatrixStatusResult:
@@ -459,6 +461,7 @@ async def notify_letta_agent(input: NotifyAgentInput) -> NotifyAgentResult:
         await ws.send(msg_payload)
 
         # Step 3: Consume events until we get a result
+        response_chunks: list[str] = []
         async for raw in ws:
             try:
                 event = json.loads(raw)
@@ -473,12 +476,23 @@ async def notify_letta_agent(input: NotifyAgentInput) -> NotifyAgentResult:
                     f"{event.get('message', 'Unknown error')}"
                 )
 
+            if event_type == "stream" and event.get("event") == "assistant":
+                chunk = event.get("content")
+                if chunk:
+                    response_chunks.append(chunk)
+
             if event_type == "result":
                 elapsed = int((time.monotonic() - start) * 1000)
+                response_text = "".join(response_chunks).strip() or None
                 activity.logger.info(
-                    f"Notified agent {input.agent_id} via WS gateway, {elapsed}ms"
+                    f"Notified agent {input.agent_id} via WS gateway, {elapsed}ms, "
+                    f"response_len={len(response_text) if response_text else 0}"
                 )
-                return NotifyAgentResult(success=True, duration_ms=elapsed)
+                return NotifyAgentResult(
+                    success=True,
+                    duration_ms=elapsed,
+                    response_text=response_text,
+                )
 
             # stream, session_init, etc — just consume and continue
 
@@ -568,7 +582,7 @@ async def update_matrix_status(input: MatrixStatusInput) -> MatrixStatusResult:
                         "agent_id": input.agent_id,
                         "room_id": input.room_id,
                         "message": input.message,
-                        "msgtype": "m.notice",
+                        "msgtype": input.msgtype,
                     },
                 )
 
