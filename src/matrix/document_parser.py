@@ -68,6 +68,7 @@ PARSEABLE_MIME_TYPES = {
     "text/markdown",
     "text/x-markdown",
     "text/html",
+    "text/calendar",
     "application/xhtml+xml",
     "application/json",
     "application/epub+zip",
@@ -80,21 +81,23 @@ PARSEABLE_EXTENSIONS = {
     ".xlsx", ".xls", ".csv",
     ".txt", ".md", ".markdown",
     ".html", ".htm", ".xhtml",
-    ".json", ".epub",
+    ".json", ".epub", ".ics",
     ".rtf", ".odt", ".ods", ".odp",
 }
 
 
 def is_parseable_document(mime_type: str, filename: str) -> bool:
-    """Check if a file can be parsed by MarkItDown."""
-    if mime_type in PARSEABLE_MIME_TYPES:
-        if mime_type == "application/octet-stream":
-            _, ext = os.path.splitext(filename.lower())
-            return ext in PARSEABLE_EXTENSIONS
-        return True
-    # Also check by extension as a fallback
-    _, ext = os.path.splitext(filename.lower())
-    return ext in PARSEABLE_EXTENSIONS
+    """Check if a file can be parsed by MarkItDown.
+    
+    With the try-first approach, we accept all non-image/non-audio files.
+    MarkItDown's PlainTextConverter handles any text-like file as fallback.
+    The whitelist sets (PARSEABLE_MIME_TYPES, PARSEABLE_EXTENSIONS) are kept
+    for reference but no longer gate file acceptance.
+    """
+    # Reject types handled by dedicated pipelines
+    if mime_type.startswith('image/') or mime_type.startswith('audio/'):
+        return False
+    return True
 
 
 # Dedicated process pool for CPU-bound parsing (avoids GIL contention)

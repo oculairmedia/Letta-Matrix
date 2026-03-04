@@ -37,8 +37,8 @@ from letta_client import Letta
 
 logger = logging.getLogger("matrix_client.file_handler")
 
-# Supported file types from Letta Filesystem API
-# Note: Some clients send application/octet-stream for unknown types
+# Known file types - used for extension mapping and temp file suffixes.
+# NOT used for rejection: MarkItDown's PlainTextConverter handles any text-like file.
 SUPPORTED_FILE_TYPES = {
     'application/pdf': '.pdf',
     'text/plain': '.txt',
@@ -72,10 +72,11 @@ SUPPORTED_FILE_TYPES = {
     'audio/webm': '.webm',
     'audio/flac': '.flac',
     'audio/aac': '.aac',
+    'text/calendar': '.ics',
     'application/octet-stream': None,  # Accept but determine by extension
 }
 
-# File extensions to accept when MIME type is application/octet-stream
+# Extension-to-MIME mapping for application/octet-stream resolution (routing to image/audio handlers)
 SUPPORTED_EXTENSIONS = {
     # Documents
     '.pdf', '.txt', '.md', '.json', '.markdown',
@@ -83,7 +84,9 @@ SUPPORTED_EXTENSIONS = {
     '.csv', '.html', '.htm', '.xhtml', '.epub', '.rtf', '.odt',
     # Images
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif',
-    '.ogg', '.mp3', '.m4a', '.wav', '.webm', '.flac', '.aac', '.oga'
+    '.ogg', '.mp3', '.m4a', '.wav', '.webm', '.flac', '.aac', '.oga',
+    # Calendar
+    '.ics'
 }
 
 # File size limit (50MB)
@@ -287,11 +290,14 @@ class LettaFileHandler:
                 logger.info(f"Image uploaded: {metadata.file_name}. Building multimodal message content.")
                 return await self._handle_image_upload(metadata, room_id, agent_id)
             
-            # For documents (PDF, DOCX, text, etc.) - extract text with MarkItDown
-            if is_parseable_document(metadata.file_type, metadata.file_name):
-                logger.info(f"Document uploaded: {metadata.file_name}. Extracting text with MarkItDown.")
-                return await self._handle_document_upload(metadata, room_id, agent_id)
+            # For all non-image, non-audio files - try MarkItDown first.
+            # MarkItDown's PlainTextConverter handles any text-like file as fallback.
+            logger.info(f"File uploaded: {metadata.file_name} ({metadata.file_type}). Trying MarkItDown.")
+            result = await self._handle_document_upload(metadata, room_id, agent_id)
+            if result:
+                return result
             
+            logger.info(f"MarkItDown returned empty for {metadata.file_name}, falling back to Letta source upload")
             # Fallback for unknown file types - use Letta source upload flow
             await self._notify(room_id, f"📄 Processing file: {metadata.file_name}")
             
@@ -425,7 +431,7 @@ class LettaFileHandler:
                 os.unlink(file_path)
                 logger.debug(f"Cleaned up temporary file {file_path}")
     
-    async def _handle_document_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> str:
+    async def _handle_document_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> Optional[str]:
         """
         Handle document upload by extracting text with MarkItDown,
         then ingesting into the shared Haystack document store (Weaviate)
@@ -443,7 +449,8 @@ class LettaFileHandler:
             agent_id: Agent ID to send document to
             
         Returns:
-            Formatted string with document summary for the agent
+            Formatted string with document summary for the agent, or None if
+            extraction failed (caller should fall back to Letta source upload).
         """
         # Notify user that we're processing the document
         eid = await self._notify(room_id, f"📄 Reading document: {metadata.file_name}...")
@@ -465,11 +472,14 @@ class LettaFileHandler:
                 self._status_summary = f"⚠️ {metadata.file_name} — extraction failed"
                 logger.warning(f"Document parsing failed for {metadata.file_name}: {result.error}")
                 await self._notify(room_id, f"⚠️ Could not extract text from {metadata.file_name}: {result.error}")
-                # Still return error info to agent
-                formatted = format_document_for_agent(result, caption=metadata.caption)
-                if metadata.sender and metadata.sender.startswith("@oc_"):
-                    formatted = wrap_opencode_routing(formatted, metadata.sender)
-                return formatted
+                # Return None so the caller can fall back to Letta source upload
+                return None
+            
+            # Check if extracted content is too short or empty to be useful
+            text_len = len((result.text or "").strip())
+            if text_len < 10:
+                logger.info(f"MarkItDown returned insufficient content for {metadata.file_name} ({text_len} chars)")
+                return None
             
             page_info = f" ({result.page_count} pages)" if result.page_count else ""
             ocr_info = " (OCR)" if result.was_ocr else ""
@@ -685,16 +695,17 @@ class LettaFileHandler:
             max_mb = MAX_FILE_SIZE / (1024 * 1024)
             return f"File '{metadata.file_name}' is too large ({size_mb:.1f}MB). Maximum size is {max_mb:.0f}MB."
         
-        # Check file type - also check by extension for application/octet-stream
+        # Try-first approach: accept any file type. MarkItDown handles text-like files
+        # via PlainTextConverter fallback. Only images/audio need special MIME routing.
+        # We log unrecognized types but don't reject them.
         if metadata.file_type not in SUPPORTED_FILE_TYPES:
-            supported = ", ".join(k for k in SUPPORTED_FILE_TYPES.keys() if k != 'application/octet-stream')
-            return f"File type '{metadata.file_type}' is not supported. Supported types: {supported}"
+            logger.info(f"Non-whitelisted MIME type '{metadata.file_type}' for {metadata.file_name} - will try MarkItDown")
         
-        # For application/octet-stream, verify the extension is supported
+        # For application/octet-stream, try to resolve MIME from extension for routing
         if metadata.file_type == 'application/octet-stream':
             _, ext = os.path.splitext(metadata.file_name.lower())
             if ext not in SUPPORTED_EXTENSIONS:
-                return f"File extension '{ext}' is not supported for unknown MIME type. Supported: {', '.join(SUPPORTED_EXTENSIONS)}"
+                logger.info(f"Unknown extension '{ext}' for octet-stream - will try MarkItDown")
             # Update the file_type based on extension for better handling
             if ext in ['.md', '.markdown']:
                 metadata.file_type = 'text/markdown'
@@ -749,6 +760,8 @@ class LettaFileHandler:
                 metadata.file_type = 'text/html'
             elif ext == '.epub':
                 metadata.file_type = 'application/epub+zip'
+            elif ext == '.ics':
+                metadata.file_type = 'text/calendar'
 
         return None
     
