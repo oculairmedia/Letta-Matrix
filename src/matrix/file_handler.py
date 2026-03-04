@@ -188,7 +188,7 @@ class LettaFileHandler:
             logger.info("Temporal async file processing: disabled (set TEMPORAL_FILE_PROCESSING_ENABLED=true to enable)")
 
         # Initialize Letta SDK client
-        self.letta_client = Letta(base_url=letta_api_url, token=letta_token)
+        self.letta_client = Letta(base_url=letta_api_url, api_key=letta_token)
         
         # Log token status at init
         logger.info(f"LettaFileHandler initialized - matrix_access_token present: {bool(self.matrix_access_token)}, length: {len(self.matrix_access_token) if self.matrix_access_token else 0}")

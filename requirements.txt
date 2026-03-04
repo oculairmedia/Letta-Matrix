@@ -49,3 +49,6 @@ Pillow>=10.0.0
 markitdown[pdf,docx,pptx,xlsx,xls]>=0.1.0
 pymupdf>=1.24.0  # PDF page rendering for OCR fallback
 pytesseract>=0.3.10  # OCR fallback for scanned PDFs
+
+# Temporal SDK for async file processing workflow dispatch
+temporalio==1.5.0
