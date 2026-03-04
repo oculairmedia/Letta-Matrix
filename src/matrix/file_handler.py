@@ -518,6 +518,8 @@ class LettaFileHandler:
             event_id=metadata.event_id,
             agent_id=agent_id,
             caption=metadata.caption,
+            status_event_id=eid,
+            file_size=metadata.file_size,
         )
 
         workflow_id = f"file-{room_id}-{metadata.event_id}-{uuid.uuid4().hex[:8]}"

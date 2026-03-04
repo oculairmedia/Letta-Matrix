@@ -80,6 +80,13 @@ class FileProcessingInput:
     # Optional user caption/question about the document
     caption: Optional[str] = None
 
+    # Status message event_id from initial matrix-client acknowledgement
+    # (avoids duplicate status messages — workflow edits this instead of sending new)
+    status_event_id: Optional[str] = None
+
+    # File size in bytes (for agent heads-up notification)
+    file_size: int = 0
+
     # Retry config (per-activity overrides use their own defaults)
     max_retries: int = 3
     retry_backoff_seconds: int = 2
@@ -188,24 +195,36 @@ class FileProcessingWorkflow:
 
         try:
             # ---------------------------------------------------------------
-            # Step 0: Send initial status message to room
+            # Step 0: Use existing status message from matrix-client (no duplicate send)
+            # ---------------------------------------------------------------
+            self._status_event_id = input.status_event_id
+
+            # ---------------------------------------------------------------
+            # Step 0b: Notify agent that a file is incoming (heads-up with size)
             # ---------------------------------------------------------------
             try:
-                status_result: MatrixStatusResult = await workflow.execute_activity(
-                    update_matrix_status,
-                    MatrixStatusInput(
-                        room_id=input.room_id,
-                        message=f"📄 Processing document: {input.file_name}...",
-                        agent_id=input.agent_id,
-                    ),
-                    start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=_STATUS_RETRY,
+                file_size_str = self._format_file_size(input.file_size) if input.file_size else "unknown size"
+                heads_up_msg = (
+                    f"[System: File Upload Started]\n\n"
+                    f"A user in this room is uploading a document: **{input.file_name}** ({file_size_str}).\n"
+                    f"The document is being processed (download → parse → index). "
+                    f"You will be notified when it's ready for search."
                 )
-                self._status_event_id = status_result.event_id
-            except Exception as e:
-                # Status messages are best-effort — don't fail the workflow
-                workflow.logger.warning(f"Failed to send initial status: {e}")
+                if input.caption:
+                    heads_up_msg += f'\n\nThe user asked: "{input.caption}"'
 
+                await workflow.execute_activity(
+                    notify_letta_agent,
+                    NotifyAgentInput(
+                        agent_id=input.agent_id,
+                        message=heads_up_msg,
+                    ),
+                    start_to_close_timeout=timedelta(seconds=60),
+                    retry_policy=_NOTIFY_RETRY,
+                )
+            except Exception as e:
+                # Heads-up is best-effort — don't fail the workflow
+                workflow.logger.warning(f"Failed to send agent heads-up: {e}")
             # ---------------------------------------------------------------
             # Step 1: Download file from Matrix
             # ---------------------------------------------------------------
@@ -318,9 +337,12 @@ class FileProcessingWorkflow:
 
             self._status = WorkflowStatus.NOTIFYING
 
-            # Build agent notification message (matches file_handler.py format)
+            # Build agent completion message — prompt agent to acknowledge readiness
             page_info = f" ({parse_result.page_count} pages)" if parse_result.page_count else ""
             ocr_info = " (OCR)" if parse_result.was_ocr else ""
+            file_size_str = self._format_file_size(input.file_size) if input.file_size else ""
+            size_info = f", {file_size_str}" if file_size_str else ""
+
             caption_note = ""
             if input.caption:
                 caption_note = (
@@ -330,11 +352,13 @@ class FileProcessingWorkflow:
                 )
 
             agent_msg = (
-                f"[Document Indexed: {input.file_name}]{page_info}{ocr_info}\n\n"
-                f"This document ({parse_result.char_count:,} chars) has been indexed "
-                f"into the shared document library. "
-                f"Use the **search_documents** tool with a relevant query to find "
-                f"specific content from this document."
+                f"[System: Document Ready] **{input.file_name}**{page_info}{ocr_info}\n\n"
+                f"Processing complete: {parse_result.char_count:,} chars{size_info}, "
+                f"{ingest_result.chunks_stored} chunks indexed into the document library.\n\n"
+                f"You can now use the **search_documents** tool with relevant queries to find "
+                f"specific content from this document. "
+                f"Let the user know the document has been processed and you're ready to "
+                f"answer questions about it."
                 f"{caption_note}"
             )
 
@@ -463,3 +487,13 @@ class FileProcessingWorkflow:
             if self._cancelled:
                 workflow.logger.info("Workflow cancelled while paused")
                 return
+
+    @staticmethod
+    def _format_file_size(size_bytes: int) -> str:
+        """Format bytes into human-readable size."""
+        size = float(size_bytes)
+        for unit in ("B", "KB", "MB", "GB"):
+            if size < 1024:
+                return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+            size /= 1024
+        return f"{size:.1f} TB"
