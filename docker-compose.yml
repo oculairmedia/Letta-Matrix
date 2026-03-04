@@ -139,6 +139,46 @@ services:
        - homepage.href=http://192.168.50.90:8004
        - homepage.description=Matrix API server for automation
 
+  temporal-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.temporal-worker
+    image: matrix-temporal-worker:local
+    restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
+    env_file:
+      - .env
+    environment:
+      - TEMPORAL_HOST=192.168.50.90:7233
+      - TEMPORAL_NAMESPACE=matrix
+      - TEMPORAL_TASK_QUEUE=matrix-file-queue
+      - MATRIX_HOMESERVER_URL=http://tuwunel:6167
+      - MATRIX_ACCESS_TOKEN=${MATRIX_ADMIN_TOKEN}
+      - LETTA_API_URL=${LETTA_API_URL:-http://192.168.50.90:8289}
+      - LETTA_TOKEN=${LETTA_TOKEN}
+      - MATRIX_API_URL=http://matrix-api:8000
+      - HAYHOOKS_INGEST_URL=http://192.168.50.90:1416/ingest_document/run
+      - DOCUMENT_PARSING_ENABLED=true
+      - DOCUMENT_PARSING_MAX_FILE_SIZE_MB=50
+      - DOCUMENT_PARSING_TIMEOUT_SECONDS=120
+      - DOCUMENT_PARSING_OCR_ENABLED=true
+    volumes:
+      - ./temporal_workflows:/app/temporal_workflows:ro
+      - ./src:/app/src:ro
+    networks:
+      - matrix-internal
+    depends_on:
+      tuwunel:
+        condition: service_healthy
+      matrix-api:
+        condition: service_started
+    labels:
+      - homepage.group=Communication
+      - homepage.name=Temporal File Worker
+      - homepage.icon=mdi-file-sync
+      - homepage.description=Async document processing via Temporal
+
   opencode-bridge:
     image: ghcr.io/oculairmedia/letta-matrix-opencode-bridge:latest
     restart: unless-stopped

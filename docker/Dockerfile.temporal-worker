@@ -1,0 +1,44 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System dependencies for MarkItDown + OCR (same as matrix-client)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libffi-dev \
+    libssl-dev \
+    libmagic1 \
+    exiftool \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install temporal worker dependencies
+COPY temporal_workflows/requirements.txt /app/temporal_requirements.txt
+RUN pip install --no-cache-dir -r /app/temporal_requirements.txt
+
+# Copy temporal workflow code
+COPY temporal_workflows/ /app/temporal_workflows/
+
+# Copy shared source modules needed by activities
+# (document_parser.py is imported by parse_with_markitdown activity)
+COPY src/matrix/document_parser.py /app/src/matrix/document_parser.py
+COPY src/__init__.py /app/src/__init__.py
+COPY src/matrix/__init__.py /app/src/matrix/__init__.py
+
+ENV PYTHONUNBUFFERED=1
+
+# Temporal configuration defaults
+ENV TEMPORAL_HOST=192.168.50.90:7233
+ENV TEMPORAL_NAMESPACE=matrix
+ENV TEMPORAL_TASK_QUEUE=matrix-file-queue
+
+# Document parsing defaults (used by parse_with_markitdown activity)
+ENV DOCUMENT_PARSING_ENABLED=true
+ENV DOCUMENT_PARSING_MAX_FILE_SIZE_MB=50
+ENV DOCUMENT_PARSING_TIMEOUT_SECONDS=120
+ENV DOCUMENT_PARSING_OCR_ENABLED=true
+
+CMD ["python", "-m", "temporal_workflows.worker"]
