@@ -2187,7 +2187,13 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
         file_result = await file_handler.handle_file_event(event, room.room_id, agent_id)
         cleanup_event_ids, status_summary = file_handler.pop_cleanup_event_ids()
 
-        # Step 1: Ensure search_documents tool is attached BEFORE the agent run
+        # None = document sent to Temporal for async processing (workflow handles notification + status)
+        if file_result is None:
+            logger.info(f"[FILE] Document dispatched to Temporal workflow, nothing more to do")
+            return
+
+        # Ensure search_documents tool is attached BEFORE the agent run
+        # (For Temporal documents, this is done inside _start_temporal_workflow)
         if agent_id:
             try:
                 await file_handler.ensure_search_tool_attached(agent_id)
