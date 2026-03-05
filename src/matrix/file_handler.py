@@ -507,6 +507,24 @@ class LettaFileHandler:
             self._pending_cleanup_event_ids.append(eid)
         self._status_summary = f"\U0001f4c4 {metadata.file_name} — processing asynchronously"
 
+        conversation_id: Optional[str] = None
+        try:
+            from src.core.conversation_service import get_conversation_service
+
+            conv_service = get_conversation_service(self.letta_client)
+            conversation_id = conv_service.get_conversation_id(
+                room_id=room_id,
+                agent_id=agent_id,
+            )
+            if conversation_id:
+                logger.info(
+                    f"[CONVERSATIONS] Reusing conversation {conversation_id} for temporal workflow"
+                )
+        except Exception as conv_err:
+            logger.debug(
+                f"[CONVERSATIONS] Could not resolve conversation for temporal workflow: {conv_err}"
+            )
+
         # Build workflow input
         task_queue = os.environ.get('TEMPORAL_TASK_QUEUE', 'matrix-file-queue')
         workflow_input = FileProcessingInput(
@@ -520,6 +538,7 @@ class LettaFileHandler:
             caption=metadata.caption,
             status_event_id=eid,
             file_size=metadata.file_size,
+            conversation_id=conversation_id,
         )
 
         workflow_id = f"file-{room_id}-{metadata.event_id}-{uuid.uuid4().hex[:8]}"
@@ -756,9 +775,10 @@ class LettaFileHandler:
                 logger.warning("File event missing URL")
                 return None
             
-            # Get actual filename from info.filename if available (Matrix spec)
-            # The 'body' field may contain a user caption instead of filename
-            actual_filename = info.get('filename') or body
+            content_filename = content.get('filename')
+            info_filename = info.get('filename')
+            resolved_filename = content_filename or info_filename
+            actual_filename = resolved_filename or body
             
             # Determine if body is a caption (different from filename)
             # If body looks like a filename (has extension), use it as filename
@@ -766,13 +786,22 @@ class LettaFileHandler:
             caption = None
             import os
             _, ext = os.path.splitext(body)
-            if ext and ext.lower() in SUPPORTED_EXTENSIONS:
-                # body looks like a filename
+            if ext and ext.lower() in SUPPORTED_EXTENSIONS and not resolved_filename:
                 actual_filename = body
-            elif body != actual_filename:
-                # body is different from filename - it's a caption
+            elif resolved_filename and body != resolved_filename:
                 caption = body
-                logger.info(f"Detected caption for image: {caption[:50]}...")
+                logger.info(f"Detected caption on file '{actual_filename}': {caption[:50]}...")
+            elif not ext:
+                mimetype = info.get('mimetype', 'application/octet-stream')
+                mime_ext = SUPPORTED_FILE_TYPES.get(mimetype) or '.bin'
+                # Use mxc media_id as a stable filename
+                media_id = url.split('/')[-1] if url else 'unknown'
+                actual_filename = f"{media_id}{mime_ext}"
+                caption = body
+                logger.info(
+                    f"Caption detected (no info.filename): '{caption[:50]}...' — "
+                    f"derived filename: {actual_filename}"
+                )
             
             return FileMetadata(
                 file_url=url,

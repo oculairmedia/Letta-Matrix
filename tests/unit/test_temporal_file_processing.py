@@ -6,6 +6,7 @@ None-return handling for document uploads routed through Temporal.
 
 import asyncio
 import os
+import types
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -221,6 +222,35 @@ class TestStartTemporalWorkflow:
         assert workflow_input.event_id == "$evt_upload_001"
         assert workflow_input.agent_id == "agent-test-123"
         assert workflow_input.caption == "What does this report say?"
+        assert workflow_input.conversation_id is None
+
+    @pytest.mark.asyncio
+    async def test_workflow_input_uses_existing_conversation_id(self, file_metadata):
+        handler = _make_file_handler(temporal_enabled=True)
+
+        mock_client = AsyncMock()
+        mock_handle = AsyncMock()
+        mock_handle.id = "file-test-workflow-789"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        handler._temporal_client = mock_client
+        handler.ensure_search_tool_attached = AsyncMock()
+
+        mock_conv_service = Mock()
+        mock_conv_service.get_conversation_id = Mock(return_value="conv-room-123")
+
+        fake_conv_module = types.ModuleType("src.core.conversation_service")
+        fake_conv_module.get_conversation_service = Mock(return_value=mock_conv_service)
+
+        with patch.dict("sys.modules", {"src.core.conversation_service": fake_conv_module}):
+            await handler._start_temporal_workflow(
+                file_metadata,
+                file_metadata.room_id,
+                "agent-test-123",
+            )
+
+        call_args = mock_client.start_workflow.call_args
+        workflow_input = call_args[0][1]
+        assert workflow_input.conversation_id == "conv-room-123"
 
     @pytest.mark.asyncio
     async def test_sends_ack_message(self, file_metadata):

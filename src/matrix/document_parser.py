@@ -101,7 +101,8 @@ def is_parseable_document(mime_type: str, filename: str) -> bool:
 
 
 # Dedicated process pool for CPU-bound parsing (avoids GIL contention)
-_process_pool = ProcessPoolExecutor(max_workers=2)
+# Use 4 workers for parallel document processing (can handle 4 concurrent files)
+_process_pool = ProcessPoolExecutor(max_workers=4)
 
 
 def _get_process_pool(recreate: bool = False) -> ProcessPoolExecutor:
@@ -113,7 +114,7 @@ def _get_process_pool(recreate: bool = False) -> ProcessPoolExecutor:
             _process_pool.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
-        _process_pool = ProcessPoolExecutor(max_workers=2)
+        _process_pool = ProcessPoolExecutor(max_workers=4)
     return _process_pool
 
 
