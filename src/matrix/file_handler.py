@@ -215,6 +215,21 @@ class LettaFileHandler:
                 logger.error(f"Failed to send notification: {e}")
         return None
 
+    def _notify_bg(self, room_id: str, message: str) -> None:
+        """Fire-and-forget notification — does not block the caller.
+        
+        The event_id (if any) is collected asynchronously into
+        _pending_cleanup_event_ids so the caller can still clean up later.
+        """
+        async def _do_notify():
+            try:
+                eid = await self._notify(room_id, message)
+                if eid:
+                    self._pending_cleanup_event_ids.append(eid)
+            except Exception as e:
+                logger.debug(f"Background notification failed (non-fatal): {e}")
+
+        asyncio.ensure_future(_do_notify())
     def pop_cleanup_event_ids(self) -> tuple[list, Optional[str]]:
         """Return and clear pending status message event_ids and summary for cleanup after agent responds.
         
@@ -584,10 +599,8 @@ class LettaFileHandler:
             Formatted string with document summary for the agent, or None if
             extraction failed (caller should fall back to Letta source upload).
         """
-        # Notify user that we're processing the document
-        eid = await self._notify(room_id, f"📄 Reading document: {metadata.file_name}...")
-        if eid:
-            self._pending_cleanup_event_ids.append(eid)
+        # Notify user that we're processing (fire-and-forget — don't block pipeline)
+        self._notify_bg(room_id, f"📄 Reading document: {metadata.file_name}...")
         
         # Download file from Matrix
         file_path = await self._download_matrix_file(metadata)
@@ -603,7 +616,7 @@ class LettaFileHandler:
             if result.error:
                 self._status_summary = f"⚠️ {metadata.file_name} — extraction failed"
                 logger.warning(f"Document parsing failed for {metadata.file_name}: {result.error}")
-                await self._notify(room_id, f"⚠️ Could not extract text from {metadata.file_name}: {result.error}")
+                self._notify_bg(room_id, f"⚠️ Could not extract text from {metadata.file_name}: {result.error}")
                 # Return None so the caller can fall back to Letta source upload
                 return None
             
@@ -626,12 +639,10 @@ class LettaFileHandler:
             )
             
             if ingest_success:
-                eid = await self._notify(
+                self._notify_bg(
                     room_id,
                     f"✅ Document indexed: {metadata.file_name}{page_info}{ocr_info} — {char_count} chars stored in shared document library"
                 )
-                if eid:
-                    self._pending_cleanup_event_ids.append(eid)
                 self._status_summary = f"📄 {metadata.file_name}{page_info}{ocr_info} — {char_count:,} chars indexed ✓"
                 # Return a brief notification to the agent — NOT the full text
                 caption_note = ""
@@ -647,12 +658,10 @@ class LettaFileHandler:
             else:
                 # Fallback: ingest failed, send truncated text directly
                 logger.warning(f"Haystack ingest failed for {metadata.file_name}, falling back to direct text")
-                eid = await self._notify(
+                self._notify_bg(
                     room_id,
                     f"⚠️ Document store unavailable, sending text directly: {metadata.file_name}{page_info}{ocr_info}"
                 )
-                if eid:
-                    self._pending_cleanup_event_ids.append(eid)
                 self._status_summary = f"⚠️ {metadata.file_name}{page_info}{ocr_info} — sent directly (document store unavailable)"
                 # Truncate to a safe size for context (max ~8000 chars)
                 truncated_text = result.text[:8000]

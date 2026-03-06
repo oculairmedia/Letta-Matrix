@@ -117,20 +117,28 @@ def _get_process_pool(recreate: bool = False) -> ProcessPoolExecutor:
         _process_pool = ProcessPoolExecutor(max_workers=4)
     return _process_pool
 
+# Cached MarkItDown instance per worker process (avoids re-init per file).
+# MarkItDown() constructor initializes magika + requests.Session — reuse is safe.
+_md_instance: Optional["MarkItDown"] = None
 
 def _convert_with_markitdown(file_path: str) -> tuple[str, Optional[int], Optional[str]]:
     """
     Synchronous MarkItDown conversion (runs in process pool).
 
+    Uses a cached module-level MarkItDown instance to avoid re-initialization
+    overhead (~100-500ms) on every file.
+
     Returns (text_content, page_count, error_message).
     Exceptions are caught and returned as strings to avoid pickle issues
     with traceback objects across process boundaries.
     """
+    global _md_instance
     try:
-        from markitdown import MarkItDown
+        if _md_instance is None:
+            from markitdown import MarkItDown
+            _md_instance = MarkItDown()
 
-        md = MarkItDown()
-        result = md.convert(file_path)
+        result = _md_instance.convert(file_path)
         text = (result.text_content or "").strip()
 
         # Try to get page count for PDFs
@@ -147,7 +155,6 @@ def _convert_with_markitdown(file_path: str) -> tuple[str, Optional[int], Option
         return text, page_count, None
     except Exception as e:
         return "", None, f"{type(e).__name__}: {e}"
-
 
 def _extract_pdf_with_fitz(file_path: str) -> tuple[str, Optional[int], Optional[str]]:
     """Extract PDF text page-by-page with PyMuPDF in a memory-efficient way."""
