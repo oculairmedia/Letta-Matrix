@@ -908,17 +908,34 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ room_id: roomId })
         }).then(r => r.json()).then((data: any) => {
-          if (data.needs_invite) {
+          if (data.already_joined || data.joined) {
+            console.log(`[MatrixMessaging] OpenCode bridge joined room ${roomId} (already_joined=${!!data.already_joined})`);
+          } else if (data.needs_invite) {
+            console.log(`[MatrixMessaging] OpenCode bridge needs invite to ${roomId}, inviting...`);
             // Bridge couldn't join — invite it from the caller identity
-            senderClient.invite(roomId, '@oc_matrix_synapse_deployment:matrix.oculair.ca')
+            senderClient.inviteUser('@oc_matrix_synapse_deployment:matrix.oculair.ca', roomId)
               .then(() => fetch(`${bridgeUrl}/ensure-joined`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ room_id: roomId })
               }))
-              .catch(() => {});
+              .then(r => r?.json())
+              .then((retryData: any) => {
+                if (retryData?.joined || retryData?.already_joined) {
+                  console.log(`[MatrixMessaging] OpenCode bridge joined room ${roomId} after invite`);
+                } else {
+                  console.warn(`[MatrixMessaging] OpenCode bridge still could not join ${roomId}:`, retryData);
+                }
+              })
+              .catch((inviteErr: any) => {
+                console.error(`[MatrixMessaging] Failed to invite OpenCode bridge to ${roomId}:`, inviteErr?.message || inviteErr);
+              });
+          } else {
+            console.warn(`[MatrixMessaging] Unexpected ensure-joined response for ${roomId}:`, data);
           }
-        }).catch(() => {});
+        }).catch((bridgeErr: any) => {
+          console.error(`[MatrixMessaging] Failed to contact OpenCode bridge at ${bridgeUrl}: ${bridgeErr?.message || bridgeErr}`);
+        });
         
         const matrixApiUrl = process.env.MATRIX_API_URL || 'http://matrix-api:8000';
         const opencodeSender = (callerIdentity.mxid.startsWith('@oc_') || callerIdentity.mxid.startsWith('@cc_'))
