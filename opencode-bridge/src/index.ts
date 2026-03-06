@@ -15,8 +15,8 @@ import "dotenv/config";
 import * as sdk from "matrix-js-sdk";
 import { createServer, IncomingMessage, ServerResponse } from "http";
 import { WebSocketServer, WebSocket } from "ws";
-import { readFileSync } from "fs";
 import { fetchAgentMappings } from "./agent-mappings.js";
+import { RegistrationDB } from "./db.js";
 
 interface OpenCodeRegistration {
   id: string;
@@ -58,13 +58,6 @@ interface WsOutboundMessage {
   messageId: string;
 }
 
-interface OpenCodeRoomMapping {
-  directory: string;
-  room_id: string;
-  identity_id: string;
-  identity_mxid: string;
-}
-
 interface QueuedMessage {
   roomId: string;
   sender: string;
@@ -72,30 +65,6 @@ interface QueuedMessage {
   body: string;
   eventId: string;
   queuedAt: number;
-}
-
-let openCodeRoomMappings: Record<string, OpenCodeRoomMapping> = {};
-let roomMappingsByDir: Map<string, OpenCodeRoomMapping> = new Map();
-
-function loadOpenCodeRoomMappings(): void {
-  const mappingsPath = process.env.OPENCODE_ROOM_MAPPINGS_PATH;
-  if (!mappingsPath) return;
-  
-  try {
-    const raw = readFileSync(mappingsPath, "utf-8");
-    openCodeRoomMappings = JSON.parse(raw);
-    roomMappingsByDir = new Map(Object.values(openCodeRoomMappings).map((m) => [m.directory, m]));
-  } catch (err) {
-    console.warn(`[Bridge] Failed to load room mappings from ${mappingsPath}:`, err);
-  }
-}
-
-function getRoomForDirectory(directory: string): string | undefined {
-  return roomMappingsByDir.get(directory)?.room_id;
-}
-
-function getMappingForDirectory(directory: string): OpenCodeRoomMapping | undefined {
-  return roomMappingsByDir.get(directory);
 }
 
 // WebSocket keepalive interval (ping every 30s to detect dead connections)
@@ -137,6 +106,7 @@ const registrations = new Map<string, OpenCodeRegistration>();
 const identityToRegistration = new Map<string, OpenCodeRegistration>();
 const roomToRegistration = new Map<string, OpenCodeRegistration>();
 const directoryToRegistration = new Map<string, OpenCodeRegistration>();
+let registrationDb: RegistrationDB | null = null;
 let matrixClient: sdk.MatrixClient | null = null;
 let agentMappings: Record<string, AgentMapping> = {};
 let agentMappingsByRoom: Map<string, AgentMapping> = new Map();
@@ -217,8 +187,7 @@ async function handleOutboundMessage(
   registration: OpenCodeRegistration,
   outbound: WsOutboundMessage
 ): Promise<void> {
-  const mapping = getMappingForDirectory(registration.directory);
-  let roomId = registration.rooms[0] || mapping?.room_id || "";
+  const roomId = registration.rooms[0] || "";
   
   if (!roomId || !matrixClient) return;
   
@@ -233,6 +202,49 @@ async function handleOutboundMessage(
     await matrixClient.sendTextMessage(roomId, messageContent);
   } catch (err) {
     console.error(`[Bridge] Failed to send outbound message to Matrix room ${roomId}:`, err);
+  }
+}
+
+async function restoreRegistrationsFromDb(): Promise<void> {
+  if (!registrationDb) return;
+
+  try {
+    const rows = await registrationDb.getAll();
+    for (const row of rows) {
+      const sessionId = row.session_id || "restored";
+      const id = `${row.directory}:${sessionId}`;
+      const registration: OpenCodeRegistration = {
+        id,
+        directory: row.directory,
+        sessionId,
+        rooms: Array.isArray(row.rooms) ? row.rooms : [],
+        registeredAt: new Date(row.created_at).getTime(),
+        lastSeen: new Date(row.updated_at).getTime(),
+        ws: null,
+        status: "disconnected",
+        messageQueue: [],
+      };
+
+      registrations.set(id, registration);
+      directoryToRegistration.set(row.directory, registration);
+
+      const matrixIdentities = Array.isArray(row.identity_mxids) && row.identity_mxids.length > 0
+        ? row.identity_mxids
+        : deriveMatrixIdentities(row.directory);
+      for (const identity of matrixIdentities) {
+        identityToRegistration.set(identity, registration);
+      }
+
+      for (const roomId of registration.rooms) {
+        roomToRegistration.set(roomId, registration);
+      }
+    }
+
+    if (rows.length > 0) {
+      console.log(`[Bridge] Restored ${rows.length} registrations from PostgreSQL`);
+    }
+  } catch (err) {
+    console.warn("[Bridge] Failed to restore registrations from PostgreSQL, continuing in-memory only:", err);
   }
 }
 
@@ -481,7 +493,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   if (url.pathname === "/register" && req.method === "POST") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
+    req.on("end", async () => {
       try {
         const data = JSON.parse(body);
         const { sessionId, directory, rooms } = data;
@@ -493,14 +505,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
 
         const id = `${directory}:${sessionId}`;
-        
-        let effectiveRooms = rooms || [];
-        if (effectiveRooms.length === 0) {
-          const persistedRoom = getRoomForDirectory(directory);
-          if (persistedRoom) {
-            effectiveRooms = [persistedRoom];
-          }
-        }
+        const effectiveRooms = Array.isArray(rooms) ? rooms : [];
         
         // Clean up old registrations from the same directory
         for (const [oldId, oldReg] of registrations.entries()) {
@@ -536,6 +541,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
             roomToRegistration.set(roomId, existing);
           }
           directoryToRegistration.set(directory, existing);
+
+          if (registrationDb) {
+            const matrixIdentities = deriveMatrixIdentities(directory);
+            try {
+              await registrationDb.upsert(directory, effectiveRooms, matrixIdentities, sessionId);
+            } catch (err) {
+              console.warn(`[Bridge] Failed to persist registration for ${directory}:`, err);
+            }
+          }
+
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ 
             success: true, 
@@ -567,6 +582,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
         for (const roomId of registration.rooms) {
           roomToRegistration.set(roomId, registration);
+        }
+
+        if (registrationDb) {
+          try {
+            await registrationDb.upsert(directory, effectiveRooms, matrixIdentities, sessionId);
+          } catch (err) {
+            console.warn(`[Bridge] Failed to persist registration for ${directory}:`, err);
+          }
         }
 
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -629,7 +652,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   if (url.pathname === "/unregister" && req.method === "POST") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
+    req.on("end", async () => {
       try {
         const { id } = JSON.parse(body);
         const registration = registrations.get(id);
@@ -647,6 +670,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
         
         const deleted = registrations.delete(id);
+
+        if (registrationDb && registration) {
+          try {
+            await registrationDb.remove(registration.directory);
+          } catch (err) {
+            console.warn(`[Bridge] Failed to remove registration for ${registration.directory}:`, err);
+          }
+        }
+
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: deleted }));
       } catch (e) {
@@ -676,7 +708,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   if (url.pathname === "/update-rooms" && req.method === "POST") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
+    req.on("end", async () => {
       try {
         const { directory, rooms } = JSON.parse(body);
 
@@ -698,6 +730,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           }
           reg.lastSeen = Date.now();
           updated = true;
+        }
+
+        if (registrationDb && updated) {
+          try {
+            await registrationDb.updateRooms(directory, rooms);
+          } catch (err) {
+            console.warn(`[Bridge] Failed to persist room updates for ${directory}:`, err);
+          }
         }
 
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -901,7 +941,20 @@ function handleWebSocketConnection(ws: WebSocket): void {
 }
 
 async function main(): Promise<void> {
-  loadOpenCodeRoomMappings();
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.warn("[Bridge] DATABASE_URL not set, running with in-memory registrations only");
+  } else {
+    try {
+      registrationDb = new RegistrationDB(databaseUrl);
+      await registrationDb.init();
+      await restoreRegistrationsFromDb();
+    } catch (err) {
+      registrationDb = null;
+      console.warn("[Bridge] PostgreSQL unavailable, running with in-memory registrations only:", err);
+    }
+  }
+
   await loadAgentMappings();
 
   const server = createServer(handleRequest);
