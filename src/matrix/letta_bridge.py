@@ -4,20 +4,15 @@ Letta Gateway communication — routes messages through the WS gateway to LettaB
 Contains:
   - send_to_letta_api_streaming(): token-by-token streaming via WS gateway
   - send_to_letta_api(): non-streaming, collects full response via WS gateway
-  - Agent routing: resolve room → agent mapping (DB, portal links, room members)
-  - Agent Mail: reverse bridge for inter-agent communication
   - retry_with_backoff: generic async retry helper
 
-Extracted from client.py as a standalone module.
-Re-exported by client.py for backward compatibility.
+Agent routing logic lives in agent_router.py and is re-exported here for
+backward compatibility.
 """
 import asyncio
-import json
 import logging
-import os
-import time
 import uuid
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import aiohttp
 
@@ -32,10 +27,6 @@ from src.matrix.agent_actions import (
     fetch_and_send_video,
     TypingIndicatorManager,
 )
-
-# Agent Mail MCP server URL for reverse bridge
-AGENT_MAIL_URL = os.getenv("AGENT_MAIL_URL", "http://192.168.50.90:8766/mcp/")
-
 
 # ── Retry Helper ─────────────────────────────────────────────────────
 
@@ -71,155 +62,13 @@ async def retry_with_backoff(
             await asyncio.sleep(delay)
 
 
-# ── Agent Routing ────────────────────────────────────────────────────
+# ── Agent Routing (moved to agent_router.py, re-exported for compat) ──
 
-async def get_agent_from_room_members(
-    room_id: str, config: Config, logger: logging.Logger
-) -> Optional[tuple]:
-    """
-    Extract agent ID from room members by finding agent Matrix users.
-    Returns (agent_id, agent_name) or None if not found.
-    """
-    try:
-        admin_token = config.matrix_token
-        members_url = (
-            f"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/members"
-        )
-        headers = {"Authorization": f"Bearer {admin_token}"}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(members_url, headers=headers) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Failed to get room members: {resp.status}")
-                    return None
-
-                members_data = await resp.json()
-                members = members_data.get("chunk", [])
-
-                from src.models.agent_mapping import AgentMappingDB
-
-                db = AgentMappingDB()
-                all_mappings = db.get_all()
-
-                for member in members:
-                    user_id = member.get("state_key")
-                    if not user_id:
-                        continue
-                    for mapping in all_mappings:
-                        if mapping.matrix_user_id == user_id:
-                            logger.info(
-                                f"Found agent via room members: {mapping.agent_name} ({mapping.agent_id})"
-                            )
-                            return (mapping.agent_id, mapping.agent_name)
-
-                logger.warning(
-                    f"No agent users found in room {room_id} members"
-                )
-                return None
-
-    except Exception as e:
-        logger.warning(
-            f"Error extracting agent from room members: {e}", exc_info=True
-        )
-        return None
-
-
-# ── Agent Routing Resolution (shared by both send paths) ─────────────
-
-async def _resolve_agent_for_room(
-    room_id: str, config: Config, logger: logging.Logger, tag: str = ""
-) -> Tuple[str, str]:
-    """
-    Resolve (agent_id, agent_name) for a room.
-    Falls back through: DB mapping → portal links → room members → default.
-    """
-    agent_id_to_use = config.letta_agent_id
-    agent_name_found = "DEFAULT"
-
-    if room_id:
-        try:
-            from src.models.agent_mapping import AgentMappingDB
-
-            db = AgentMappingDB()
-            mapping = db.get_by_room_id(room_id)
-            if mapping:
-                agent_id_to_use = str(mapping.agent_id)
-                agent_name_found = str(mapping.agent_name)
-                if tag:
-                    logger.info(
-                        f"[{tag}] Found agent mapping: {agent_name_found} ({agent_id_to_use})"
-                    )
-            else:
-                portal_link = db.get_portal_link_by_room_id(room_id)
-                if portal_link:
-                    portal_mapping = db.get_by_agent_id(portal_link["agent_id"])
-                    if portal_mapping:
-                        agent_id_to_use = str(portal_mapping.agent_id)
-                        agent_name_found = str(portal_mapping.agent_name)
-                        if tag:
-                            logger.info(
-                                f"[{tag}] Portal link match: {agent_name_found} ({agent_id_to_use})"
-                            )
-                    else:
-                        member_result = await get_agent_from_room_members(
-                            room_id, config, logger
-                        )
-                        if member_result:
-                            agent_id_to_use, agent_name_found = member_result
-                else:
-                    member_result = await get_agent_from_room_members(
-                        room_id, config, logger
-                    )
-                    if member_result:
-                        agent_id_to_use, agent_name_found = member_result
-        except Exception as e:
-            logger.warning(f"[{tag}] Could not query agent mappings: {e}")
-
-    return agent_id_to_use, agent_name_found
-
-
-# ── Conversation ID Resolution ───────────────────────────────────────
-
-async def _resolve_conversation_id(
-    config: Config,
-    room_id: str,
-    agent_id: str,
-    sender_id: str,
-    room_member_count: int,
-    logger: logging.Logger,
-) -> Optional[str]:
-    """Resolve or create a conversation_id for context isolation."""
-    if not config.letta_conversations_enabled:
-        return None
-    try:
-        from src.letta.client import get_letta_client, LettaConfig
-
-        sdk_config = LettaConfig(
-            base_url=config.letta_api_url,
-            api_key=config.letta_token,
-            timeout=config.letta_streaming_timeout,
-            max_retries=3,
-        )
-        letta_client = get_letta_client(sdk_config)
-        from src.core.conversation_service import get_conversation_service
-
-        conv_service = get_conversation_service(letta_client)
-        conversation_id, created = await conv_service.get_or_create_room_conversation(
-            room_id=room_id,
-            agent_id=agent_id,
-            room_member_count=room_member_count,
-            user_mxid=sender_id if room_member_count == 2 else None,
-        )
-        logger.info(
-            f"[CONVERSATIONS] Using conversation {conversation_id} (created={created})"
-        )
-        return conversation_id
-    except Exception as e:
-        logger.warning(
-            f"[CONVERSATIONS] Failed to get conversation, falling back to agents API: {e}"
-        )
-        return None
-
+from src.matrix.agent_router import (  # noqa: E402, F401
+    get_agent_from_room_members,
+    _resolve_agent_for_room,
+    _resolve_conversation_id,
+)
 
 # ── Gateway Client ───────────────────────────────────────────────────
 
@@ -673,114 +522,3 @@ async def send_to_letta_api(
             await typing_manager.stop()
 
 
-# ── Agent Mail (Reverse Bridge) ──────────────────────────────────────
-
-async def forward_to_agent_mail(
-    sender_code_name: str,
-    recipient_code_name: str,
-    subject: str,
-    body_md: str,
-    thread_id: Optional[str],
-    original_message_id: Optional[int],
-    logger: logging.Logger,
-) -> bool:
-    """
-    Forward a Matrix response back to Agent Mail (reverse bridge).
-
-    Called when an agent responds to a message that originated
-    from Agent Mail, allowing the original sender to see the response.
-    """
-    if not AGENT_MAIL_URL:
-        logger.warning(
-            "[REVERSE-BRIDGE] AGENT_MAIL_URL not configured, skipping forward"
-        )
-        return False
-
-    try:
-        if original_message_id:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": f"reverse-bridge-{time.time()}",
-                "method": "tools/call",
-                "params": {
-                    "name": "reply_message",
-                    "arguments": {
-                        "project_key": "/opt/stacks/matrix-synapse-deployment",
-                        "message_id": original_message_id,
-                        "sender_name": sender_code_name,
-                        "body_md": body_md,
-                        "to": [recipient_code_name],
-                    },
-                },
-            }
-        else:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": f"reverse-bridge-{time.time()}",
-                "method": "tools/call",
-                "params": {
-                    "name": "send_message",
-                    "arguments": {
-                        "project_key": "/opt/stacks/matrix-synapse-deployment",
-                        "sender_name": sender_code_name,
-                        "to": [recipient_code_name],
-                        "subject": subject,
-                        "body_md": body_md,
-                        "thread_id": thread_id,
-                    },
-                },
-            }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                AGENT_MAIL_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    logger.info(
-                        f"[REVERSE-BRIDGE] Forwarded response from {sender_code_name} to {recipient_code_name}"
-                    )
-                    logger.debug(f"[REVERSE-BRIDGE] Response: {result}")
-                    return True
-                else:
-                    response_text = await resp.text()
-                    logger.warning(
-                        f"[REVERSE-BRIDGE] Failed to forward: {resp.status} - {response_text[:200]}"
-                    )
-                    return False
-
-    except Exception as e:
-        logger.error(
-            f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {e}", exc_info=True
-        )
-        return False
-
-
-def load_agent_mail_mappings(
-    logger: logging.Logger,
-) -> Dict[str, Dict[str, Any]]:
-    """Load Agent Mail mappings to get code names for agents."""
-    mappings_file = "/app/data/agent_mail_mappings.json"
-    try:
-        if os.path.exists(mappings_file):
-            with open(mappings_file, "r") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.warning(
-            f"[REVERSE-BRIDGE] Could not load agent mail mappings: {e}"
-        )
-    return {}
-
-
-def get_agent_code_name(
-    agent_id: str, logger: logging.Logger
-) -> Optional[str]:
-    """Get the Agent Mail code name for a Letta agent ID."""
-    mappings = load_agent_mail_mappings(logger)
-    agent_info = mappings.get(agent_id)
-    if agent_info:
-        return agent_info.get("agent_mail_name")
-    return None

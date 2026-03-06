@@ -5,7 +5,6 @@ Integration tests for room membership requirements.
 These tests verify that all agent rooms have the required members:
 - @admin:matrix.oculair.ca
 - @letta:matrix.oculair.ca  
-- @agent_mail_bridge:matrix.oculair.ca
 
 Run with: pytest tests/integration/test_room_membership.py -v
 
@@ -36,7 +35,6 @@ DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "letta")
 REQUIRED_MEMBERS = [
     "@admin:matrix.oculair.ca",
     "@letta:matrix.oculair.ca",
-    "@agent_mail_bridge:matrix.oculair.ca",
 ]
 
 
@@ -250,35 +248,6 @@ async def test_specific_agent_room_membership(matrix_client):
 @pytest.mark.requires_matrix
 @pytest.mark.requires_db
 @pytest.mark.asyncio
-async def test_agent_mail_bridge_in_all_rooms(matrix_client):
-    """
-    Specifically verify @agent_mail_bridge is in all rooms.
-    
-    This is critical for inter-agent communication.
-    """
-    try:
-        agent_rooms = get_all_agent_rooms()
-    except Exception as e:
-        pytest.skip(f"Could not connect to database: {e}")
-    
-    missing_bridge = []
-    
-    for agent in agent_rooms:
-        members = await matrix_client.get_room_members(agent["room_id"])
-        if "@agent_mail_bridge:matrix.oculair.ca" not in members:
-            missing_bridge.append(agent["agent_name"])
-    
-    if missing_bridge:
-        pytest.fail(
-            f"@agent_mail_bridge missing from {len(missing_bridge)} rooms: "
-            f"{', '.join(missing_bridge[:10])}{'...' if len(missing_bridge) > 10 else ''}"
-        )
-
-
-@pytest.mark.slow
-@pytest.mark.requires_matrix
-@pytest.mark.requires_db
-@pytest.mark.asyncio
 async def test_letta_bot_in_all_rooms(matrix_client):
     """
     Verify @letta is in all agent rooms.
@@ -341,7 +310,7 @@ async def test_room_member_count_reasonable(matrix_client):
     """
     Verify rooms have a reasonable number of members.
     
-    Rooms should have at least the agent + required members (4 minimum).
+    Rooms should have at least the agent + required members (3 minimum).
     Unusually high member counts might indicate an issue.
     """
     try:
@@ -355,8 +324,7 @@ async def test_room_member_count_reasonable(matrix_client):
         members = await matrix_client.get_room_members(agent["room_id"])
         member_count = len(members)
         
-        # Minimum: agent + admin + letta + agent_mail_bridge = 4
-        if member_count < 4:
+        if member_count < 3:
             issues.append(f"{agent['agent_name']}: only {member_count} members")
         
         # Maximum sanity check - more than 50 members is suspicious
@@ -426,7 +394,6 @@ async def test_new_room_would_have_required_members():
         
         assert "@admin:matrix.oculair.ca" in required, "admin should be required"
         assert "@letta:matrix.oculair.ca" in required, "letta should be required"
-        assert "@agent_mail_bridge:matrix.oculair.ca" in required, "agent_mail_bridge should be required"
         
     except ImportError as e:
         pytest.skip(f"Could not import room_manager: {e}")
@@ -437,8 +404,8 @@ async def test_service_user_password_generation():
     """
     Test that password generation functions exist and work correctly.
     """
+    old_dev_mode = None
     try:
-        import os
         import sys
         # Clear DEV_MODE that may leak from e2e tests (test_agent_provisioning.py)
         # DEV_MODE causes generate_password() to return "password" (8 chars)

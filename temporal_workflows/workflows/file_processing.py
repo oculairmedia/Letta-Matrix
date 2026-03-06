@@ -228,8 +228,9 @@ class FileProcessingWorkflow:
                         message=heads_up_msg,
                         room_id=input.room_id,
                         conversation_id=input.conversation_id or "",
+                        wait_for_result=False,  # Fire-and-forget: don't block pipeline
                     ),
-                    start_to_close_timeout=timedelta(seconds=60),
+                    start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=_NOTIFY_RETRY,
                 )
             except Exception as e:

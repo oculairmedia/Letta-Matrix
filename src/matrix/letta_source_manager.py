@@ -1,7 +1,9 @@
 import asyncio
 import functools
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+from src.core.retry import retry_async
 
 
 class FileUploadError(Exception):
@@ -43,26 +45,6 @@ class LettaSourceManager:
             _executor,
             functools.partial(func, *args, **kwargs),
         )
-
-    async def _retry_async(self, func: Callable[[], Awaitable[Any]], operation_name: str) -> Any:
-        last_exception: Optional[Exception] = None
-        for attempt in range(self.max_retries):
-            try:
-                return await func()
-            except Exception as e:
-                last_exception = e
-                if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2 ** attempt)
-                    self.logger.warning(
-                        f"{operation_name} failed (attempt {attempt + 1}/{self.max_retries}), "
-                        f"retrying in {delay}s: {e}"
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    self.logger.error(f"{operation_name} failed after {self.max_retries} attempts: {e}")
-        if last_exception is not None:
-            raise last_exception
-        raise FileUploadError(f"{operation_name} failed with no exception")
 
     def get_embedding_config(self, agent_id: Optional[str] = None) -> dict:
         if agent_id:
@@ -147,7 +129,13 @@ class LettaSourceManager:
                         self.logger.error(f"Failed to get folder after 409: {e2}")
                 raise FileUploadError(f"Failed to create folder: {e}")
 
-        folder_id = await self._retry_async(_do_get_or_create, "Get/create Letta folder")
+        folder_id = await retry_async(
+            _do_get_or_create,
+            operation_name="Get/create Letta folder",
+            max_attempts=self.max_retries,
+            base_delay=self.retry_delay,
+            logger=self.logger,
+        )
 
         async with self._cache_lock:
             self._source_cache[room_id] = folder_id
@@ -191,7 +179,13 @@ class LettaSourceManager:
             self.logger.info(f"File uploaded to Letta, file ID: {file_id}")
             return file_id
 
-        return await self._retry_async(_do_upload, "Letta file upload")
+        return await retry_async(
+            _do_upload,
+            operation_name="Letta file upload",
+            max_attempts=self.max_retries,
+            base_delay=self.retry_delay,
+            logger=self.logger,
+        )
 
     async def poll_file_status(self, source_id: str, file_id: str, timeout: int = 300, interval: int = 2) -> bool:
         if file_id == "sync-complete":

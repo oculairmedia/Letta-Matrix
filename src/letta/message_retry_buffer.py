@@ -95,6 +95,7 @@ class MessageRetryBuffer:
         """Retry stashed messages periodically until buffer is empty."""
         logger.info("[RETRY-BUFFER] Retry loop started")
 
+        # Uses buffer/TTL/probe-driven replay semantics, not fixed-attempt retries.
         while True:
             await asyncio.sleep(RETRY_INTERVAL_SECONDS)
 

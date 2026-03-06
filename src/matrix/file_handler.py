@@ -40,6 +40,7 @@ from src.matrix.document_parser import (
 )
 from src.matrix.formatter import wrap_opencode_routing
 from src.matrix.letta_source_manager import LettaSourceManager  # pyright: ignore[reportMissingImports]
+from src.core.retry import retry_async
 
 # Import Letta SDK
 from letta_client import Letta
@@ -193,39 +194,6 @@ class LettaFileHandler:
         self._status_summary = None
         return ids, summary
 
-    async def _retry_async(self, func: Callable[[], Awaitable[Any]], operation_name: str) -> Any:
-        """
-        Retry an async operation with exponential backoff
-        
-        Args:
-            func: Async function to retry
-            operation_name: Name of operation for logging
-            
-        Returns:
-            Result of the function
-            
-        Raises:
-            Last exception if all retries fail
-        """
-        last_exception: Optional[Exception] = None
-        for attempt in range(self.max_retries):
-            try:
-                return await func()
-            except Exception as e:
-                last_exception = e
-                if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2 ** attempt)
-                    logger.warning(
-                        f"{operation_name} failed (attempt {attempt + 1}/{self.max_retries}), "
-                        f"retrying in {delay}s: {e}"
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(f"{operation_name} failed after {self.max_retries} attempts: {e}")
-        if last_exception is not None:
-            raise last_exception
-        raise FileUploadError(f"{operation_name} failed with no exception")
-        
     async def handle_file_event(self, event: Event, room_id: str, agent_id: Optional[str] = None) -> Union[bool, list, str, None]:
         """
         Handle a file upload event from Matrix
@@ -644,7 +612,13 @@ class LettaFileHandler:
                     }]
                 )
             
-            response = await self._retry_async(_do_send, "Multimodal message send")
+            response = await retry_async(
+                _do_send,
+                operation_name="Multimodal message send",
+                max_attempts=self.max_retries,
+                base_delay=self.retry_delay,
+                logger=logger,
+            )
             logger.debug(f"Multimodal message response: {type(response)}")
             return response
             

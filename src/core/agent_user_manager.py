@@ -8,23 +8,13 @@ import os
 import time
 import aiohttp
 import random
-import hashlib
-import io
 from typing import Dict, List, Optional, Set
 
+from .avatar_service import AvatarService
 from .space_manager import MatrixSpaceManager
 from .user_manager import MatrixUserManager
 from .room_manager import MatrixRoomManager
 from .types import AgentUserMapping
-
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
-    Image = None  # type: ignore
-    ImageDraw = None  # type: ignore
-    ImageFont = None  # type: ignore
 
 
 logger = logging.getLogger("matrix_client.agent_user_manager")
@@ -67,6 +57,7 @@ class AgentUserManager:
 
     def __init__(self, config):
         self.config = config
+        self.logger = logger
         self.matrix_api_url = config.matrix_api_url if hasattr(config, 'matrix_api_url') else "http://matrix-api:8000"
         self.homeserver_url = config.homeserver_url
         self.letta_token = config.letta_token
@@ -75,6 +66,7 @@ class AgentUserManager:
         # Configure data directory - use env var or default to /app/data
         self.data_dir = os.getenv("MATRIX_DATA_DIR", "/app/data")
         self.mappings: Dict[str, AgentUserMapping] = {}
+        self._removed_agents_last_sync: Set[str] = set()
         # Note: admin_token is now a property that proxies to user_manager.admin_token
 
         # Matrix admin credentials - try to use a dedicated admin account
@@ -112,6 +104,10 @@ class AgentUserManager:
             get_admin_token_callback=self.get_admin_token,
             save_mappings_callback=self.save_mappings
         )
+
+        self._avatar_service = AvatarService(self.config, self.logger)
+        self._avatar_service.user_manager = self.user_manager
+        self._avatar_service.mappings = self.mappings
 
     @property
     def admin_token(self) -> Optional[str]:
@@ -202,7 +198,7 @@ class AgentUserManager:
             # Database is the single source of truth - no JSON fallback
             logger.warning("Failed to save mappings. Changes will be lost if not retried.")
 
-    async def get_letta_agents(self) -> List[dict]:
+    async def get_letta_agents(self) -> Optional[List[dict]]:
         """Get all Letta agents using the Letta SDK with pagination support"""
         try:
             from src.letta.client import get_letta_client, LettaConfig
@@ -249,8 +245,6 @@ class AgentUserManager:
 
         except Exception as e:
             logger.error(f"Error getting Letta agents via SDK: {e}", exc_info=True)
-            # Return None to signal failure — callers MUST distinguish
-            # "0 agents exist" (empty list) from "API call failed" (None).
             return None
     async def get_admin_token(self) -> Optional[str]:
         """Get an admin access token - delegates to user_manager"""
@@ -303,12 +297,8 @@ class AgentUserManager:
 
     async def sync_agents_to_users(self):
         """Main function to sync Letta agents to Matrix users"""
-        import time
         sync_start = time.time()
-        
         logger.info("Starting agent-to-user sync process")
-        
-        # Track metrics for this sync cycle
         sync_metrics = {
             "cache_hits": 0,
             "api_checks": 0,
@@ -316,173 +306,161 @@ class AgentUserManager:
             "rooms_processed": 0
         }
 
-        # Ensure core users exist before syncing agents and rooms
-        await self.ensure_core_users_exist()
-
-
-        # Load existing mappings and space config
-        await self.load_existing_mappings()
-        await self.space_manager.load_space_config()
-
-        # Ensure the Letta Agents space exists
-        space_just_created = False
-        if not self.space_manager.get_space_id():
-            logger.info("Creating Letta Agents space")
-            space_id = await self.space_manager.create_letta_agents_space()
-            if space_id:
-                logger.info(f"Successfully created Letta Agents space: {space_id}")
-                space_just_created = True
-            else:
-                logger.warning("Failed to create Letta Agents space, rooms will not be organized")
-        else:
-            # Validate existing space
-            existing_space_id = self.space_manager.get_space_id()
-            if existing_space_id:
-                logger.info(f"Validating existing Letta Agents space: {existing_space_id}")
-                
-                space_valid = await self.space_manager.check_room_exists(existing_space_id)
-                if not space_valid:
-                    logger.warning(f"Space {existing_space_id} is invalid, will recreate")
-                    
-                    # Clear the invalid space ID but don't save yet
-                    old_space_id = existing_space_id
-                    self.space_manager.space_id = None
-                    
-                    # Create a new space
-                    space_id = await self.space_manager.create_letta_agents_space()
-                    if space_id:
-                        logger.info(f"Successfully recreated Letta Agents space: {space_id}")
-                        
-                        # Validate the new space works before proceeding
-                        new_space_valid = await self.space_manager.check_room_exists(space_id)
-                        if new_space_valid:
-                            logger.info(f"New space {space_id} validated successfully")
-                            space_just_created = True
-                        else:
-                            logger.error(f"New space {space_id} failed validation, keeping old space config")
-                            # Restore old space ID to prevent recreation loop
-                            self.space_manager.space_id = old_space_id
-                            await self.space_manager.save_space_config()
-                    else:
-                        logger.error("Failed to recreate Letta Agents space")
-                        # Restore old space ID to prevent recreation loop
-                        self.space_manager.space_id = old_space_id
-                        await self.space_manager.save_space_config()
-                else:
-                    logger.info(f"Using existing Letta Agents space: {existing_space_id}")
-
-        # Get current Letta agents
+        space_just_created = await self._ensure_space_ready()
         agents = await self.get_letta_agents()
         if agents is None:
             logger.error("Letta agent fetch failed — aborting sync to prevent data loss")
             return
-
         current_agent_ids = {agent["id"] for agent in agents}
         existing_agent_ids = set(self.mappings.keys())
+        existing_agents = [agent for agent in agents if agent["id"] in existing_agent_ids]
+        await self._provision_new_agents(agents, existing_agent_ids)
+        await self._validate_existing_agents(existing_agents)
+        await self._set_missing_avatars(existing_agents)
+        await self._cleanup_removed_agents(current_agent_ids, existing_agent_ids)
+        await self.save_mappings()
+        if space_just_created and self.space_manager.get_space_id():
+            logger.info("Migrating existing agent rooms to the new space")
+            migrated = await self.space_manager.migrate_existing_rooms_to_space(self.mappings)
+            logger.info(f"Migrated {migrated} rooms to space")
+        sync_duration = time.time() - sync_start
+        logger.info(f"Sync complete. Total mappings: {len(self.mappings)}, Duration: {sync_duration:.2f}s")
+        logger.info(f"Sync metrics - Cache hits: {sync_metrics['cache_hits']}, API checks: {sync_metrics['api_checks']}, Login attempts: {sync_metrics['login_attempts']}, Rooms: {sync_metrics['rooms_processed']}")
 
-        # Create users for new agents
-        new_agents = current_agent_ids - existing_agent_ids
-        for agent in agents:
+        await self._sync_matrix_memory()
+
+    async def _ensure_space_ready(self) -> bool:
+        await self.ensure_core_users_exist()
+        await self.load_existing_mappings()
+        await self.space_manager.load_space_config()
+
+        space_just_created = False
+        existing_space_id = self.space_manager.get_space_id()
+        if not existing_space_id:
+            logger.info("Creating Letta Agents space")
+            space_id = await self.space_manager.create_letta_agents_space()
+            if space_id:
+                logger.info(f"Successfully created Letta Agents space: {space_id}")
+                return True
+            logger.warning("Failed to create Letta Agents space, rooms will not be organized")
+            return False
+
+        logger.info(f"Validating existing Letta Agents space: {existing_space_id}")
+        space_valid = await self.space_manager.check_room_exists(existing_space_id)
+        if space_valid:
+            logger.info(f"Using existing Letta Agents space: {existing_space_id}")
+            return False
+
+        logger.warning(f"Space {existing_space_id} is invalid, will recreate")
+        old_space_id = existing_space_id
+        self.space_manager.space_id = None
+
+        space_id = await self.space_manager.create_letta_agents_space()
+        if space_id:
+            logger.info(f"Successfully recreated Letta Agents space: {space_id}")
+            new_space_valid = await self.space_manager.check_room_exists(space_id)
+            if new_space_valid:
+                logger.info(f"New space {space_id} validated successfully")
+                space_just_created = True
+            else:
+                logger.error(f"New space {space_id} failed validation, keeping old space config")
+                self.space_manager.space_id = old_space_id
+                await self.space_manager.save_space_config()
+        else:
+            logger.error("Failed to recreate Letta Agents space")
+            self.space_manager.space_id = old_space_id
+            await self.space_manager.save_space_config()
+
+        return space_just_created
+
+    async def _provision_new_agents(self, letta_agents, existing_ids):
+        new_agents = {agent["id"] for agent in letta_agents} - existing_ids
+        for agent in letta_agents:
             if agent["id"] in new_agents:
                 await self.create_user_for_agent(agent)
 
-        # Also check existing agents that haven't been successfully created or don't have rooms
-        logger.info(f"Checking {len(existing_agent_ids)} existing agents for failed creation status or missing rooms")
-        for agent in agents:
-            if agent["id"] in existing_agent_ids:
-                mapping = self.mappings.get(agent["id"])
-                logger.debug(f"Agent {agent['name']} - created: {mapping.created if mapping else 'No mapping'}, room: {mapping.room_created if mapping else 'No room'}")
-
-                if mapping:
-                    # Check if agent name has changed
-                    if mapping.agent_name != agent['name']:
-                        logger.info(f"Agent name changed from '{mapping.agent_name}' to '{agent['name']}'")
-
-                        # Update the stored agent name
-                        old_name = mapping.agent_name
-                        mapping.agent_name = agent['name']
-
-                        # Update room name if room exists
-                        if mapping.room_id and mapping.room_created:
-                            logger.info(f"Updating room name for {mapping.room_id}")
-                            success = await self.update_room_name(mapping.room_id, agent['name'])
-                            if success:
-                                logger.debug(f"Successfully updated room name to '{agent['name']}'")
-                            else:
-                                logger.warning(f"Failed to update room name for {mapping.room_id}")
-
-                        # Update display name for the Matrix user
-                        if mapping.matrix_user_id and mapping.matrix_password:
-                            logger.info(f"Updating display name for {mapping.matrix_user_id}")
-                            display_success = await self.update_display_name(
-                                mapping.matrix_user_id, agent['name'], mapping.matrix_password
-                            )
-                            if display_success:
-                                logger.debug(f"Successfully updated display name for {mapping.matrix_user_id}")
-                            else:
-                                logger.warning(f"Failed to update display name for {mapping.matrix_user_id}")
-
-                    # Retry user creation if failed
-                    if not mapping.created:
-                        logger.info(f"Retrying creation for existing agent {agent['name']} with failed status")
-                        await self.create_user_for_agent(agent)
-                    # Create room if user exists but room doesn't
-                    elif mapping.created and not mapping.room_created:
-                        logger.info(f"Creating room for existing agent {agent['name']}")
+    async def _validate_existing_agents(self, existing_mappings):
+        logger.info(f"Checking {len(existing_mappings)} existing agents for failed creation status or missing rooms")
+        for agent in existing_mappings:
+            mapping = self.mappings.get(agent["id"])
+            logger.debug(f"Agent {agent['name']} - created: {mapping.created if mapping else 'No mapping'}, room: {mapping.room_created if mapping else 'No room'}")
+            if not mapping:
+                continue
+            if mapping.agent_name != agent["name"]:
+                logger.info(f"Agent name changed from '{mapping.agent_name}' to '{agent['name']}'")
+                mapping.agent_name = agent["name"]
+                if mapping.room_id and mapping.room_created:
+                    logger.info(f"Updating room name for {mapping.room_id}")
+                    success = await self.update_room_name(mapping.room_id, agent["name"])
+                    if not success:
+                        logger.warning(f"Failed to update room name for {mapping.room_id}")
+                if mapping.matrix_user_id and mapping.matrix_password:
+                    logger.info(f"Updating display name for {mapping.matrix_user_id}")
+                    display_success = await self.update_display_name(mapping.matrix_user_id, agent["name"], mapping.matrix_password)
+                    if not display_success:
+                        logger.warning(f"Failed to update display name for {mapping.matrix_user_id}")
+            if not mapping.created:
+                logger.info(f"Retrying creation for existing agent {agent['name']} with failed status")
+                await self.create_user_for_agent(agent)
+                continue
+            if not mapping.room_created:
+                logger.info(f"Creating room for existing agent {agent['name']}")
+                await self.create_or_update_agent_room(agent["id"])
+                continue
+            if not mapping.room_id:
+                continue
+            skip_invitation_acceptance = False
+            try:
+                actual_room_id = await self.discover_agent_room(mapping.matrix_user_id)
+                if actual_room_id and actual_room_id != mapping.room_id:
+                    logger.warning(f"🔄 Room drift detected for {agent['name']}!")
+                    logger.warning(f"  Stored room:  {mapping.room_id}")
+                    logger.warning(f"  Actual room:  {actual_room_id}")
+                    mapping.room_id = actual_room_id
+                    logger.info(f"✅ Fixed room mapping for {agent['name']}")
+                if not actual_room_id:
+                    room_exists = await self.space_manager.check_room_exists(mapping.room_id)
+                    if not room_exists:
+                        logger.warning(f"Room {mapping.room_id} for {agent['name']} is invalid, recreating")
+                        mapping.room_id = None
+                        mapping.room_created = False
                         await self.create_or_update_agent_room(agent["id"])
-                    # If room exists, validate it and check for room drift
-                    elif mapping.created and mapping.room_created and mapping.room_id:
-                        # Try to discover the actual room the agent is in
-                        try:
-                            actual_room_id = await self.discover_agent_room(mapping.matrix_user_id)
-                            
-                            if actual_room_id and actual_room_id != mapping.room_id:
-                                logger.warning(f"🔄 Room drift detected for {agent['name']}!")
-                                logger.warning(f"  Stored room:  {mapping.room_id}")
-                                logger.warning(f"  Actual room:  {actual_room_id}")
-                                mapping.room_id = actual_room_id
-                                logger.info(f"✅ Fixed room mapping for {agent['name']}")
-                            elif not actual_room_id:
-                                # Could not discover room - fall back to existence check
-                                room_exists = await self.space_manager.check_room_exists(mapping.room_id)
-                                if not room_exists:
-                                    logger.warning(f"Room {mapping.room_id} for {agent['name']} is invalid, recreating")
-                                    mapping.room_id = None
-                                    mapping.room_created = False
-                                    # Recreate the room
-                                    await self.create_or_update_agent_room(agent["id"])
-                                    continue  # Skip invitation acceptance below
-                        except Exception as e:
-                            logger.error(f"Error checking room drift for {agent['name']}: {e}")
-                        
-                        # Ensure invitations are accepted and admin has access
-                        if mapping.room_id:
-                            logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
-                            await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
-                            
-                            # Ensure all required members are in the room (admin, letta, agent_mail_bridge)
-                            member_results = await self.room_manager.ensure_required_members(mapping.room_id, agent['id'])
-                            for user_id, status in member_results.items():
-                                if status == "invited":
-                                    logger.info(f"✅ Invited {user_id} to {agent['name']}'s room")
-                                elif status == "failed":
-                                    logger.warning(f"⚠️  Failed to ensure {user_id} in {agent['name']}'s room")
-                            
-                            # Set avatar for agent if not already set (fire-and-forget)
-                            asyncio.create_task(self.set_default_avatar_for_agent(agent['name'], mapping.matrix_user_id))
-        # --- Agent lifecycle: soft-delete removed agents, cleanup after grace period ---
-        removed_agents = existing_agent_ids - current_agent_ids
+                        skip_invitation_acceptance = True
+            except Exception as e:
+                logger.error(f"Error checking room drift for {agent['name']}: {e}")
+            if skip_invitation_acceptance or not mapping.room_id:
+                continue
+            logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
+            await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
+            member_results = await self.room_manager.ensure_required_members(mapping.room_id, agent["id"])
+            for user_id, status in member_results.items():
+                if status == "invited":
+                    logger.info(f"✅ Invited {user_id} to {agent['name']}'s room")
+                elif status == "failed":
+                    logger.warning(f"⚠️  Failed to ensure {user_id} in {agent['name']}'s room")
+
+    async def _set_missing_avatars(self, existing_mappings):
+        for agent in existing_mappings:
+            mapping = self.mappings.get(agent["id"])
+            if not mapping:
+                continue
+            if not (mapping.created and mapping.room_created and mapping.room_id and mapping.matrix_user_id):
+                continue
+            asyncio.create_task(
+                self.set_default_avatar_for_agent(agent["name"], mapping.matrix_user_id)
+            )
+
+    async def _cleanup_removed_agents(self, letta_agent_ids, existing_mappings):
+        removed_agents = existing_mappings - letta_agent_ids
         if removed_agents:
-            # Safety guard: if the Letta API returned 0 agents (likely an API error
-            # or import failure), do NOT mass-delete all existing mappings.
-            # Only proceed with soft-delete if at least some agents were returned.
-            if not current_agent_ids:
+            if not letta_agent_ids:
                 logger.warning(
-                    f"Letta API returned 0 agents but {len(existing_agent_ids)} exist in DB — "
+                    f"Letta API returned 0 agents but {len(existing_mappings)} exist in DB — "
                     f"skipping soft-delete to prevent mass removal (likely API error)"
                 )
             else:
                 from src.models.agent_mapping import AgentMappingDB
+
                 db = AgentMappingDB()
                 for agent_id in removed_agents:
                     mapping = self.mappings.get(agent_id)
@@ -491,37 +469,25 @@ class AgentUserManager:
                         db.soft_delete(agent_id)
                         mapping.removed_at = "pending"
 
-        for agent_id in current_agent_ids:
+        for agent_id in letta_agent_ids:
             mapping = self.mappings.get(agent_id)
             if mapping and mapping.removed_at:
                 logger.info(f"Agent {agent_id} reappeared — cancelling pending removal")
                 from src.models.agent_mapping import AgentMappingDB
+
                 db = AgentMappingDB()
                 db.clear_removed(agent_id)
                 mapping.removed_at = None
 
         await self._cleanup_expired_agents()
+        self._removed_agents_last_sync = removed_agents
+        return removed_agents
 
-        # Save updated mappings
-        await self.save_mappings()
-
-        # If space was just created, migrate all existing rooms to it
-        if space_just_created and self.space_manager.get_space_id():
-            logger.info("Migrating existing agent rooms to the new space")
-            migrated = await self.space_manager.migrate_existing_rooms_to_space(self.mappings)
-            logger.info(f"Migrated {migrated} rooms to space")
-
-        # Temporarily disabled to prevent blocking message processing
-        # TODO: Fix permission issues before re-enabling
-        # await self.invite_admin_to_existing_rooms()
-
-        sync_duration = time.time() - sync_start
-        logger.info(f"Sync complete. Total mappings: {len(self.mappings)}, Duration: {sync_duration:.2f}s")
-        logger.info(f"Sync metrics - Cache hits: {sync_metrics['cache_hits']}, API checks: {sync_metrics['api_checks']}, Login attempts: {sync_metrics['login_attempts']}, Rooms: {sync_metrics['rooms_processed']}")
-        
+    async def _sync_matrix_memory(self):
         try:
             from src.letta.matrix_memory import sync_matrix_block_to_agents
-            agent_ids = [aid for aid in self.mappings.keys() if aid not in removed_agents]
+
+            agent_ids = [aid for aid in self.mappings.keys() if aid not in self._removed_agents_last_sync]
             if agent_ids:
                 result = await sync_matrix_block_to_agents(agent_ids)
                 logger.info(f"[MatrixMemory] Block sync: {result.get('synced', 0)} agents updated")
@@ -792,175 +758,10 @@ class AgentUserManager:
         return await self.room_manager.auto_accept_invitations_with_tracking(room_id, mapping)
 
     async def set_default_avatar_for_agent(self, agent_name: str, matrix_user_id: str) -> bool:
-        """Generate and set a default avatar for an agent
-        
-        Creates a colored circle with the agent's first letter, uploads it,
-        and sets it as the agent's avatar. Only sets if user doesn't have one.
-        
-        Args:
-            agent_name: Agent display name (used for first letter and color hash)
-            matrix_user_id: Full Matrix user ID (@user:domain)
-            
-        Returns:
-            True if avatar was set or already exists, False on error
-        """
-        if not HAS_PIL:
-            logger.warning(f"Pillow not installed, skipping avatar generation for {agent_name}")
-            return False
-            
-        try:
-            # Check if user already has an avatar
-            try:
-                check_url = f"{self.homeserver_url}/_matrix/client/v3/profile/{matrix_user_id}/avatar_url"
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(check_url, timeout=DEFAULT_TIMEOUT) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            if data.get("avatar_url"):
-                                logger.debug(f"Agent {agent_name} already has avatar, skipping")
-                                return True
-            except Exception as e:
-                logger.debug(f"Could not check existing avatar for {agent_name}: {e}")
-                # Continue anyway - we'll try to set it
-            
-            # Get agent token by logging in
-            username = matrix_user_id.split(":")[0].replace("@", "")
-            mapping = None
-            for agent_id, m in self.mappings.items():
-                if m.matrix_user_id == matrix_user_id:
-                    mapping = m
-                    break
-            
-            if not mapping or not mapping.matrix_password:
-                logger.warning(f"No password found for agent {agent_name}, cannot set avatar")
-                return False
-            
-            # Login to get agent's token
-            login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
-            login_data = {
-                "type": "m.login.password",
-                "user": username,
-                "password": mapping.matrix_password
-            }
-            
-            agent_token = None
-            async with aiohttp.ClientSession() as session:
-                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        login_result = await response.json()
-                        agent_token = login_result.get("access_token")
-                    else:
-                        logger.warning(f"Failed to login as {agent_name} for avatar upload: {response.status}")
-                        return False
-            
-            if not agent_token:
-                logger.warning(f"No token obtained for {agent_name}")
-                return False
-            
-            # Generate avatar image
-            avatar_bytes = self._generate_avatar_image(agent_name)
-            if not avatar_bytes:
-                logger.warning(f"Failed to generate avatar for {agent_name}")
-                return False
-            
-            # Upload avatar
-            filename = f"{username}_avatar.png"
-            avatar_url = await self.user_manager.upload_avatar(
-                avatar_bytes,
-                filename,
-                "image/png",
-                agent_token
-            )
-            
-            if not avatar_url:
-                logger.warning(f"Failed to upload avatar for {agent_name}")
-                return False
-            
-            # Set avatar
-            success = await self.user_manager.set_user_avatar(
-                matrix_user_id,
-                avatar_url,
-                agent_token
-            )
-            
-            if success:
-                logger.info(f"Successfully set avatar for agent {agent_name}")
-            else:
-                logger.warning(f"Failed to set avatar for agent {agent_name}")
-            
-            return success
-            
-        except Exception as e:
-            logger.error(f"Error setting avatar for {agent_name}: {type(e).__name__}: {e}", exc_info=True)
-            return False
+        return await self._avatar_service.set_default_avatar_for_agent(agent_name, matrix_user_id)
     
     def _generate_avatar_image(self, agent_name: str, size: int = 128) -> Optional[bytes]:
-        """Generate a colored circle avatar with agent's first letter
-        
-        Args:
-            agent_name: Agent name (first letter used)
-            size: Image size in pixels (default 128x128)
-            
-        Returns:
-            PNG image bytes or None on error
-        """
-        if not HAS_PIL or Image is None or ImageDraw is None or ImageFont is None:
-            return None
-            return None
-            
-        try:
-            # Get first letter
-            letter = agent_name[0].upper() if agent_name else "A"
-            
-            # Generate color from hash of agent name
-            hash_obj = hashlib.md5(agent_name.encode())
-            hash_hex = hash_obj.hexdigest()
-            # Use first 6 chars of hash as RGB
-            r = int(hash_hex[0:2], 16)
-            g = int(hash_hex[2:4], 16)
-            b = int(hash_hex[4:6], 16)
-            
-            # Create image with colored background
-            img = Image.new('RGB', (size, size), color=(r, g, b))  # type: ignore
-            draw = ImageDraw.Draw(img)  # type: ignore
-            draw = ImageDraw.Draw(img)
-            
-            # Draw white circle
-            margin = size // 8
-            draw.ellipse(
-                [(margin, margin), (size - margin, size - margin)],
-                fill=(255, 255, 255)
-            )
-            
-            # Draw letter in center
-            # Try to use a reasonable font size
-            font_size = size // 2
-            try:
-                # Try to load a system font
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)  # type: ignore
-            except:
-                # Fallback to default font
-                font = ImageFont.load_default()  # type: ignore
-            
-            # Get text bounding box to center it
-            bbox = draw.textbbox((0, 0), letter, font=font)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            x = (size - text_width) // 2
-            y = (size - text_height) // 2
-            
-            # Draw text in dark color
-            draw.text((x, y), letter, fill=(50, 50, 50), font=font)
-            
-            # Convert to PNG bytes
-            img_bytes = io.BytesIO()
-            img.save(img_bytes, format='PNG')
-            img_bytes.seek(0)
-            return img_bytes.getvalue()
-            
-        except Exception as e:
-            logger.error(f"Error generating avatar image for {agent_name}: {e}")
-            return None
+        return self._avatar_service._generate_avatar_image(agent_name, size)
 
     # Removed problematic invitation functions that caused endless loops
     # The agent-based invitation system in room creation is sufficient
@@ -989,6 +790,15 @@ async def check_provisioning_health(config) -> dict:
     try:
         # Get all Letta agents
         agents = await manager.get_letta_agents()
+        if agents is None:
+            return {
+                "total_agents": 0,
+                "agents_with_rooms": 0,
+                "agents_missing_rooms": [],
+                "missing_count": 0,
+                "status": "unhealthy",
+                "error": "Failed to fetch agents from Letta API",
+            }
         total_agents = len(agents)
         
         # Load current mappings

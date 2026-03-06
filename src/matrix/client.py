@@ -58,7 +58,6 @@ from src.matrix.letta_bridge import (
     send_to_letta_api,
     send_to_letta_api_streaming,
     retry_with_backoff,
-    get_agent_from_room_members,
 )
 from src.matrix.message_processor import process_letta_message, MessageContext
 
@@ -228,294 +227,367 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
     except Exception as e:
         logger.error(f"Unexpected error in file callback: {e}", exc_info=True)
 
-async def message_callback(room, event, config: Config, logger: logging.Logger, client: Optional[AsyncClient] = None):
-    """Callback function for handling new text messages."""
-    if isinstance(event, RoomMessageText):
-        # Check for duplicate events via shared dedupe store
-        event_id = getattr(event, 'event_id', None)
-        if event_id and is_duplicate_event(event_id, logger):
-            return
-        
-        # Ignore messages from ourselves to prevent loops
-        if client and event.sender == client.user_id:
-            return
+class _MessageCallbackRouter:
+    def __init__(self, room, config: Config, logger: logging.Logger, client: Optional[AsyncClient]):
+        self.room = room
+        self.config = config
+        self.logger = logger
+        self.client = client
+        self.room_agent_mapping = None
+        self.sender_mapping = None
 
-        # Ignore historical messages imported from Letta (to prevent re-processing)
-        if hasattr(event, 'source') and isinstance(event.source, dict):
-            content = event.source.get("content", {})
+    def _should_skip_message(self, event, room_id) -> Optional[str]:
+        event_id = getattr(event, "event_id", None)
+        if event_id and is_duplicate_event(event_id, self.logger):
+            return "duplicate"
+
+        if self.client and event.sender == self.client.user_id:
+            return "self_message"
+
+        source = getattr(event, "source", None)
+        if isinstance(source, dict):
+            content = source.get("content", {})
             if content.get("m.letta_historical"):
-                logger.debug(f"Ignoring historical message from {event.sender}")
-                return
-            
-            # Ignore messages posted by the webhook bridge (prevent CLI→webhook→Matrix→Letta loop)
+                self.logger.debug(f"Ignoring historical message from {event.sender}")
+                return "historical"
             if content.get("m.bridge_originated"):
-                logger.debug(f"Ignoring bridge-originated message from {event.sender}")
-                return
-        
-        # Only process messages in rooms that have a dedicated agent mapping
-        # This prevents auto-forwarding content in relay/bridge rooms
-        from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_matrix_user, get_all_mappings, get_mapping_by_agent_id, get_portal_link_by_room_id
-        room_agent_user_id = None
-        room_has_agent = False
-        room_agent_id = None
-        room_agent_name = None
-        room_agent_mapping = None
-        
-        # Find the agent that owns this room
-        room_agent_mapping = get_mapping_by_room_id(room.room_id)
-        is_portal_room = False
-        if not room_agent_mapping:
-            # Check portal links — bridged rooms (WhatsApp, FB, Telegram, etc.)
-            portal_link = get_portal_link_by_room_id(room.room_id)
-            if portal_link:
-                room_agent_mapping = get_mapping_by_agent_id(portal_link['agent_id'])
-                is_portal_room = True
-                if room_agent_mapping:
-                    logger.info(f"Portal link match: room {room.room_id} → agent {portal_link['agent_id']}")
-        if room_agent_mapping:
-            room_agent_user_id = room_agent_mapping.get("matrix_user_id")
-            room_has_agent = True
-            room_agent_id = room_agent_mapping.get("agent_id")
-            room_agent_name = room_agent_mapping.get("agent_name", "Unknown")
+                self.logger.debug(f"Ignoring bridge-originated message from {event.sender}")
+                return "bridge_originated"
 
         disabled_agent_ids = [a.strip() for a in os.getenv("DISABLED_AGENT_IDS", "").split(",") if a.strip()]
-        if room_agent_id and room_agent_id in disabled_agent_ids:
-            logger.debug(f"Skipping disabled agent {room_agent_id} ({room_agent_name})")
-            return
+        if not disabled_agent_ids:
+            return None
 
-        # Check if sender is an agent (for @mention routing)
-        sender_mapping = get_mapping_by_matrix_user(event.sender)
-        
-        # Handle @mention-based routing for ALL agent messages (including own agent)
-        # This allows agents to forward messages to other agents via @mentions
-        if sender_mapping and sender_mapping.get("agent_id"):
+        from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_agent_id, get_portal_link_by_room_id
+
+        room_agent_mapping = get_mapping_by_room_id(room_id)
+        if not room_agent_mapping:
+            portal_link = get_portal_link_by_room_id(room_id)
+            if portal_link:
+                room_agent_mapping = get_mapping_by_agent_id(portal_link["agent_id"])
+
+        if not room_agent_mapping:
+            return None
+
+        room_agent_id = room_agent_mapping.get("agent_id")
+        room_agent_name = room_agent_mapping.get("agent_name", "Unknown")
+        if room_agent_id and room_agent_id in disabled_agent_ids:
+            self.logger.debug(f"Skipping disabled agent {room_agent_id} ({room_agent_name})")
+            return "disabled_agent"
+        return None
+
+    async def _resolve_agent_for_room(self, room_id, event) -> Optional[Tuple]:
+        from src.core.mapping_service import (
+            get_mapping_by_room_id,
+            get_mapping_by_matrix_user,
+            get_mapping_by_agent_id,
+            get_portal_link_by_room_id,
+        )
+
+        self.room_agent_mapping = get_mapping_by_room_id(room_id)
+        if not self.room_agent_mapping:
+            portal_link = get_portal_link_by_room_id(room_id)
+            if portal_link:
+                self.room_agent_mapping = get_mapping_by_agent_id(portal_link["agent_id"])
+                if self.room_agent_mapping:
+                    self.logger.info(f"Portal link match: room {room_id} → agent {portal_link['agent_id']}")
+
+        room_agent_user_id = self.room_agent_mapping.get("matrix_user_id") if self.room_agent_mapping else None
+        room_agent_id = self.room_agent_mapping.get("agent_id") if self.room_agent_mapping else None
+        room_agent_name = self.room_agent_mapping.get("agent_name", "Unknown") if self.room_agent_mapping else None
+
+        self.sender_mapping = get_mapping_by_matrix_user(event.sender)
+        if self.sender_mapping and self.sender_mapping.get("agent_id"):
             from src.matrix.mention_routing import handle_agent_mention_routing
+
             await handle_agent_mention_routing(
-                room=room,
+                room=self.room,
                 event=event,
                 sender_mxid=event.sender,
-                sender_agent_id=sender_mapping["agent_id"],
-                sender_agent_name=sender_mapping.get("agent_name", "Unknown"),
+                sender_agent_id=self.sender_mapping["agent_id"],
+                sender_agent_name=self.sender_mapping.get("agent_name", "Unknown"),
+                config=self.config,
+                logger=self.logger,
+                admin_client=self.client,
+            )
+
+        if room_agent_user_id and event.sender == room_agent_user_id:
+            self.logger.debug(f"Ignoring message from room's own agent {event.sender}")
+            return None
+
+        if self.sender_mapping and event.sender != room_agent_user_id:
+            self.logger.info(f"Received inter-agent message from {event.sender} in {self.room.display_name}")
+
+        if not self.room_agent_mapping:
+            self.logger.debug(f"No agent mapping for room {room_id}, skipping message processing (relay room)")
+            return None
+
+        return room_agent_id, room_agent_name, room_agent_user_id
+
+    def _extract_message_content(self, event) -> Tuple[str, Optional[str]]:
+        message_text = getattr(event, "body", "") or ""
+        reply_to_event_id = None
+        source = getattr(event, "source", None)
+        if not isinstance(source, dict):
+            return message_text, reply_to_event_id
+
+        content = source.get("content", {})
+        relates_to = content.get("m.relates_to", {})
+        in_reply_to = relates_to.get("m.in_reply_to", {})
+        if isinstance(in_reply_to, dict):
+            reply_to_event_id = in_reply_to.get("event_id")
+        if not reply_to_event_id:
+            reply_to_event_id = relates_to.get("event_id")
+        return message_text, reply_to_event_id
+
+    def _is_silent_message(self, sender, agent_mappings) -> bool:
+        if not sender or not agent_mappings:
+            return False
+        return any(sender == mapping.get("matrix_user_id") for mapping in agent_mappings if mapping)
+
+    def _apply_group_gating(self, event, room_agent_user_id, message_text):
+        if not self.config.matrix_groups:
+            return False, None
+
+        from src.matrix.group_gating import apply_group_gating
+
+        event_source = getattr(event, "source", None)
+        gating_result = apply_group_gating(
+            room_id=self.room.room_id,
+            sender_id=event.sender,
+            body=message_text,
+            event_source=event_source if isinstance(event_source, dict) else None,
+            bot_user_id=room_agent_user_id or (self.client.user_id if self.client else self.config.username),
+            groups_config=self.config.matrix_groups,
+        )
+        if gating_result is None:
+            self.logger.debug(f"[GROUP_GATING] Filtered message in {self.room.room_id} from {event.sender}")
+            return True, None
+
+        self.logger.info(
+            f"[GROUP_GATING] room={self.room.room_id} mode={gating_result.mode} "
+            f"mentioned={gating_result.was_mentioned} method={gating_result.method} "
+            f"silent={gating_result.silent}"
+        )
+        return False, gating_result
+
+
+async def _maybe_handle_fs_mode(room, event, config, logger, room_agent_id, room_agent_name) -> bool:
+    fs_state = get_letta_code_room_state(room.room_id)
+    fs_enabled = fs_state.get("enabled")
+    is_huly_agent = room_agent_name and (room_agent_name.startswith("Huly - ") or room_agent_name == "Huly-PM-Control")
+    fs_mode_agents = [a.strip() for a in os.getenv("FS_MODE_AGENTS", "Meridian").split(",") if a.strip()]
+    is_fs_mode_agent = room_agent_name and room_agent_name in fs_mode_agents
+    use_fs_mode = fs_enabled is True or (fs_enabled is None and (is_huly_agent or is_fs_mode_agent))
+    if not use_fs_mode:
+        return False
+
+    agent_id = room_agent_id
+    agent_name = room_agent_name or "Filesystem Agent"
+    if not agent_id or not agent_name:
+        from src.models.agent_mapping import AgentMappingDB
+
+        db = AgentMappingDB()
+        mapping = db.get_by_room_id(room.room_id)
+        if mapping:
+            agent_id = str(mapping.agent_id)
+            agent_name = str(mapping.agent_name)
+    if not agent_id:
+        await send_as_agent(room.room_id, "No agent configured for filesystem mode.", config, logger)
+        return True
+
+    project_dir = fs_state.get("projectDir")
+    if not project_dir:
+        project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger)
+
+    if not project_dir and is_huly_agent and agent_name:
+        try:
+            projects_response = await call_letta_code_api(config, "GET", "/api/projects")
+            projects = projects_response.get("projects", [])
+            search_name = agent_name[7:] if agent_name.startswith("Huly - ") else agent_name
+            for proj in projects:
+                if proj.get("name", "").lower() == search_name.lower():
+                    project_dir = proj.get("filesystem_path")
+                    if project_dir:
+                        update_letta_code_room_state(room.room_id, {"projectDir": project_dir})
+                        logger.info(f"[HULY-FS] Auto-linked {agent_name} to {project_dir}")
+                    break
+        except Exception as e:
+            logger.warning(f"[HULY-FS] Auto-link failed for {agent_name}: {e}")
+
+    if not project_dir:
+        await send_as_agent(room.room_id, "Filesystem mode enabled but no project linked. Run /fs-link.", config, logger)
+        return True
+
+    fs_prompt = event.body
+    fs_event_timestamp = getattr(event, "server_timestamp", None)
+    event_source_for_fs = getattr(event, "source", None)
+    if fs_event_timestamp is None and isinstance(event_source_for_fs, dict):
+        fs_event_timestamp = event_source_for_fs.get("origin_server_ts")
+    if fs_event_timestamp is None:
+        fs_event_timestamp = int(time.time() * 1000)
+
+    if event.sender.startswith("@oc_"):
+        opencode_mxid = event.sender
+        fs_prompt = matrix_formatter.format_opencode_envelope(
+            opencode_mxid=opencode_mxid,
+            text=event.body,
+            chat_id=room.room_id,
+            message_id=getattr(event, "event_id", None),
+            timestamp=fs_event_timestamp,
+        )
+        logger.info(f"[OPENCODE-FS] Detected message from OpenCode identity: {opencode_mxid}")
+    else:
+        room_display = room.display_name or room.room_id
+        fs_prompt = matrix_formatter.format_message_envelope(
+            channel="Matrix",
+            chat_id=room.room_id,
+            message_id=getattr(event, "event_id", None),
+            sender=event.sender,
+            sender_name=event.sender,
+            timestamp=fs_event_timestamp,
+            text=event.body,
+            is_group=True,
+            group_name=room_display,
+            is_mentioned=False,
+        )
+        logger.debug(f"[MATRIX-FS] Added context for sender {event.sender}")
+
+    if config.letta_code_enabled:
+        try:
+            await run_letta_code_task(
+                room_id=room.room_id,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                project_dir=project_dir,
+                prompt=fs_prompt,
                 config=config,
                 logger=logger,
-                admin_client=client,
+                send_fn=send_as_agent,
+                wrap_response=False,
             )
+            return True
+        except Exception as fs_err:
+            logger.warning(f"[FS-FALLBACK] letta-code task failed ({fs_err}), falling back to streaming Letta API")
+    else:
+        logger.info("[FS-SKIP] letta_code_enabled=false, using streaming Letta API for fs-mode room")
 
-        # Only ignore messages from THIS room's own agent (prevent self-loops)
-        # This comes AFTER @mention routing so agents can still forward via mentions
-        if room_agent_user_id and event.sender == room_agent_user_id:
-            logger.debug(f"Ignoring message from room's own agent {event.sender}")
-            return
+    return False
 
-        # Log inter-agent communication
-        if sender_mapping and event.sender != room_agent_user_id:
-            logger.info(f"Received inter-agent message from {event.sender} in {room.display_name}")
-        
-        # Skip processing for rooms without a dedicated agent (relay/bridge rooms)
-        # Letta can still write to these rooms via MCP tools, but won't auto-respond
-        if not room_has_agent:
-            logger.debug(f"No agent mapping for room {room.room_id}, skipping message processing (relay room)")
-            return
 
-        # ── GROUP GATING ─────────────────────────────────────────
-        gating_result = None
-        if config.matrix_groups:
-            from src.matrix.group_gating import apply_group_gating
-            _evt_source = getattr(event, 'source', None)
-            gating_result = apply_group_gating(
-                room_id=room.room_id,
-                sender_id=event.sender,
-                body=event.body,
-                event_source=_evt_source if isinstance(_evt_source, dict) else None,
-                bot_user_id=room_agent_user_id or (client.user_id if client else config.username),
-                groups_config=config.matrix_groups,
+async def _handle_stop_command(room, config, logger, room_agent_id, room_agent_name, message_text) -> bool:
+    if message_text.strip().lower() != "/stop":
+        return False
+
+    existing = _active_letta_tasks.get((room.room_id, room_agent_id or "unknown"))
+    stopped = False
+    if existing and not existing.done():
+        existing.cancel()
+        _active_letta_tasks.pop((room.room_id, room_agent_id or "unknown"), None)
+        stopped = True
+        logger.info(f"[STOP] Cancelled active task for {room_agent_name} in {room.room_id}")
+
+    if room_agent_id:
+        try:
+            from src.letta.ws_gateway_client import get_gateway_client
+
+            gw = await get_gateway_client(
+                gateway_url=config.letta_gateway_url,
+                api_key=config.letta_gateway_api_key,
             )
-            if gating_result is None:
-                logger.debug(f"[GROUP_GATING] Filtered message in {room.room_id} from {event.sender}")
-                return
-            logger.info(
-                f"[GROUP_GATING] room={room.room_id} mode={gating_result.mode} "
-                f"mentioned={gating_result.was_mentioned} method={gating_result.method} "
-                f"silent={gating_result.silent}"
-            )
-        # ── END GROUP GATING ─────────────────────────────────────
-
-        if await handle_letta_code_command(room, event, config, logger, send_fn=send_as_agent,
-                                            agent_mapping=room_agent_mapping, agent_id_hint=room_agent_id,
-                                            agent_name_hint=room_agent_name):
-            return
-
-        fs_state = get_letta_code_room_state(room.room_id)
-        fs_enabled = fs_state.get("enabled")
-        is_huly_agent = room_agent_name and (room_agent_name.startswith("Huly - ") or room_agent_name == "Huly-PM-Control")
-        # FS_MODE_AGENTS: comma-separated agent names that auto-enable fs-task mode (routes to Letta Code CLI)
-        fs_mode_agents = [a.strip() for a in os.getenv("FS_MODE_AGENTS", "Meridian").split(",") if a.strip()]
-        is_fs_mode_agent = room_agent_name and room_agent_name in fs_mode_agents
-        use_fs_mode = fs_enabled is True or (fs_enabled is None and (is_huly_agent or is_fs_mode_agent))
-        
-        if use_fs_mode:
-            agent_id = room_agent_id
-            agent_name = room_agent_name or "Filesystem Agent"
-            if not agent_id or not agent_name:
-                from src.models.agent_mapping import AgentMappingDB
-                db = AgentMappingDB()
-                mapping = db.get_by_room_id(room.room_id)
-                if mapping:
-                    agent_id = str(mapping.agent_id)
-                    agent_name = str(mapping.agent_name)
-            if not agent_id:
-                await send_as_agent(room.room_id, "No agent configured for filesystem mode.", config, logger)
-                return
-            project_dir = fs_state.get("projectDir")
-            if not project_dir:
-                project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger)
-            
-            if not project_dir and is_huly_agent and agent_name:
-                try:
-                    projects_response = await call_letta_code_api(config, 'GET', '/api/projects')
-                    projects = projects_response.get('projects', [])
-                    search_name = agent_name[7:] if agent_name.startswith("Huly - ") else agent_name
-                    for proj in projects:
-                        if proj.get('name', '').lower() == search_name.lower():
-                            project_dir = proj.get('filesystem_path')
-                            if project_dir:
-                                update_letta_code_room_state(room.room_id, {"projectDir": project_dir})
-                                logger.info(f"[HULY-FS] Auto-linked {agent_name} to {project_dir}")
-                            break
-                except Exception as e:
-                    logger.warning(f"[HULY-FS] Auto-link failed for {agent_name}: {e}")
-            
-            if not project_dir:
-                await send_as_agent(room.room_id, "Filesystem mode enabled but no project linked. Run /fs-link.", config, logger)
-                return
-            
-            # Add Matrix context or OpenCode metaprompt
-            fs_prompt = event.body
-            fs_event_timestamp = getattr(event, 'server_timestamp', None)
-            if fs_event_timestamp is None and hasattr(event, 'source') and isinstance(event.source, dict):
-                fs_event_timestamp = event.source.get('origin_server_ts')
-            if fs_event_timestamp is None:
-                fs_event_timestamp = int(time.time() * 1000)
-            if event.sender.startswith("@oc_"):
-                opencode_mxid = event.sender
-                fs_prompt = matrix_formatter.format_opencode_envelope(
-                    opencode_mxid=opencode_mxid,
-                    text=event.body,
-                    chat_id=room.room_id,
-                    message_id=getattr(event, 'event_id', None),
-                    timestamp=fs_event_timestamp,
-                )
-                logger.info(f"[OPENCODE-FS] Detected message from OpenCode identity: {opencode_mxid}")
-            else:
-                room_display = room.display_name or room.room_id
-                fs_prompt = matrix_formatter.format_message_envelope(
-                    channel="Matrix",
-                    chat_id=room.room_id,
-                    message_id=getattr(event, 'event_id', None),
-                    sender=event.sender,
-                    sender_name=event.sender,
-                    timestamp=fs_event_timestamp,
-                    text=event.body,
-                    is_group=True,
-                    group_name=room_display,
-                    is_mentioned=False,
-                )
-                logger.debug(f"[MATRIX-FS] Added context for sender {event.sender}")
-            
-            if config.letta_code_enabled:
-                try:
-                    await run_letta_code_task(
-                        room_id=room.room_id,
-                        agent_id=agent_id,
-                        agent_name=agent_name,
-                        project_dir=project_dir,
-                        prompt=fs_prompt,
-                        config=config,
-                        logger=logger,
-                        send_fn=send_as_agent,
-                        wrap_response=False,
-                    )
-                    return
-                except Exception as fs_err:
-                    logger.warning(f"[FS-FALLBACK] letta-code task failed ({fs_err}), falling back to streaming Letta API")
-                    # Fall through to the normal streaming path below
-            else:
-                logger.info(f"[FS-SKIP] letta_code_enabled=false, using streaming Letta API for fs-mode room")
-                # Fall through to the normal streaming path below
- 
-        logger.info("Received message from user", extra={
-            "sender": event.sender,
-            "room_name": room.display_name,
-            "room_id": room.room_id,
-            "message_preview": event.body[:100] + "..." if len(event.body) > 100 else event.body
-        })
-
-        # /stop command — cancel active task + abort gateway session
-        if event.body.strip().lower() == '/stop':
-            existing = _active_letta_tasks.get((room.room_id, room_agent_id or 'unknown'))
-            stopped = False
-            if existing and not existing.done():
-                existing.cancel()
-                _active_letta_tasks.pop((room.room_id, room_agent_id or 'unknown'), None)
+            aborted = await gw.abort(room_agent_id)
+            if aborted:
                 stopped = True
-                logger.info(f'[STOP] Cancelled active task for {room_agent_name} in {room.room_id}')
-            # Also abort the WS gateway session
-            if room_agent_id:
-                try:
-                    from src.letta.ws_gateway_client import get_gateway_client
-                    gw = await get_gateway_client(
-                        gateway_url=config.letta_gateway_url,
-                        api_key=config.letta_gateway_api_key,
-                    )
-                    aborted = await gw.abort(room_agent_id)
-                    if aborted:
-                        stopped = True
-                        logger.info(f'[STOP] Sent gateway abort for agent {room_agent_id}')
-                except Exception as e:
-                    logger.warning(f'[STOP] Gateway abort failed: {e}')
-            msg = '\u23f9 Stopped.' if stopped else 'Nothing running to stop.'
-            await send_as_agent(room.room_id, msg, config, logger)
-            return
+                logger.info(f"[STOP] Sent gateway abort for agent {room_agent_id}")
+        except Exception as e:
+            logger.warning(f"[STOP] Gateway abort failed: {e}")
 
-        task_key = (room.room_id, room_agent_id or "unknown")
-        existing_task = _active_letta_tasks.get(task_key)
-        if existing_task and not existing_task.done():
-            logger.warning(f"[BG-TASK] Agent still processing previous message for {task_key}, sending notice")
-            try:
-                await send_as_agent(
-                    room.room_id, "⏳ Still processing previous message...", config, logger
-                )
-            except Exception:
-                pass
-            return
+    msg = "⏹ Stopped." if stopped else "Nothing running to stop."
+    await send_as_agent(room.room_id, msg, config, logger)
+    return True
 
-        event_source = None
-        if hasattr(event, 'source') and isinstance(event.source, dict):
-            event_source = event.source
 
-        # Determine silent mode from group gating result
-        _silent = bool(gating_result and gating_result.silent) if gating_result else False
+async def _dispatch_letta_task(room, event, config, logger, client, room_agent_id, gating_result, message_text) -> bool:
+    task_key = (room.room_id, room_agent_id or "unknown")
+    existing_task = _active_letta_tasks.get(task_key)
+    if existing_task and not existing_task.done():
+        logger.warning(f"[BG-TASK] Agent still processing previous message for {task_key}, sending notice")
+        try:
+            await send_as_agent(room.room_id, "⏳ Still processing previous message...", config, logger)
+        except Exception:
+            pass
+        return True
 
-        msg_ctx = MessageContext(
-            event_body=event.body,
-            event_sender=event.sender,
-            event_source=event_source,
-            original_event_id=getattr(event, 'event_id', None),
-            room_id=room.room_id,
-            room_display_name=room.display_name or room.room_id,
-            room_agent_id=room_agent_id,
-            config=config,
-            logger=logger,
-            client=client,
-            silent_mode=_silent,
-            auth_manager=auth_manager_global,
-        )
-        task = asyncio.create_task(
-            process_letta_message(msg_ctx)
-        )
-        task.add_done_callback(lambda t: _on_letta_task_done(task_key, t))
-        _active_letta_tasks[task_key] = task
-        logger.info(f"[BG-TASK] Dispatched background Letta task for {task_key}")
+    event_source = getattr(event, "source", None)
+    event_source = event_source if isinstance(event_source, dict) else None
+    silent_mode = bool(gating_result and gating_result.silent) if gating_result else False
+    msg_ctx = MessageContext(
+        event_body=message_text,
+        event_sender=event.sender,
+        event_source=event_source,
+        original_event_id=getattr(event, "event_id", None),
+        room_id=room.room_id,
+        room_display_name=room.display_name or room.room_id,
+        room_agent_id=room_agent_id,
+        config=config,
+        logger=logger,
+        client=client,
+        silent_mode=silent_mode,
+        auth_manager=auth_manager_global,
+    )
+    task = asyncio.create_task(process_letta_message(msg_ctx))
+    task.add_done_callback(lambda t: _on_letta_task_done(task_key, t))
+    _active_letta_tasks[task_key] = task
+    logger.info(f"[BG-TASK] Dispatched background Letta task for {task_key}")
+    return True
+
+
+async def message_callback(room, event, config: Config, logger: logging.Logger, client: Optional[AsyncClient] = None):
+    """Callback function for handling new text messages."""
+    if not isinstance(event, RoomMessageText):
+        return
+
+    router = _MessageCallbackRouter(room=room, config=config, logger=logger, client=client)
+    if router._should_skip_message(event, room.room_id):
+        return
+
+    resolved_agent = await router._resolve_agent_for_room(room.room_id, event)
+    if not resolved_agent:
+        return
+    room_agent_id, room_agent_name, room_agent_user_id = resolved_agent
+
+    message_text, _ = router._extract_message_content(event)
+    _ = router._is_silent_message(event.sender, [router.sender_mapping])
+    filtered, gating_result = router._apply_group_gating(event, room_agent_user_id, message_text)
+    if filtered:
+        return
+
+    if await handle_letta_code_command(
+        room,
+        event,
+        config,
+        logger,
+        send_fn=send_as_agent,
+        agent_mapping=router.room_agent_mapping,
+        agent_id_hint=room_agent_id,
+        agent_name_hint=room_agent_name,
+    ):
+        return
+
+    if await _maybe_handle_fs_mode(room, event, config, logger, room_agent_id, room_agent_name):
+        return
+
+    logger.info("Received message from user", extra={
+        "sender": event.sender,
+        "room_name": room.display_name,
+        "room_id": room.room_id,
+        "message_preview": message_text[:100] + "..." if len(message_text) > 100 else message_text,
+    })
+
+    if await _handle_stop_command(room, config, logger, room_agent_id, room_agent_name, message_text):
+        return
+
+    await _dispatch_letta_task(room, event, config, logger, client, room_agent_id, gating_result, message_text)
 
 async def create_room_if_needed(client_instance, logger: logging.Logger, room_name="Letta Bot Room"):
     """Create a new room and return its ID"""

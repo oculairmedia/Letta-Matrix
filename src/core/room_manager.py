@@ -160,7 +160,6 @@ class MatrixRoomManager:
     REQUIRED_ROOM_MEMBERS = [
         "@admin:matrix.oculair.ca",  # Admin user for oversight
         "@letta:matrix.oculair.ca",  # Main Letta bridge bot
-        "@agent_mail_bridge:matrix.oculair.ca",  # Agent Mail bridge for inter-agent coordination
     ]
 
     async def get_room_members(self, room_id: str) -> List[str]:
@@ -648,13 +647,11 @@ class MatrixRoomManager:
                 # Now create the room as the agent user (inside the session)
                 room_url = f"{self.homeserver_url}/_matrix/client/r0/createRoom"
 
-                # Define the users to invite: admin users, main letta bot, and bridges
                 invites = [
                     "@admin:matrix.oculair.ca",  # Your actual admin account
                     self.admin_username,  # Admin user (matrixadmin)
                     self.config.username,  # Main Letta bot (@letta)
                     "@oc_matrix_synapse_deployment:matrix.oculair.ca",  # OpenCode bridge bot for inter-agent messaging
-                    "@agent_mail_bridge:matrix.oculair.ca"  # Agent Mail bridge for dev agent coordination
                 ]
 
                 room_data = {
@@ -713,7 +710,6 @@ class MatrixRoomManager:
                         await self.auto_accept_invitations_with_tracking(room_id, mapping)
                         
                         # Ensure all required members have joined (not just invited)
-                        # This handles agent_mail_bridge which needs to accept its invite
                         member_results = await self.ensure_required_members(room_id, agent_id)
                         for user_id, status in member_results.items():
                             if status == "invited":

@@ -62,7 +62,7 @@ def generate_service_password(service_name: str) -> str:
     Generate a password for a service user (bridge bots, etc).
     
     Args:
-        service_name: Name of the service (e.g., "agent_mail_bridge")
+        service_name: Name of the service (e.g., "oc_matrix_synapse_deployment")
         
     Returns:
         Generated password
@@ -74,6 +74,3 @@ def generate_service_password(service_name: str) -> str:
     random_part = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
     return f"{service_name}_{random_part}!"
 
-
-# Standard password for agent_mail_bridge (stored in database, not hardcoded)
-# When resetting, use generate_service_password("agent_mail_bridge")

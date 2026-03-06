@@ -9,6 +9,7 @@ import os
 import tempfile
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from aioresponses import aioresponses
+from src.core.retry import retry_async
 
 from src.matrix.file_handler import (
     LettaFileHandler,
@@ -405,9 +406,14 @@ class TestFileHandler:
             nonlocal call_count
             call_count += 1
             raise Exception("Test error")
-        
+
         with pytest.raises(Exception):
-            await file_handler._retry_async(failing_func, "test operation")
+            await retry_async(
+                failing_func,
+                operation_name="test operation",
+                max_attempts=file_handler.max_retries,
+                base_delay=file_handler.retry_delay,
+            )
         
         # Should have been called max_retries times (1 in test config)
         assert call_count == file_handler.max_retries

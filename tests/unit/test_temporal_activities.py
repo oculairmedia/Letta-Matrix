@@ -226,3 +226,68 @@ def test_should_remove_persistent_on_cancel():
         is_duplicate=True,
     )
     assert FileProcessingWorkflow._should_remove_persistent_on_cancel(dup, ingest_completed=False) is False
+
+
+@pytest.mark.asyncio
+async def test_notify_letta_agent_fire_and_forget_skips_result_wait(monkeypatch):
+    """Fire-and-forget mode sends message but does NOT wait for result events."""
+    ws = _MockGatewayWS()
+    iteration_entered = False
+    original_anext = ws.__anext__
+
+    async def _tracked_anext():
+        nonlocal iteration_entered
+        iteration_entered = True
+        return await original_anext()
+
+    ws.__anext__ = _tracked_anext
+
+    async def _connect(*args, **kwargs):
+        return ws
+
+    monkeypatch.setattr(activities.websockets, "connect", _connect)
+
+    result = await notify_letta_agent(
+        NotifyAgentInput(
+            agent_id="agent-123",
+            message="heads up",
+            room_id="!room:matrix.test",
+            wait_for_result=False,
+        )
+    )
+
+    assert result.success is True
+    assert result.response_text is None
+    # Should NOT have iterated the WS events (no waiting for result)
+    assert not iteration_entered, "fire-and-forget should not consume WS events"
+    # Should still have sent session_start + message
+    assert len(ws.sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_notify_letta_agent_wait_for_result_default_collects_response(monkeypatch):
+    """Default mode (wait_for_result=True) collects the full agent response."""
+    ws = _MockGatewayWS()
+    # Add a stream event before the result
+    ws._events = [
+        json.dumps({"type": "stream", "event": "assistant", "content": "Hello "}),
+        json.dumps({"type": "stream", "event": "assistant", "content": "world"}),
+        json.dumps({"type": "result", "success": True}),
+    ]
+
+    async def _connect(*args, **kwargs):
+        return ws
+
+    monkeypatch.setattr(activities.websockets, "connect", _connect)
+
+    result = await notify_letta_agent(
+        NotifyAgentInput(
+            agent_id="agent-123",
+            message="document ready",
+            room_id="!room:matrix.test",
+        )
+    )
+
+    assert result.success is True
+    assert result.response_text == "Hello world"
+    assert result.duration_ms >= 0
