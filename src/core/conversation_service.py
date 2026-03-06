@@ -7,8 +7,7 @@ import logging
 from typing import Optional, List, Tuple
 from sqlalchemy.exc import IntegrityError
 
-from letta_client import Letta, NotFoundError
-from letta_client.core.api_error import ApiError
+from letta_client import Letta, NotFoundError, APIError
 
 from src.models.conversation import (
     RoomConversationDB,
@@ -111,7 +110,7 @@ class ConversationService:
         except NotFoundError:
             logger.warning(f"Letta conversation {conversation_id} not found")
             return False
-        except ApiError:
+        except APIError:
             raise
 
     async def get_or_create_room_conversation(
@@ -169,7 +168,7 @@ class ConversationService:
         
         try:
             conversation_id = self._create_letta_conversation(agent_id, summary)
-        except ApiError as e:
+        except APIError as e:
             logger.error(f"Failed to create Letta conversation: {e}")
             raise
         
@@ -245,7 +244,7 @@ class ConversationService:
         
         try:
             conversation_id = self._create_letta_conversation(target_agent_id, summary)
-        except ApiError as e:
+        except APIError as e:
             logger.error(f"Failed to create inter-agent conversation: {e}")
             raise
         

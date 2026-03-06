@@ -248,8 +248,10 @@ class AgentUserManager:
             return agent_list
 
         except Exception as e:
-            logger.error(f"Error getting Letta agents via SDK: {e}")
-            return []
+            logger.error(f"Error getting Letta agents via SDK: {e}", exc_info=True)
+            # Return None to signal failure — callers MUST distinguish
+            # "0 agents exist" (empty list) from "API call failed" (None).
+            return None
     async def get_admin_token(self) -> Optional[str]:
         """Get an admin access token - delegates to user_manager"""
         return await self.user_manager.get_admin_token()
@@ -371,6 +373,9 @@ class AgentUserManager:
 
         # Get current Letta agents
         agents = await self.get_letta_agents()
+        if agents is None:
+            logger.error("Letta agent fetch failed — aborting sync to prevent data loss")
+            return
 
         current_agent_ids = {agent["id"] for agent in agents}
         existing_agent_ids = set(self.mappings.keys())
@@ -468,14 +473,23 @@ class AgentUserManager:
         # --- Agent lifecycle: soft-delete removed agents, cleanup after grace period ---
         removed_agents = existing_agent_ids - current_agent_ids
         if removed_agents:
-            from src.models.agent_mapping import AgentMappingDB
-            db = AgentMappingDB()
-            for agent_id in removed_agents:
-                mapping = self.mappings.get(agent_id)
-                if mapping and not mapping.removed_at:
-                    logger.info(f"Agent {agent_id} removed from Letta — marking for cleanup (2h grace period)")
-                    db.soft_delete(agent_id)
-                    mapping.removed_at = "pending"
+            # Safety guard: if the Letta API returned 0 agents (likely an API error
+            # or import failure), do NOT mass-delete all existing mappings.
+            # Only proceed with soft-delete if at least some agents were returned.
+            if not current_agent_ids:
+                logger.warning(
+                    f"Letta API returned 0 agents but {len(existing_agent_ids)} exist in DB — "
+                    f"skipping soft-delete to prevent mass removal (likely API error)"
+                )
+            else:
+                from src.models.agent_mapping import AgentMappingDB
+                db = AgentMappingDB()
+                for agent_id in removed_agents:
+                    mapping = self.mappings.get(agent_id)
+                    if mapping and not mapping.removed_at:
+                        logger.info(f"Agent {agent_id} removed from Letta — marking for cleanup (2h grace period)")
+                        db.soft_delete(agent_id)
+                        mapping.removed_at = "pending"
 
         for agent_id in current_agent_ids:
             mapping = self.mappings.get(agent_id)

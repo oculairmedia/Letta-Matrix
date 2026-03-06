@@ -28,10 +28,7 @@ from functools import lru_cache
 
 from letta_client import Letta
 from letta_client.types import AgentState
-try:
-    from letta_client.types import MessageCreate
-except ImportError:
-    from letta_client.types.message_create_param import MessageCreateParam as MessageCreate
+from letta_client.types.message_create_param import MessageCreateParam
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +198,7 @@ class LettaService:
             Response dictionary with messages
         """
         try:
-            msg = MessageCreate(
+            msg = MessageCreateParam(
                 role=role,
                 content=message,
             )
@@ -241,7 +238,7 @@ class LettaService:
             Response chunks as they arrive
         """
         try:
-            msg = MessageCreate(
+            msg = MessageCreateParam(
                 role=role,
                 content=message,
             )

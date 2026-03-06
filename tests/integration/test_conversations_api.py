@@ -183,7 +183,10 @@ class TestConversationPersistence:
         mock_letta_client.conversations.create.side_effect = create_side_effect
         
         def retrieve_raises_not_found(conv_id):
-            raise NotFoundError(body="Not found")
+            mock_response = Mock()
+            mock_response.status_code = 404
+            mock_response.headers = {}
+            raise NotFoundError("Not found", response=mock_response, body=None)
         
         mock_letta_client.conversations.retrieve.return_value = Mock(id="exists")
         
@@ -365,13 +368,16 @@ class TestFallbackBehavior:
     async def test_graceful_fallback_on_service_error(
         self, conversation_service, mock_letta_client
     ):
-        from letta_client.core.api_error import ApiError
+        from unittest.mock import Mock
+        import httpx
+        from letta_client import APIError
         
-        mock_letta_client.conversations.create.side_effect = ApiError(
-            body="Service unavailable"
+        mock_request = httpx.Request("POST", "http://test/api")
+        mock_letta_client.conversations.create.side_effect = APIError(
+            "Service unavailable", mock_request, body="Service unavailable"
         )
         
-        with pytest.raises(ApiError):
+        with pytest.raises(APIError):
             await conversation_service.get_or_create_room_conversation(
                 room_id="!error:matrix.test",
                 agent_id="agent-123",

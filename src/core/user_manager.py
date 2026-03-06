@@ -37,7 +37,10 @@ class MatrixUserManager:
         logger.info(f"Using admin account: {admin_username}")
 
     async def get_admin_token(self) -> Optional[str]:
-        """Get an admin access token by logging in as the admin user
+        """Get an admin access token by logging in as the admin user.
+
+        Falls back to MATRIX_ADMIN_TOKEN env var if password login fails
+        (self-healing for password mismatch).
 
         Returns:
             Admin access token if successful, None otherwise
@@ -66,12 +69,21 @@ class MatrixUserManager:
                         return self.admin_token
                     else:
                         error_text = await response.text()
-                        logger.error(f"Failed to get admin token for {username}: {response.status} - {error_text}")
-                        return None
+                        logger.warning(f"Admin login failed for {username}: {response.status} - {error_text}")
 
         except Exception as e:
-            logger.error(f"Error getting admin token: {e}")
-            return None
+            logger.warning(f"Admin login exception: {e}")
+
+        # Self-healing fallback: use pre-configured admin token
+        import os
+        fallback_token = os.getenv("MATRIX_ADMIN_TOKEN") or os.getenv("MATRIX_ACCESS_TOKEN")
+        if fallback_token:
+            logger.info("Using MATRIX_ADMIN_TOKEN fallback (admin password login failed)")
+            self.admin_token = fallback_token
+            return self.admin_token
+
+        logger.error("No admin token available: password login failed and no MATRIX_ADMIN_TOKEN env var")
+        return None
 
     async def check_user_exists(self, username: str) -> Literal["exists_healthy", "exists_auth_failed", "not_found"]:
         """Check Matrix user state (Tuwunel compatible)
