@@ -1,0 +1,166 @@
+import logging
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.matrix import agent_auth
+from src.matrix.config import Config
+
+
+def _make_async_cm(response: MagicMock) -> MagicMock:
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm
+
+
+@pytest.fixture(autouse=True)
+def _reset_repair_attempts() -> None:
+    agent_auth._repair_attempted.clear()
+
+
+@pytest.fixture
+def config() -> Config:
+    return Config(
+        homeserver_url="http://matrix.test",
+        username="@user:matrix.test",
+        password="pass",
+        room_id="!room:test",
+        letta_api_url="http://letta.test",
+        letta_token="token",
+        letta_agent_id="agent-1",
+    )
+
+
+@pytest.fixture
+def logger() -> logging.Logger:
+    return logging.getLogger("test-agent-auth")
+
+
+@pytest.mark.asyncio
+async def test_get_agent_token_returns_none_without_mapping(config: Config, logger: logging.Logger) -> None:
+    session = MagicMock()
+    with (
+        patch("src.core.mapping_service.get_mapping_by_room_id", return_value=None),
+        patch("src.core.mapping_service.get_portal_link_by_room_id", return_value=None),
+    ):
+        token = await agent_auth.get_agent_token("!room:test", config, logger, session)
+
+    assert token is None
+    session.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_agent_token_returns_cached_token_on_second_call_if_cache_exists(
+    config: Config, logger: logging.Logger
+) -> None:
+    token_cache = getattr(agent_auth, "_token_cache", None)
+    if token_cache is None:
+        pytest.skip("agent_auth has no token cache")
+
+    mapping = {
+        "agent_id": "agent-1",
+        "matrix_user_id": "@agent_1:matrix.test",
+        "matrix_password": "pass",
+    }
+    token_cache.clear()
+
+    login_response = MagicMock(status=200)
+    login_response.json = AsyncMock(return_value={"access_token": "token-1"})
+    session = MagicMock()
+    session.post = MagicMock(return_value=_make_async_cm(login_response))
+
+    with (
+        patch("src.core.mapping_service.get_mapping_by_room_id", return_value=mapping),
+        patch("src.core.mapping_service.get_portal_link_by_room_id", return_value=None),
+        patch("src.core.mapping_service.get_mapping_by_agent_id", return_value=None),
+    ):
+        first = await agent_auth.get_agent_token("!room:test", config, logger, session)
+        second = await agent_auth.get_agent_token("!room:test", config, logger, session)
+
+    assert first == "token-1"
+    assert second == "token-1"
+    assert session.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_agent_token_returns_token_on_successful_login(
+    config: Config, logger: logging.Logger
+) -> None:
+    mapping = {
+        "agent_id": "agent-1",
+        "matrix_user_id": "@agent_1:matrix.test",
+        "matrix_password": "pass",
+    }
+    login_response = MagicMock(status=200)
+    login_response.json = AsyncMock(return_value={"access_token": "token-abc"})
+
+    session = MagicMock()
+    session.post = MagicMock(return_value=_make_async_cm(login_response))
+
+    with (
+        patch("src.core.mapping_service.get_mapping_by_room_id", return_value=mapping),
+        patch("src.core.mapping_service.get_portal_link_by_room_id", return_value=None),
+        patch("src.core.mapping_service.get_mapping_by_agent_id", return_value=None),
+    ):
+        token = await agent_auth.get_agent_token("!room:test", config, logger, session)
+
+    assert token == "token-abc"
+
+
+@pytest.mark.asyncio
+async def test_repair_agent_password_sends_admin_room_command(
+    config: Config, logger: logging.Logger
+) -> None:
+    mapping = {
+        "agent_id": "agent-1",
+        "agent_name": "Agent One",
+        "matrix_user_id": "@agent_1:matrix.test",
+        "matrix_password": "old-pass",
+    }
+
+    admin_login_response = MagicMock(status=200)
+    admin_login_response.json = AsyncMock(return_value={"access_token": "admin-token"})
+
+    cmd_response = MagicMock(status=200)
+    cmd_response.text = AsyncMock(return_value="")
+
+    messages_response = MagicMock(status=200)
+    messages_response.json = AsyncMock(
+        return_value={
+            "chunk": [{"content": {"body": "Successfully reset password"}}],
+        }
+    )
+
+    http_session = MagicMock()
+    http_session.post = AsyncMock(return_value=admin_login_response)
+    http_session.put = MagicMock(return_value=_make_async_cm(cmd_response))
+    http_session.get = MagicMock(return_value=_make_async_cm(messages_response))
+    http_session.__aenter__ = AsyncMock(return_value=http_session)
+    http_session.__aexit__ = AsyncMock(return_value=None)
+
+    db_record = SimpleNamespace(
+        agent_id="agent-1",
+        agent_name="Agent One",
+        matrix_user_id="@agent_1:matrix.test",
+        room_id="!room:test",
+    )
+    db_instance = MagicMock()
+    db_instance.get_by_agent_id.return_value = db_record
+
+    with (
+        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.models.agent_mapping.AgentMappingDB", return_value=db_instance),
+        patch("src.core.mapping_service.invalidate_cache"),
+        patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
+    ):
+        new_password = await agent_auth.repair_agent_password(mapping, config, logger)
+
+    assert isinstance(new_password, str)
+    assert new_password.startswith("AgentRepair_")
+    assert http_session.put.call_count == 1
+
+    put_call = http_session.put.call_args
+    assert "rooms/!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca/send/m.room.message/" in put_call.args[0]
+    assert put_call.kwargs["json"]["body"].startswith("!admin users reset-password agent_1 ")
