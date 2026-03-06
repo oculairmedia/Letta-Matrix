@@ -104,6 +104,20 @@ async def send_as_agent_with_event_id(
             except ImportError:
                 pass
 
+            # Convert @mentions to Matrix pills
+            _pill_mxids: list = []
+            try:
+                from src.matrix.pill_formatter import extract_and_convert_pills
+
+                pill_html, _pill_mxids = extract_and_convert_pills(
+                    message, message_data.get("formatted_body")
+                )
+                if _pill_mxids:
+                    message_data["formatted_body"] = pill_html
+                    message_data["format"] = "org.matrix.custom.html"
+            except Exception:
+                pass
+
             # Add rich reply relationship if replying to a specific message
             if reply_to_event_id:
                 message_data["m.relates_to"] = {
@@ -132,6 +146,12 @@ async def send_as_agent_with_event_id(
                 logger.debug(
                     f"[SEND_AS_AGENT] Creating rich reply to event {reply_to_event_id}"
                 )
+
+            # Merge pill m.mentions with any reply m.mentions
+            if _pill_mxids:
+                existing = message_data.get("m.mentions", {}).get("user_ids", [])
+                merged = list(dict.fromkeys(existing + _pill_mxids))
+                message_data["m.mentions"] = {"user_ids": merged}
 
             async with session.put(
                 message_url,
@@ -271,6 +291,41 @@ async def edit_message_as_agent(
                 "m.new_content": {"msgtype": "m.text", "body": new_body},
                 "m.relates_to": {"rel_type": "m.replace", "event_id": event_id},
             }
+
+            # Add markdown + pill formatting to edit
+            _formatted_body = None
+            try:
+                import markdown
+
+                _html = markdown.markdown(
+                    new_body,
+                    extensions=["tables", "fenced_code", "nl2br", "sane_lists"],
+                )
+                if _html and _html != f"<p>{new_body}</p>":
+                    _formatted_body = _html
+            except ImportError:
+                pass
+
+            _pill_mxids: list = []
+            try:
+                from src.matrix.pill_formatter import extract_and_convert_pills
+
+                pill_html, _pill_mxids = extract_and_convert_pills(
+                    new_body, _formatted_body
+                )
+                if _pill_mxids:
+                    _formatted_body = pill_html
+            except Exception:
+                pass
+
+            if _formatted_body:
+                message_data["format"] = "org.matrix.custom.html"
+                message_data["formatted_body"] = f"* {_formatted_body}"
+                message_data["m.new_content"]["format"] = "org.matrix.custom.html"
+                message_data["m.new_content"]["formatted_body"] = _formatted_body
+            if _pill_mxids:
+                mentions = {"user_ids": list(dict.fromkeys(_pill_mxids))}
+                message_data["m.new_content"]["m.mentions"] = mentions
 
             async with session.put(
                 msg_url,
