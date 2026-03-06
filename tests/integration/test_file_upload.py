@@ -157,11 +157,10 @@ class TestFileHandler:
         assert error is None
     
     def test_validate_file_unsupported_type(self, file_handler, sample_file_metadata):
-        """Test validation of unsupported file type"""
+        """Test that unknown file types are accepted (try-first approach)"""
         sample_file_metadata.file_type = "application/x-unknown"
         error = file_handler._validate_file(sample_file_metadata)
-        assert error is not None
-        assert "not supported" in error
+        assert error is None  # Unknown types are now accepted (try-first approach with MarkItDown)
     
     def test_validate_file_too_large(self, file_handler, sample_file_metadata):
         """Test validation of file that's too large"""
@@ -364,44 +363,34 @@ class TestFileHandler:
     
     @pytest.mark.asyncio
     async def test_handle_file_event_end_to_end(self, file_handler, mock_event):
-        """Test full file handling flow"""
+        """Test full file handling flow — validates routing from event to document processing"""
         room_id = "!test:matrix.org"
         agent_id = "agent-789"
         
-        # Mock SDK v1.x folders methods
-        mock_folder = MagicMock()
-        mock_folder.id = "source-existing"
-        mock_folder.name = "matrix_files_test"
-        file_handler.letta_client.folders.list.return_value = [mock_folder]
-        file_handler.letta_client.agents.folders.list.return_value = []
+        # Ensure inline processing path (not Temporal) — TEMPORAL_FILE_PROCESSING_ENABLED
+        # may leak from test_temporal_file_processing.py in full suite runs
+        file_handler._temporal_enabled = False
         
-        mock_upload = MagicMock()
-        mock_upload.id = "file-new"
-        file_handler.letta_client.folders.files.upload.return_value = mock_upload
-        
-        mock_file = MagicMock()
-        mock_file.id = "file-new"
-        mock_file.processing_status = "completed"
-        file_handler.letta_client.folders.files.list.return_value = [mock_file]
-        
-        with aioresponses() as mocked:
-            # Mock Matrix file download
-            mocked.get(
-                "http://test-matrix.local/_matrix/client/v1/media/download/matrix.org/abc123",
-                body=b"test pdf content"
-            )
+        # Mock _handle_document_upload to return extracted text.
+        # This isolates the routing logic from the complex download/parse/ingest pipeline
+        # which has its own unit tests above.
+        expected_text = "[Document Indexed: test_document.pdf] \u2014 1234 chars indexed"
+        with patch.object(file_handler, '_handle_document_upload', new_callable=AsyncMock, return_value=expected_text) as mock_doc_upload, \
+             patch.object(file_handler, '_notify', new_callable=AsyncMock) as mock_notify:
             
             result = await file_handler.handle_file_event(mock_event, room_id, agent_id)
             
-            assert result is True
+            # handle_file_event returns str (extracted text) for document uploads
+            assert result == expected_text, f"Expected extracted text, got: {result!r}"
+            mock_doc_upload.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_handle_file_event_rejected_file(self, file_handler, mock_event):
-        """Test that unsupported files are rejected"""
+        """Test that oversized files are rejected"""
         room_id = "!test:matrix.org"
         
-        # Modify event to have unsupported type
-        mock_event.source["content"]["info"]["mimetype"] = "application/x-unknown"
+        # Modify event to have oversized file
+        mock_event.source["content"]["info"]["size"] = 200 * 1024 * 1024  # 200MB, exceeds MAX_FILE_SIZE
         
         result = await file_handler.handle_file_event(mock_event, room_id)
         

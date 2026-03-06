@@ -387,8 +387,8 @@ class TestGetLettaAgents:
                 with patch('src.letta.client.get_letta_client', return_value=mock_client):
                     agents = await manager.get_letta_agents()
 
-                    # Should return empty list on error
-                    assert agents == []
+                    # Should return None on error (distinguishes from empty agent list)
+                    assert agents is None
 
     @pytest.mark.asyncio
     async def test_get_letta_agents_invalid_json(self, mock_config):

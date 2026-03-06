@@ -4,6 +4,7 @@ Tests the automatic user creation functionality added in Sprint 4
 """
 import pytest
 import asyncio
+import os
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from src.core.user_manager import MatrixUserManager
 
@@ -239,8 +240,11 @@ class TestUserCreation:
         assert token == "cached_token"
 
     @pytest.mark.asyncio
-    async def test_get_admin_token_failure(self, user_manager):
+    async def test_get_admin_token_failure(self, user_manager, monkeypatch):
         """Test failed admin token retrieval"""
+        # Remove env vars so fallback doesn't return a token
+        monkeypatch.delenv('MATRIX_ADMIN_TOKEN', raising=False)
+        monkeypatch.delenv('MATRIX_ACCESS_TOKEN', raising=False)
         mock_response = AsyncMock()
         mock_response.status = 403
         mock_response.text = AsyncMock(return_value="Forbidden")

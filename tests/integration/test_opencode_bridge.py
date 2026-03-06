@@ -68,10 +68,12 @@ class TestRegistration:
         assert response.status_code == 200
         data = response.json()
         assert data.get("success") == True
-        assert "matrixIdentity" in data  # API returns matrixIdentity, not identity
+        assert "registration" in data  # API returns registration object
+        assert data.get("wsUrl") is not None
+        assert data.get("id") is not None
     
     def test_register_derives_identity_from_directory(self):
-        """Registration should derive Matrix identity from directory name."""
+        """Registration ID should be derived from directory and sessionId."""
         payload = {
             "port": 55556,
             "hostname": "127.0.0.1",
@@ -85,8 +87,9 @@ class TestRegistration:
         )
         assert response.status_code == 200
         data = response.json()
-        # Identity should be derived from directory: my-cool-project -> @oc_my_cool_project:matrix.oculair.ca
-        assert data.get("matrixIdentity") == "@oc_my_cool_project:matrix.oculair.ca"
+        # Registration ID should be derived from directory and sessionId
+        assert data.get("id") == "/opt/stacks/my-cool-project:test-session-456"
+        assert data.get("registration", {}).get("directory") == "/opt/stacks/my-cool-project"
     
     def test_unregister_instance(self):
         """Should successfully unregister an OpenCode instance."""
@@ -137,7 +140,7 @@ class TestIdentityMapping:
     """Test identity to registration mapping."""
     
     def test_identity_mapping_exists_after_registration(self):
-        """After registration, identity should map to registration."""
+        """After registration, the registration should be retrievable."""
         payload = {
             "port": 55559,
             "hostname": "127.0.0.1",
@@ -150,10 +153,15 @@ class TestIdentityMapping:
             timeout=5
         )
         data = response.json()
-        identity = data.get("matrixIdentity")
+        reg_id = data.get("id")
+        assert reg_id is not None
+        assert data.get("registration", {}).get("directory") == "/opt/stacks/identity-test-project"
         
-        # Verify the identity was registered
-        assert identity == "@oc_identity_test_project:matrix.oculair.ca"
+        # Verify the registration exists in the list
+        list_response = requests.get(f"{BRIDGE_URL}/registrations", timeout=5)
+        list_data = list_response.json()
+        matching = [r for r in list_data["registrations"] if r.get("directory") == "/opt/stacks/identity-test-project"]
+        assert len(matching) >= 1
 
 
 class TestMentionExtraction:
