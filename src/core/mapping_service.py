@@ -321,7 +321,12 @@ def get_portal_links_by_agent(agent_id: str) -> List[dict]:
         return []
 
 
-def create_portal_link(agent_id: str, room_id: str, enabled: bool = True) -> Optional[dict]:
+def create_portal_link(
+    agent_id: str,
+    room_id: str,
+    enabled: bool = True,
+    relay_mode: bool = True,
+) -> Optional[dict]:
     """
     Create a portal link between an agent and a bridged room.
     
@@ -335,7 +340,7 @@ def create_portal_link(agent_id: str, room_id: str, enabled: bool = True) -> Opt
     """
     try:
         db = _get_db()
-        result = db.create_portal_link(agent_id, room_id, enabled)
+        result = db.create_portal_link(agent_id, room_id, enabled, relay_mode)
         invalidate_cache()
         return result
     except Exception as e:

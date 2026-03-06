@@ -74,7 +74,12 @@ export class LettaService {
   /**
    * List all agents
    */
-  async listAgents(pagination?: { limit?: number; after?: string; before?: string }): Promise<LettaAgentInfo[]> {
+  async listAgents(pagination?: {
+    limit?: number;
+    offset?: number;
+    after?: string;
+    before?: string;
+  }): Promise<LettaAgentInfo[]> {
     try {
       const response = await this.client.agents.list(pagination ? {
         limit: pagination.limit,
@@ -98,6 +103,13 @@ export class LettaService {
       }
       
       this.lastIndexRefresh = Date.now();
+
+      const offset = pagination?.offset ?? 0;
+      if (offset > 0 || pagination?.limit !== undefined) {
+        const end = pagination?.limit !== undefined ? offset + pagination.limit : undefined;
+        return agents.slice(offset, end);
+      }
+
       return agents;
     } catch (error) {
       console.error('[LettaService] Failed to list agents:', error);

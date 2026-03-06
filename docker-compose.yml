@@ -167,6 +167,7 @@ services:
     volumes:
       - ./temporal_workflows:/app/temporal_workflows:ro
       - ./src:/app/src:ro
+      - ./documents:/app/documents
     networks:
       - matrix-internal
     depends_on:

@@ -323,3 +323,88 @@ curl -s -X POST -H 'Content-Type: application/json' \
   -d '{"room_id": "!room:matrix.oculair.ca"}' \
   "http://localhost:8004/agents/{agent_id}/portal-links"
 ```
+
+## Agent Mapping Sync Issues
+
+The matrix-client uses **PostgreSQL** as the source of truth for agent-room mappings (not the JSON file at `/app/data/agent_user_mappings.json`). If these two sources become out of sync, file uploads and other features that depend on `db.get_by_room_id()` will fail.
+
+### Symptoms
+
+- File uploads fail with error: `No agent mapping for room !XXX:matrix.oculair.ca`
+- The mapping exists in `/app/data/agent_user_mappings.json` but `db.get_by_room_id()` returns `None`
+- Logs show room being processed but skipped with "No agent mapping for room"
+
+### Root Cause
+
+The PostgreSQL database (`matrix_letta.agent_mappings` table) has stale or incorrect room IDs:
+- JSON file has correct mapping: `Meridian` → `!PPBT0ouhNr9W2TGjUk:matrix.oculair.ca`
+- PostgreSQL has wrong mapping: `Meridian` → `!O8cbkBGCMB8Ujlaret:matrix.oculair.ca`
+- When `get_by_room_id()` is called with the correct room ID, it returns `None`
+
+### Diagnosis
+
+Check if mapping exists in PostgreSQL:
+
+```bash
+docker exec matrix-synapse-deployment-matrix-client-1 python3 -c "
+from src.models.agent_mapping import AgentMappingDB
+
+db = AgentMappingDB()
+mapping = db.get_by_room_id('!PPBT0ouhNr9W2TGjUk:matrix.oculair.ca')
+
+if mapping:
+    print(f'Found: {mapping.agent_name} ({mapping.agent_id})')
+else:
+    print('NOT FOUND in PostgreSQL')
+"
+```
+
+Check if mapping exists in JSON file:
+
+```bash
+docker exec matrix-synapse-deployment-matrix-client-1 python3 -c "
+import json
+with open('/app/data/agent_user_mappings.json', 'r') as f:
+    data = json.load(f)
+for mxid, mapping in data.items():
+    if 'PPBT0ouhNr9W2TGjUk' in mapping.get('room_id', ''):
+        print(f'JSON: {mapping.get(\"agent_name\")} -> {mapping.get(\"room_id\")}')
+"
+```
+
+### Solution
+
+Update PostgreSQL to match the JSON file:
+
+```bash
+docker exec matrix-synapse-deployment-matrix-client-1 python3 -c "
+from sqlalchemy import create_engine, text
+import os
+
+db_url = os.environ.get('DATABASE_URL', '')
+engine = create_engine(db_url)
+
+with engine.connect() as conn:
+    result = conn.execute(text('''
+        UPDATE agent_mappings 
+        SET room_id = :new_room_id 
+        WHERE agent_id = :agent_id
+    '''), {
+        'new_room_id': '!PPBT0ouhNr9W2TGjUk:matrix.oculair.ca',
+        'agent_id': 'agent-597b5756-2915-4560-ba6b-91005f085166'
+    })
+    conn.commit()
+    print(f'Updated {result.rowcount} row(s)')
+"
+```
+
+### Prevention
+
+This issue occurred because:
+1. Meridian's room was manually recreated (room ID changed from `!O8cbkBGCMB8Ujlaret` to `!PPBT0ouhNr9W2TGjUk`)
+2. The JSON file was updated but PostgreSQL was not
+
+**Best practice**: When manually updating room IDs:
+- Always update BOTH sources (JSON + PostgreSQL)
+- Or use the matrix-client API endpoints which handle both automatically
+- Or restart matrix-client after JSON update (if it has migration logic)

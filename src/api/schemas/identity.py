@@ -151,6 +151,14 @@ class SendAsAgentRequest(BaseModel):
     msgtype: str = Field("m.text", description="Message type")
 
 
+class EditAsAgentRequest(BaseModel):
+    agent_id: str = Field(..., description="Letta agent ID")
+    room_id: str = Field(..., description="Target Matrix room ID")
+    event_id: str = Field(..., description="Event ID to edit")
+    message: str = Field(..., description="Replacement message content")
+    msgtype: str = Field("m.notice", description="Message type")
+
+
 class SendAsIdentityResponse(BaseModel):
     success: bool
     event_id: Optional[str] = None

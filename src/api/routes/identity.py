@@ -16,6 +16,7 @@ from src.api.schemas.identity import (
     SendAsIdentityRequest,
     SendAsIdentityResponse,
     SendAsAgentRequest,
+    EditAsAgentRequest,
     IdentityProvisionRequest,
     IdentityProvisionResponse,
 )
@@ -223,6 +224,46 @@ async def send_as_agent(request: SendAsAgentRequest):
         identity_id=identity_id,
         room_id=request.room_id,
         error="Failed to send message"
+    )
+
+
+@router.post("/messages/edit-as-agent", response_model=SendAsIdentityResponse)
+async def edit_as_agent(request: EditAsAgentRequest):
+    identity_id = f"letta_{request.agent_id}"
+
+    service = get_identity_service()
+    identity = service.get(identity_id)
+    if not identity:
+        return SendAsIdentityResponse(
+            success=False,
+            identity_id=identity_id,
+            room_id=request.room_id,
+            error=f"No identity found for agent {request.agent_id}",
+        )
+
+    pool = get_identity_client_pool()
+    event_id = await pool.edit_as_agent(
+        agent_id=request.agent_id,
+        room_id=request.room_id,
+        event_id=request.event_id,
+        message=request.message,
+        msgtype=request.msgtype,
+    )
+
+    if event_id:
+        service.mark_used(identity_id)
+        return SendAsIdentityResponse(
+            success=True,
+            event_id=event_id,
+            identity_id=identity_id,
+            room_id=request.room_id,
+        )
+
+    return SendAsIdentityResponse(
+        success=False,
+        identity_id=identity_id,
+        room_id=request.room_id,
+        error="Failed to edit message",
     )
 
 

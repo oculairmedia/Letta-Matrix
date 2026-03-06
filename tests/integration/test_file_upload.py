@@ -125,6 +125,31 @@ class TestFileHandler:
         assert metadata.file_type == "image/jpeg"
         assert metadata.file_size == 204800
         assert metadata.room_id == "!test:matrix.org"
+
+    def test_extract_file_metadata_prefers_content_filename_with_caption(self, file_handler):
+        event = Mock()
+        event.source = {
+            "content": {
+                "msgtype": "m.file",
+                "url": "mxc://matrix.org/p6T8aR5zESHa1g6xmr1SvAG3xwgBhHy3",
+                "body": "this is a test tell me what this document is about",
+                "filename": "2505.07859v2.pdf",
+                "info": {
+                    "mimetype": "application/pdf",
+                    "size": 1530000,
+                },
+            }
+        }
+        event.sender = "@user:matrix.org"
+        event.server_timestamp = 1234567890
+        event.event_id = "$file_captioned"
+
+        metadata = file_handler._extract_file_metadata(event, "!test:matrix.org")
+
+        assert metadata is not None
+        assert metadata.file_name == "2505.07859v2.pdf"
+        assert metadata.caption == "this is a test tell me what this document is about"
+        assert metadata.file_type == "application/pdf"
     
     def test_validate_file_supported_type(self, file_handler, sample_file_metadata):
         """Test validation of supported file type"""

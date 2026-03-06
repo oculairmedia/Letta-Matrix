@@ -268,6 +268,8 @@ class GatewayClient:
                     additional_headers=extra_headers,
                     max_size=2**22,  # 4 MB frames
                     close_timeout=5,
+                    ping_interval=None,  # Disable built-in pings; we run our own health check loop
+                    ping_timeout=None,
                 ),
                 timeout=self._connect_timeout,
             )
@@ -365,10 +367,15 @@ class GatewayClient:
                         logger.info(f"[WS-GATEWAY] Closing idle session for agent {agent_id}")
                         await self._close_entry(entry)
 
-            # Proactive health check — ping live connections outside the lock
+            # Proactive health check — ping live connections outside the lock.
+            # Skip entries with recent activity (within 120s) to avoid killing
+            # connections that are actively streaming (e.g. during model escalation
+            # where Opus thinking time can exceed 60s with no data frames).
             for agent_id, entry in to_ping:
+                if now - entry.last_used < 120:
+                    continue  # Recently active — no health check needed
                 try:
-                    await asyncio.wait_for(entry.ws.ping(), timeout=5.0)
+                    await asyncio.wait_for(entry.ws.ping(), timeout=30.0)
                 except Exception:
                     logger.warning(f"[WS-GATEWAY] Health ping failed for agent {agent_id}, evicting stale connection")
                     await self._evict(agent_id)

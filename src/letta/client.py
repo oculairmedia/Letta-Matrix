@@ -28,7 +28,7 @@ from functools import lru_cache
 
 from letta_client import Letta
 from letta_client.types import AgentState
-from letta_client.types import MessageCreate
+from letta_client.types import MessageCreateParam as MessageCreate
 
 logger = logging.getLogger(__name__)
 

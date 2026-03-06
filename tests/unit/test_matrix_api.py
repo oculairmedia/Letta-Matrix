@@ -26,6 +26,7 @@ from src.api.app import (
     GetMessagesResponse,
     RoomInfo,
     ListRoomsResponse,
+    PortalLinkRequest,
     NewAgentNotification,
     WebhookResponse
 )
@@ -163,6 +164,16 @@ class TestPydanticModels:
 
         assert notification.agent_id == "agent-123"
         assert notification.timestamp == "2025-01-01T00:00:00Z"
+
+    def test_portal_link_request_default_relay_mode(self):
+        request = PortalLinkRequest(room_id="!portal:matrix.test")
+        assert request.enabled is True
+        assert request.relay_mode is True
+
+    def test_portal_link_request_explicit_relay_mode(self):
+        request = PortalLinkRequest(room_id="!portal:matrix.test", enabled=False, relay_mode=False)
+        assert request.enabled is False
+        assert request.relay_mode is False
 
 
 # ============================================================================

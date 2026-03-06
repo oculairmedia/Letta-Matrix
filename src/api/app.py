@@ -633,6 +633,7 @@ async def update_agent_mapping(agent_id: str, request: AgentMappingUpdateRequest
 class PortalLinkRequest(BaseModel):
     room_id: str
     enabled: bool = True
+    relay_mode: bool = True
 
 
 @app.get("/agents/portal-links")
@@ -667,7 +668,7 @@ async def create_agent_portal_link(agent_id: str, request: PortalLinkRequest):
         mapping = get_mapping_by_agent_id(agent_id)
         if not mapping:
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
-        link = create_portal_link(agent_id, request.room_id, request.enabled)
+        link = create_portal_link(agent_id, request.room_id, request.enabled, request.relay_mode)
         if not link:
             raise HTTPException(status_code=500, detail="Failed to create portal link")
         return {"success": True, "link": link}

@@ -76,6 +76,7 @@ async def run_worker() -> None:
             activities.ingest_to_haystack,
             activities.notify_letta_agent,
             activities.update_matrix_status,
+            activities.cleanup_file_artifacts,
         ],
         max_concurrent_activities=MAX_CONCURRENT_ACTIVITIES,
         max_concurrent_workflow_tasks=MAX_CONCURRENT_WORKFLOWS,
@@ -86,7 +87,7 @@ async def run_worker() -> None:
 
     logger.info(
         f"Worker started. Polling queue={TEMPORAL_TASK_QUEUE}. "
-        f"Registered: FileProcessingWorkflow + 5 activities"
+        f"Registered: FileProcessingWorkflow + 6 activities"
     )
 
     # Graceful shutdown on SIGINT/SIGTERM
