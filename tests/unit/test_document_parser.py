@@ -55,11 +55,11 @@ class TestIsParseableDocument:
     def test_octet_stream_pdf(self):
         assert is_parseable_document("application/octet-stream", "report.pdf")
 
-    def test_octet_stream_unknown(self):
-        assert not is_parseable_document("application/octet-stream", "video.mp4")
+    def test_octet_stream_video(self):
+        assert is_parseable_document("application/octet-stream", "video.mp4")
 
-    def test_video_not_parseable(self):
-        assert not is_parseable_document("video/mp4", "video.mp4")
+    def test_video_parseable(self):
+        assert is_parseable_document("video/mp4", "video.mp4")
 
     def test_extension_fallback(self):
         """Even with unknown MIME, extension match should work."""
@@ -188,7 +188,7 @@ class TestParseDocument:
         """Test parsing a plain text file with mocked MarkItDown."""
         with patch("src.matrix.document_parser._process_pool", None), \
              patch("src.matrix.document_parser._convert_with_markitdown") as mock_convert:
-            mock_convert.return_value = ("Extracted text content", None)
+            mock_convert.return_value = ("Extracted text content", None, None)
             result = await parse_document(text_file, "test.txt", config=default_config)
 
             assert result.error is None
@@ -204,9 +204,10 @@ class TestParseDocument:
         config = DocumentParseConfig(enabled=True, ocr_enabled=True, timeout_seconds=10.0, max_file_size_mb=10)
 
         with patch("src.matrix.document_parser._process_pool", None), \
+             patch("src.matrix.document_parser._extract_pdf_with_fitz", return_value=("", 2, None)), \
              patch("src.matrix.document_parser._convert_with_markitdown") as mock_convert, \
              patch("src.matrix.document_parser._ocr_pdf_pages") as mock_ocr:
-            mock_convert.return_value = ("", 2)  # Empty text, 2 pages
+            mock_convert.return_value = ("", 2, None)  # Empty text, 2 pages, no error
             mock_ocr.return_value = "OCR extracted text"
 
             result = await parse_document(str(f), "scanned.pdf", config=config)
@@ -216,18 +217,17 @@ class TestParseDocument:
             mock_ocr.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_truncation(self, text_file):
-        """Text exceeding max_text_length should be truncated."""
+    async def test_no_truncation(self, text_file):
+        """Text is no longer truncated — full text is needed for Hayhooks pipeline."""
         config = DocumentParseConfig(enabled=True, max_text_length=20, timeout_seconds=10.0, max_file_size_mb=10)
 
         with patch("src.matrix.document_parser._process_pool", None), \
              patch("src.matrix.document_parser._convert_with_markitdown") as mock_convert:
-            mock_convert.return_value = ("A" * 100, None)
+            mock_convert.return_value = ("A" * 100, None, None)
             result = await parse_document(text_file, "test.txt", config=config)
 
-            assert len(result.text) < 100
-            assert "truncated" in result.text
-
+            assert len(result.text) == 100  # No truncation
+            assert result.error is None
     @pytest.mark.asyncio
     async def test_retry_on_failure(self, text_file, default_config):
         """Should retry on transient failures."""
@@ -238,7 +238,7 @@ class TestParseDocument:
             call_count += 1
             if call_count < 3:
                 raise RuntimeError("Transient error")
-            return ("Success after retry", None)
+            return ("Success after retry", None, None)
 
         with patch("src.matrix.document_parser._process_pool", None), \
              patch("src.matrix.document_parser._convert_with_markitdown", side_effect=flaky_convert):

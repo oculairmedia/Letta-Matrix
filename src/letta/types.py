@@ -12,8 +12,6 @@ from enum import Enum
 from letta_client.types import (
     AgentState,
     AgentType,
-    AgentCreateParams,
-    AgentUpdateParams,
 )
 
 # Custom type aliases for our application
@@ -92,11 +90,8 @@ def extract_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 __all__ = [
-    # SDK types
     "AgentState",
-    "AgentType", 
-    "AgentCreateParams",
-    "AgentUpdateParams",
+    "AgentType",
     # Custom types
     "AgentId",
     "RoomId",

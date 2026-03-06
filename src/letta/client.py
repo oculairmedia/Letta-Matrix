@@ -28,7 +28,7 @@ from functools import lru_cache
 
 from letta_client import Letta
 from letta_client.types import AgentState
-from letta_client.types.message_create_param import MessageCreateParam
+from letta_client.types import MessageCreate
 
 logger = logging.getLogger(__name__)
 
@@ -198,10 +198,10 @@ class LettaService:
             Response dictionary with messages
         """
         try:
-            msg: MessageCreateParam = {
-                "role": role,  # type: ignore[typeddict-item]
-                "content": message
-            }
+            msg = MessageCreate(
+                role=role,
+                content=message,
+            )
             response = self.client.agents.messages.create(
                 agent_id=agent_id,
                 messages=[msg],
@@ -238,10 +238,10 @@ class LettaService:
             Response chunks as they arrive
         """
         try:
-            msg: MessageCreateParam = {
-                "role": role,  # type: ignore[typeddict-item]
-                "content": message
-            }
+            msg = MessageCreate(
+                role=role,
+                content=message,
+            )
             stream = self.client.agents.messages.stream(
                 agent_id=agent_id,
                 messages=[msg]

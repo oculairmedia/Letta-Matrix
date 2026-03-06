@@ -7,7 +7,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.exc import IntegrityError
 
-from letta_client import APIError, NotFoundError
+from letta_client import NotFoundError
+from letta_client.core.api_error import ApiError
 
 from src.models.agent_mapping import Base
 from src.models.conversation import RoomConversationDB, InterAgentConversationDB
@@ -19,18 +20,12 @@ from src.core.conversation_service import (
 )
 
 
-def make_api_error(message: str = "API error") -> APIError:
-    mock_request = MagicMock()
-    mock_request.url = "http://test"
-    mock_request.method = "POST"
-    return APIError(message, mock_request, body=None)
+def make_api_error(message: str = "API error") -> ApiError:
+    return ApiError(body=message)
 
 
 def make_not_found_error(message: str = "Not found") -> NotFoundError:
-    mock_response = MagicMock()
-    mock_response.status_code = 404
-    mock_response.headers = {}
-    return NotFoundError(message, response=mock_response, body=None)
+    return NotFoundError(body=message)
 
 
 @pytest.fixture
@@ -133,7 +128,7 @@ class TestCreateLettaConversation:
         """Verify API errors propagate."""
         mock_letta_client.conversations.create.side_effect = make_api_error("Server error")
 
-        with pytest.raises(APIError):
+        with pytest.raises(ApiError):
             conversation_service._create_letta_conversation("agent-001")
 
 
@@ -161,7 +156,7 @@ class TestVerifyLettaConversation:
         """API errors (not NotFoundError) should propagate."""
         mock_letta_client.conversations.retrieve.side_effect = make_api_error("Server error")
         
-        with pytest.raises(APIError):
+        with pytest.raises(ApiError):
             conversation_service._verify_letta_conversation("conv-123")
 
 
@@ -326,7 +321,7 @@ class TestGetOrCreateRoomConversation:
         """Letta API failure should propagate to caller."""
         mock_letta_client.conversations.create.side_effect = make_api_error("Server down")
 
-        with pytest.raises(APIError):
+        with pytest.raises(ApiError):
             await conversation_service.get_or_create_room_conversation(
                 room_id="!room1:matrix.test",
                 agent_id="agent-001",

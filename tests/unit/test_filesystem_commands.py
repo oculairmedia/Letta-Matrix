@@ -18,15 +18,14 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch, mock_open, MagicMock
 
-from src.matrix.client import (
+from src.matrix.config import Config, LettaCodeApiError
+from src.matrix.letta_code_service import (
     handle_letta_code_command,
     resolve_letta_project_dir,
     get_letta_code_room_state,
     update_letta_code_room_state,
     run_letta_code_task,
     call_letta_code_api,
-    Config,
-    LettaCodeApiError,
 )
 
 
@@ -152,10 +151,10 @@ class TestLettaCodeStateManagement:
         """Test getting state when no state exists"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
             state = get_letta_code_room_state("!newroom:test.com")
             assert state == {}
@@ -164,10 +163,10 @@ class TestLettaCodeStateManagement:
         """Test creating new room state entry"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
             result = update_letta_code_room_state("!room:test.com", {
                 "projectDir": "/opt/project",
@@ -196,10 +195,10 @@ class TestLettaCodeStateManagement:
         with open(state_file, 'w') as f:
             json.dump(initial_data, f)
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
             result = update_letta_code_room_state("!room:test.com", {
                 "projectDir": "/opt/new",
@@ -223,10 +222,10 @@ class TestResolveLettaProjectDir:
         """Test that override path takes precedence"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
             result = await resolve_letta_project_dir(
                 room_id="!room:test.com",
@@ -254,10 +253,10 @@ class TestResolveLettaProjectDir:
         with open(state_file, 'w') as f:
             json.dump(initial_data, f)
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
             result = await resolve_letta_project_dir(
                 room_id="!room:test.com",
@@ -273,12 +272,12 @@ class TestResolveLettaProjectDir:
         """Test resolving from VibSync API"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
                 mock_api.return_value = {"projectDir": "/opt/from-api"}
                 
                 result = await resolve_letta_project_dir(
@@ -304,12 +303,12 @@ class TestResolveLettaProjectDir:
         """Test that None is returned when no path found"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
                 mock_api.side_effect = LettaCodeApiError(404, "Not found", {})
                 
                 result = await resolve_letta_project_dir(
@@ -336,21 +335,21 @@ class TestFsLinkCommand:
         """Test /fs-link with explicit path argument"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-                 patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
-                
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+                mock_send = AsyncMock()
                 mock_api.return_value = {"message": "Linked successfully"}
-                
+
                 result = await handle_letta_code_command(
                     room=mock_room,
                     event=mock_event_fs_link,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-test-123",
                     agent_name_hint="Test Agent"
                 )
@@ -380,13 +379,13 @@ class TestFsLinkCommand:
         """Test /fs-link with auto-detection from VibSync API"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-                 patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+                mock_send = AsyncMock()
                 
                 # Mock VibSync API response
                 def api_side_effect(config, method, path, *args, **kwargs):
@@ -414,6 +413,7 @@ class TestFsLinkCommand:
                     event=mock_event_fs_link_no_args,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-test-123",
                     agent_name_hint="Huly - Test Project"  # Should match "Test Project"
                 )
@@ -436,13 +436,13 @@ class TestFsLinkCommand:
         """Test /fs-link when auto-detection fails"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-                 patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+                mock_send = AsyncMock()
                 
                 # Mock VibSync API to return no matching projects
                 mock_api.return_value = {
@@ -459,6 +459,7 @@ class TestFsLinkCommand:
                     event=mock_event_fs_link_no_args,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-test-123",
                     agent_name_hint="Huly - Nonexistent Project"
                 )
@@ -476,13 +477,13 @@ class TestFsLinkCommand:
         """Test /fs-link when VibSync API returns error"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-                 patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+                mock_send = AsyncMock()
                 
                 mock_api.side_effect = LettaCodeApiError(500, "Internal error", {"error": "Database down"})
                 
@@ -491,6 +492,7 @@ class TestFsLinkCommand:
                     event=mock_event_fs_link,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-test-123",
                     agent_name_hint="Test Agent"
                 )
@@ -525,34 +527,35 @@ class TestFsTaskCommand:
         with open(state_file, 'w') as f:
             json.dump(initial_data, f)
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
-                
-                result = await handle_letta_code_command(
-                    room=mock_room,
-                    event=mock_event_fs_task_on,
-                    config=mock_config,
-                    logger=mock_logger,
-                    agent_id_hint="agent-test-123",
-                    agent_name_hint="Test Agent"
-                )
-                
-                assert result is True
-                
-                # Verify state was updated
-                state = get_letta_code_room_state(mock_room.room_id)
-                assert state["enabled"] is True
-                assert state["projectDir"] == "/opt/stacks/test-project"
-                
-                # Verify confirmation message was sent
-                mock_send.assert_called_once()
-                message = mock_send.call_args[0][1]
-                assert "ENABLED" in message
-                assert "Letta Code" in message
+            mock_send = AsyncMock()
+            
+            result = await handle_letta_code_command(
+                room=mock_room,
+                event=mock_event_fs_task_on,
+                config=mock_config,
+                logger=mock_logger,
+                send_fn=mock_send,
+                agent_id_hint="agent-test-123",
+                agent_name_hint="Test Agent"
+            )
+
+            assert result is True
+
+            # Verify state was updated
+            state = get_letta_code_room_state(mock_room.room_id)
+            assert state["enabled"] is True
+            assert state["projectDir"] == "/opt/stacks/test-project"
+
+            # Verify confirmation message was sent
+            mock_send.assert_called_once()
+            message = mock_send.call_args[0][1]
+            assert "ENABLED" in message
+            assert "Letta Code" in message
 
     @pytest.mark.asyncio
     async def test_fs_task_disable(self, mock_room, mock_config, mock_logger, tmp_path):
@@ -571,32 +574,33 @@ class TestFsTaskCommand:
         event.body = "/fs-task off"
         event.sender = "@user:test.com"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
-                
-                result = await handle_letta_code_command(
-                    room=mock_room,
-                    event=event,
-                    config=mock_config,
-                    logger=mock_logger,
-                    agent_id_hint="agent-test-123",
-                    agent_name_hint="Test Agent"
-                )
-                
-                assert result is True
-                
-                # Verify state was updated
-                state = get_letta_code_room_state(mock_room.room_id)
-                assert state["enabled"] is False
-                
-                # Verify confirmation message was sent
-                mock_send.assert_called_once()
-                message = mock_send.call_args[0][1]
-                assert "DISABLED" in message
+            mock_send = AsyncMock()
+            
+            result = await handle_letta_code_command(
+                room=mock_room,
+                event=event,
+                config=mock_config,
+                logger=mock_logger,
+                send_fn=mock_send,
+                agent_id_hint="agent-test-123",
+                agent_name_hint="Test Agent"
+            )
+
+            assert result is True
+
+            # Verify state was updated
+            state = get_letta_code_room_state(mock_room.room_id)
+            assert state["enabled"] is False
+
+            # Verify confirmation message was sent
+            mock_send.assert_called_once()
+            message = mock_send.call_args[0][1]
+            assert "DISABLED" in message
 
     @pytest.mark.asyncio
     async def test_fs_task_status(self, mock_room, mock_event_fs_task_status,
@@ -612,30 +616,31 @@ class TestFsTaskCommand:
         with open(state_file, 'w') as f:
             json.dump(initial_data, f)
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
-                
-                result = await handle_letta_code_command(
-                    room=mock_room,
-                    event=mock_event_fs_task_status,
-                    config=mock_config,
-                    logger=mock_logger,
-                    agent_id_hint="agent-test-123",
-                    agent_name_hint="Test Agent"
-                )
-                
-                assert result is True
-                
-                # Verify status message was sent
-                mock_send.assert_called_once()
-                message = mock_send.call_args[0][1]
-                assert "ENABLED" in message
-                assert "Letta Code" in message
-                assert "/opt/stacks/test-project" in message
+            mock_send = AsyncMock()
+            
+            result = await handle_letta_code_command(
+                room=mock_room,
+                event=mock_event_fs_task_status,
+                config=mock_config,
+                logger=mock_logger,
+                send_fn=mock_send,
+                agent_id_hint="agent-test-123",
+                agent_name_hint="Test Agent"
+            )
+
+            assert result is True
+
+            # Verify status message was sent
+            mock_send.assert_called_once()
+            message = mock_send.call_args[0][1]
+            assert "ENABLED" in message
+            assert "Letta Code" in message
+            assert "/opt/stacks/test-project" in message
 
     @pytest.mark.asyncio
     async def test_fs_task_enable_without_link(self, mock_room, mock_event_fs_task_on,
@@ -643,13 +648,13 @@ class TestFsTaskCommand:
         """Test /fs-task on fails if no project linked"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send, \
-                 patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+            mock_send = AsyncMock()
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
                 
                 # Mock API to return no session
                 mock_api.side_effect = LettaCodeApiError(404, "Not found", {})
@@ -659,6 +664,7 @@ class TestFsTaskCommand:
                     event=mock_event_fs_task_on,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-test-123",
                     agent_name_hint="Test Agent"
                 )
@@ -693,13 +699,13 @@ class TestFsRunCommand:
         with open(state_file, 'w') as f:
             json.dump(initial_data, f)
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-                 patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+                mock_send = AsyncMock()
                 
                 mock_api.return_value = {
                     "success": True,
@@ -711,12 +717,13 @@ class TestFsRunCommand:
                     event=mock_event_fs_run,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-test-123",
                     agent_name_hint="Test Agent"
                 )
-                
+
                 assert result is True
-                
+
                 # Verify task API was called
                 mock_api.assert_called_once()
                 call_args = mock_api.call_args
@@ -725,7 +732,7 @@ class TestFsRunCommand:
                 assert payload["prompt"] == "list files in the current directory"
                 assert payload["projectDir"] == "/opt/stacks/test-project"
                 assert payload["agentId"] == "agent-test-123"
-                
+
                 # Verify response was sent
                 mock_send.assert_called()
                 message = mock_send.call_args[0][1]
@@ -737,13 +744,13 @@ class TestFsRunCommand:
         """Test /fs-run with --path override"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-                 patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+                mock_send = AsyncMock()
                 
                 mock_api.return_value = {
                     "success": True,
@@ -755,12 +762,13 @@ class TestFsRunCommand:
                     event=mock_event_fs_run_with_path,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-test-123",
                     agent_name_hint="Test Agent"
                 )
-                
+
                 assert result is True
-                
+
                 # Verify custom path was used
                 call_args = mock_api.call_args
                 payload = call_args[0][3]
@@ -776,28 +784,29 @@ class TestFsRunCommand:
         
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
-                
-                result = await handle_letta_code_command(
-                    room=mock_room,
-                    event=event,
-                    config=mock_config,
-                    logger=mock_logger,
-                    agent_id_hint="agent-test-123",
-                    agent_name_hint="Test Agent"
-                )
-                
-                assert result is True
-                
-                # Verify usage message was sent
-                mock_send.assert_called_once()
-                message = mock_send.call_args[0][1]
-                assert "Usage:" in message
+            mock_send = AsyncMock()
+            
+            result = await handle_letta_code_command(
+                room=mock_room,
+                event=event,
+                config=mock_config,
+                logger=mock_logger,
+                send_fn=mock_send,
+                agent_id_hint="agent-test-123",
+                agent_name_hint="Test Agent"
+            )
+
+            assert result is True
+
+            # Verify usage message was sent
+            mock_send.assert_called_once()
+            message = mock_send.call_args[0][1]
+            assert "Usage:" in message
 
 
 # ============================================================================
@@ -811,8 +820,8 @@ class TestRunLettaCodeTask:
     @pytest.mark.asyncio
     async def test_run_task_success(self, mock_config, mock_logger):
         """Test successful task execution"""
-        with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-             patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
+        with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+            mock_send = AsyncMock()
             
             mock_api.return_value = {
                 "success": True,
@@ -827,6 +836,7 @@ class TestRunLettaCodeTask:
                 prompt="test task",
                 config=mock_config,
                 logger=mock_logger,
+                send_fn=mock_send,
                 wrap_response=True
             )
             
@@ -839,8 +849,8 @@ class TestRunLettaCodeTask:
     @pytest.mark.asyncio
     async def test_run_task_failure(self, mock_config, mock_logger):
         """Test task execution failure"""
-        with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-             patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
+        with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+            mock_send = AsyncMock()
             
             mock_api.return_value = {
                 "success": False,
@@ -856,6 +866,7 @@ class TestRunLettaCodeTask:
                 prompt="failing task",
                 config=mock_config,
                 logger=mock_logger,
+                send_fn=mock_send,
                 wrap_response=True
             )
             
@@ -867,8 +878,8 @@ class TestRunLettaCodeTask:
     @pytest.mark.asyncio
     async def test_run_task_api_error(self, mock_config, mock_logger):
         """Test handling of API errors"""
-        with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-             patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
+        with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+            mock_send = AsyncMock()
             
             mock_api.side_effect = LettaCodeApiError(500, "Internal error", {"error": "Server down"})
             
@@ -880,6 +891,7 @@ class TestRunLettaCodeTask:
                 prompt="task",
                 config=mock_config,
                 logger=mock_logger,
+                send_fn=mock_send,
                 wrap_response=True
             )
             
@@ -904,13 +916,13 @@ class TestFilesystemCommandIntegration:
         """Test complete workflow: link -> enable -> run"""
         state_file = tmp_path / "letta_code_state.json"
         
-        with patch('src.matrix.client.LETTACODE_STATE_PATH', str(state_file)):
+        with patch('src.matrix.letta_code_service.LETTACODE_STATE_PATH', str(state_file)):
             # Reset internal state
-            import src.matrix.client as client_module
-            client_module._letta_code_state = {}
+            import src.matrix.letta_code_service as lcs_module
+            lcs_module._letta_code_state = {}
             
-            with patch('src.matrix.client.call_letta_code_api', new_callable=AsyncMock) as mock_api, \
-                 patch('src.matrix.client.send_as_agent', new_callable=AsyncMock) as mock_send:
+            with patch('src.matrix.letta_code_service.call_letta_code_api', new_callable=AsyncMock) as mock_api:
+                mock_send = AsyncMock()
                 
                 # Step 1: Link project
                 link_event = Mock()
@@ -924,6 +936,7 @@ class TestFilesystemCommandIntegration:
                     event=link_event,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-123",
                     agent_name_hint="Test Agent"
                 )
@@ -941,6 +954,7 @@ class TestFilesystemCommandIntegration:
                     event=enable_event,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-123",
                     agent_name_hint="Test Agent"
                 )
@@ -960,6 +974,7 @@ class TestFilesystemCommandIntegration:
                     event=run_event,
                     config=mock_config,
                     logger=mock_logger,
+                    send_fn=mock_send,
                     agent_id_hint="agent-123",
                     agent_name_hint="Test Agent"
                 )
