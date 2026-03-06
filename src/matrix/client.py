@@ -59,12 +59,8 @@ from src.matrix.letta_bridge import (
     send_to_letta_api_streaming,
     retry_with_backoff,
     get_agent_from_room_members,
-    forward_to_agent_mail,
-    load_agent_mail_mappings,
-    get_agent_code_name,
-    AGENT_MAIL_URL,
 )
-from src.matrix.message_processor import process_letta_message
+from src.matrix.message_processor import process_letta_message, MessageContext
 
 MATRIX_API_URL = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
 
@@ -500,21 +496,22 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
         # Determine silent mode from group gating result
         _silent = bool(gating_result and gating_result.silent) if gating_result else False
 
+        msg_ctx = MessageContext(
+            event_body=event.body,
+            event_sender=event.sender,
+            event_source=event_source,
+            original_event_id=getattr(event, 'event_id', None),
+            room_id=room.room_id,
+            room_display_name=room.display_name or room.room_id,
+            room_agent_id=room_agent_id,
+            config=config,
+            logger=logger,
+            client=client,
+            silent_mode=_silent,
+            auth_manager=auth_manager_global,
+        )
         task = asyncio.create_task(
-            process_letta_message(
-                event_body=event.body,
-                event_sender=event.sender,
-                event_source=event_source,
-                original_event_id=getattr(event, 'event_id', None),
-                room_id=room.room_id,
-                room_display_name=room.display_name or room.room_id,
-                room_agent_id=room_agent_id,
-                config=config,
-                logger=logger,
-                client=client,
-                silent_mode=_silent,
-                auth_manager=auth_manager_global,
-            )
+            process_letta_message(msg_ctx)
         )
         task.add_done_callback(lambda t: _on_letta_task_done(task_key, t))
         _active_letta_tasks[task_key] = task

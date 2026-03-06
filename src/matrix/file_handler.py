@@ -20,6 +20,7 @@ import logging
 import os
 import uuid
 import tempfile
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, Callable, Awaitable, Union
 from dataclasses import dataclass
@@ -336,10 +337,7 @@ class LettaFileHandler:
             # Fallback for unknown file types - use Letta source upload flow
             await self._notify(room_id, f"📄 Processing file: {metadata.file_name}")
             
-            # Download file from Matrix
-            file_path = await self._download_matrix_file(metadata)
-            
-            try:
+            async with self._downloaded_file(metadata) as file_path:
                 # Get or create Letta source for this room
                 source_id = await self._get_or_create_source(room_id, agent_id)
                 
@@ -361,16 +359,30 @@ class LettaFileHandler:
                     await self._notify(room_id, f"⚠️ File processing timed out for {metadata.file_name}")
                 
                 return success
-                
-            finally:
-                # Clean up temporary file
-                if file_path and os.path.exists(file_path):
-                    os.unlink(file_path)
-                    logger.debug(f"Cleaned up temporary file {file_path}")
         except Exception as e:
             logger.error(f"Error handling file event: {e}", exc_info=True)
             raise FileUploadError(f"Failed to process file upload: {e}")
     
+    @asynccontextmanager
+    async def _downloaded_file(self, metadata: FileMetadata):
+        """Download a Matrix file and clean up the temp file when done.
+
+        Usage::
+
+            async with self._downloaded_file(metadata) as file_path:
+                # work with file_path ...
+        """
+        file_path = await self._download_matrix_file(metadata)
+        try:
+            yield file_path
+        finally:
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.unlink(file_path)
+                    logger.debug(f"Cleaned up temporary file {file_path}")
+                except OSError:
+                    pass
+
     async def _handle_image_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> Optional[list]:
         """
         Handle image upload by sending as multimodal message to agent.
@@ -391,10 +403,7 @@ class LettaFileHandler:
         # Notify user that we're processing the image
         await self._notify(room_id, f"🖼️ Processing image: {metadata.file_name}")
         
-        # Download image from Matrix
-        file_path = await self._download_matrix_file(metadata)
-        
-        try:
+        async with self._downloaded_file(metadata) as file_path:
             # Read and encode image as base64
             with open(file_path, 'rb') as f:
                 image_data = base64.standard_b64encode(f.read()).decode('utf-8')
@@ -436,17 +445,9 @@ class LettaFileHandler:
             ]
             logger.info(f"Built multimodal content for image {metadata.file_name}")
             return input_content
-                 
-        finally:
-            # Clean up temporary file
-            if file_path and os.path.exists(file_path):
-                os.unlink(file_path)
-                logger.debug(f"Cleaned up temporary file {file_path}")
 
     async def _handle_audio_upload(self, metadata: FileMetadata) -> str:
-        file_path = await self._download_matrix_file(metadata)
-
-        try:
+        async with self._downloaded_file(metadata) as file_path:
             with open(file_path, 'rb') as audio_file:
                 audio_data = audio_file.read()
 
@@ -461,10 +462,6 @@ class LettaFileHandler:
 
             logger.info(f"Voice transcription succeeded for {metadata.file_name}")
             return f"[Voice message]: {transcribed_text}"
-        finally:
-            if file_path and os.path.exists(file_path):
-                os.unlink(file_path)
-                logger.debug(f"Cleaned up temporary file {file_path}")
     
     # ------------------------------------------------------------------
     # Temporal async file processing
@@ -602,10 +599,7 @@ class LettaFileHandler:
         # Notify user that we're processing (fire-and-forget — don't block pipeline)
         self._notify_bg(room_id, f"📄 Reading document: {metadata.file_name}...")
         
-        # Download file from Matrix
-        file_path = await self._download_matrix_file(metadata)
-        
-        try:
+        async with self._downloaded_file(metadata) as file_path:
             # Parse document with MarkItDown
             result = await parse_document(
                 file_path=file_path,
@@ -679,12 +673,6 @@ class LettaFileHandler:
             
             logger.info(f"Document handling complete for {metadata.file_name}, returning {len(agent_msg)} chars to agent")
             return agent_msg
-            
-        finally:
-            # Clean up temporary file
-            if file_path and os.path.exists(file_path):
-                os.unlink(file_path)
-                logger.debug(f"Cleaned up temporary file {file_path}")
 
     async def _send_multimodal_message(self, agent_id: str, content: list) -> Optional[Any]:
         """

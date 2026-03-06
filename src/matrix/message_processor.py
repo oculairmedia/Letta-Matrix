@@ -4,14 +4,13 @@ Message processing pipeline — formats envelopes, routes to Letta, delivers res
 Contains _process_letta_message which was the core processing loop in client.py.
 Orchestrates:
   1. Token refresh
-  2. Inter-agent / Agent Mail / OpenCode detection
+  2. Inter-agent / OpenCode detection
   3. Message envelope formatting
   4. Read receipts
   5. Streaming vs non-streaming Letta send
   6. Silent mode suppression (group gating)
-  7. Reverse-bridge forwarding (Agent Mail)
-  8. Gateway-down retry buffering
-  9. Error alerting
+  7. Gateway-down retry buffering
+  8. Error alerting
 
 Extracted from client.py as a standalone module.
 Re-exported by client.py for backward compatibility.
@@ -19,6 +18,7 @@ Re-exported by client.py for backward compatibility.
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Union
 
 from nio import AsyncClient
@@ -32,32 +32,48 @@ from src.matrix.agent_actions import (
 from src.matrix.letta_bridge import (
     send_to_letta_api,
     send_to_letta_api_streaming,
-    forward_to_agent_mail,
-    get_agent_code_name,
 )
 from src.matrix import formatter as matrix_formatter
 from src.matrix.poll_handler import process_agent_response
 
+@dataclass
+class MessageContext:
+    """All data needed to process a single inbound Matrix message."""
 
-async def process_letta_message(
-    event_body: str,
-    event_sender: str,
-    event_source: Optional[Dict],
-    original_event_id: Optional[str],
-    room_id: str,
-    room_display_name: str,
-    room_agent_id: Optional[str],
-    config: Config,
-    logger: logging.Logger,
-    client: Optional[AsyncClient] = None,
-    silent_mode: bool = False,
-    auth_manager=None,
-) -> None:
+    event_body: str
+    event_sender: str
+    event_source: Optional[Dict]
+    original_event_id: Optional[str]
+    room_id: str
+    room_display_name: str
+    room_agent_id: Optional[str]
+    config: Config
+    logger: logging.Logger
+    client: Optional[AsyncClient] = None
+    silent_mode: bool = False
+    auth_manager: Any = None
+
+async def process_letta_message(ctx: MessageContext) -> None:
     """
     Process a single inbound Matrix message through the Letta pipeline.
 
-    *auth_manager* is the global MatrixAuthManager (passed in to avoid globals).
+    *ctx.auth_manager* is the global MatrixAuthManager (passed in to avoid globals).
     """
+    # Unpack context for local use
+    event_body = ctx.event_body
+    event_sender = ctx.event_sender
+    event_source = ctx.event_source
+    original_event_id = ctx.original_event_id
+    room_id = ctx.room_id
+    room_display_name = ctx.room_display_name
+    room_agent_id = ctx.room_agent_id
+    config = ctx.config
+    logger = ctx.logger
+    client = ctx.client
+    silent_mode = ctx.silent_mode
+    auth_manager = ctx.auth_manager
+
+    message_to_send: Union[str, list] = event_body
     try:
         from src.core.mapping_service import get_mapping_by_matrix_user
 
@@ -65,7 +81,6 @@ async def process_letta_message(
         if client and auth_manager is not None:
             await auth_manager.ensure_valid_token(client)
 
-        message_to_send = event_body
         event_timestamp = None
         if event_source and isinstance(event_source, dict):
             event_timestamp = event_source.get("origin_server_ts")
@@ -76,8 +91,6 @@ async def process_letta_message(
         from_agent_id = None
         from_agent_name = None
 
-        is_agent_mail_message = False
-        agent_mail_metadata = None
         reply_to_event_id_for_envelope = None
         reply_to_sender_for_envelope = None
 
@@ -90,14 +103,6 @@ async def process_letta_message(
                 is_inter_agent_message = True
                 logger.info(
                     f"Detected inter-agent message (via metadata) from {from_agent_name} ({from_agent_id})"
-                )
-
-            agent_mail_metadata = content.get("m.agent_mail")
-            if agent_mail_metadata:
-                is_agent_mail_message = True
-                logger.info(
-                    f"[REVERSE-BRIDGE] Detected Agent Mail message from "
-                    f"{agent_mail_metadata.get('sender_friendly_name', 'Unknown')}"
                 )
 
             # Extract reply threading context
@@ -236,36 +241,6 @@ async def process_letta_message(
                 },
             )
 
-            if is_agent_mail_message and agent_mail_metadata and room_agent_id:
-                try:
-                    responder_code_name = get_agent_code_name(room_agent_id, logger)
-                    sender_code_name = agent_mail_metadata.get("sender_code_name")
-                    if responder_code_name and sender_code_name:
-                        original_subject = agent_mail_metadata.get(
-                            "subject", "No subject"
-                        )
-                        original_msg_id = agent_mail_metadata.get("message_id")
-                        thread_id = agent_mail_metadata.get("thread_id")
-                        await forward_to_agent_mail(
-                            sender_code_name=responder_code_name,
-                            recipient_code_name=sender_code_name,
-                            subject=f"Re: {original_subject}",
-                            body_md=letta_response,
-                            thread_id=thread_id,
-                            original_message_id=original_msg_id,
-                            logger=logger,
-                        )
-                    else:
-                        logger.warning(
-                            f"[REVERSE-BRIDGE] Could not get code names: "
-                            f"responder={responder_code_name}, sender={sender_code_name}"
-                        )
-                except Exception as bridge_error:
-                    logger.error(
-                        f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}",
-                        exc_info=True,
-                    )
-
         # ── Non-streaming path ────────────────────────────────────
         else:
             letta_response = await send_to_letta_api(
@@ -348,44 +323,13 @@ async def process_letta_message(
                     },
                 )
 
-        # Agent Mail reverse-bridge (non-streaming path)
-        if is_agent_mail_message and agent_mail_metadata and room_agent_id:
-            try:
-                responder_code_name = get_agent_code_name(room_agent_id, logger)
-                sender_code_name = agent_mail_metadata.get("sender_code_name")
-                if responder_code_name and sender_code_name:
-                    original_subject = agent_mail_metadata.get(
-                        "subject", "No subject"
-                    )
-                    original_msg_id = agent_mail_metadata.get("message_id")
-                    thread_id = agent_mail_metadata.get("thread_id")
-                    await forward_to_agent_mail(
-                        sender_code_name=responder_code_name,
-                        recipient_code_name=sender_code_name,
-                        subject=f"Re: {original_subject}",
-                        body_md=letta_response,
-                        thread_id=thread_id,
-                        original_message_id=original_msg_id,
-                        logger=logger,
-                    )
-                else:
-                    logger.warning(
-                        f"[REVERSE-BRIDGE] Could not get code names: "
-                        f"responder={responder_code_name}, sender={sender_code_name}"
-                    )
-            except Exception as bridge_error:
-                logger.error(
-                    f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}",
-                    exc_info=True,
-                )
-
     except LettaApiError as e:
         await _handle_letta_api_error(
             e,
             room_id=room_id,
             room_agent_id=room_agent_id,
             event_sender=event_sender,
-            message_to_send=message_to_send,
+            message_to_send=event_body,
             config=config,
             logger=logger,
             client=client,
