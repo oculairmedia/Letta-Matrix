@@ -49,6 +49,7 @@ class GatewayClient:
         idle_timeout: float = 3600.0,  # 1 hour — avoid cold-start subprocess spawns
         max_connections: int = 20,
         connect_timeout: float = 10.0,
+        event_timeout: float = 300.0,  # 5 min per-event timeout (Opus thinking can be slow)
         api_key: Optional[str] = None,
     ):
         self._gateway_url = gateway_url
@@ -56,6 +57,7 @@ class GatewayClient:
         self._max_connections = max_connections
         self._connect_timeout = connect_timeout
         self._api_key = api_key
+        self._event_timeout = event_timeout
         self._pool: Dict[str, _PoolEntry] = {}
         self._pool_lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -115,33 +117,57 @@ class GatewayClient:
                 entry.last_used = time.monotonic()
                 entry.in_use = True
 
-                async for raw in entry.ws:
-                    entry.last_used = time.monotonic()
-                    try:
-                        event = json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        logger.warning(f"[WS-GATEWAY] Non-JSON frame from gateway: {raw!r:.200}")
-                        continue
+                try:
+                    while True:
+                        try:
+                            raw = await asyncio.wait_for(
+                                entry.ws.recv(),
+                                timeout=self._event_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            logger.error(
+                                f"[WS-GATEWAY] Stream timeout ({self._event_timeout}s) for agent {agent_id}, "
+                                f"aborting stuck stream"
+                            )
+                            # Try to abort the stuck run on the server side
+                            try:
+                                await entry.ws.send(json.dumps({"type": "abort"}))
+                            except Exception:
+                                pass
+                            await self._evict(agent_id)
+                            last_error = GatewayUnavailableError(
+                                f"Stream timed out after {self._event_timeout}s with no events"
+                            )
+                            if attempt == 0:
+                                break  # Will retry
+                            raise last_error
 
-                    event_type = event.get("type")
-
-                    if event_type == "error":
-                        code = event.get("code", "UNKNOWN")
-                        err_msg = event.get("message", "Unknown gateway error")
-                        err_rid = event.get("request_id")
-                        if err_rid and err_rid != request_id:
+                        entry.last_used = time.monotonic()
+                        try:
+                            event = json.loads(raw)
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(f"[WS-GATEWAY] Non-JSON frame from gateway: {raw!r:.200}")
                             continue
-                        raise GatewaySessionError(code=code, message=err_msg, request_id=err_rid)
 
-                    if event_type == "result":
-                        yield event
-                        entry.in_use = False
-                        return  # Success — exit both the stream loop and the retry loop
+                        event_type = event.get("type")
 
-                    if event_type in ("stream", "session_init"):
-                        yield event
+                        if event_type == "error":
+                            code = event.get("code", "UNKNOWN")
+                            err_msg = event.get("message", "Unknown gateway error")
+                            err_rid = event.get("request_id")
+                            if err_rid and err_rid != request_id:
+                                continue
+                            raise GatewaySessionError(code=code, message=err_msg, request_id=err_rid)
 
-                entry.in_use = False
+                        if event_type == "result":
+                            yield event
+                            return  # Success — exit both the stream loop and the retry loop
+
+                        if event_type in ("stream", "session_init"):
+                            yield event
+                finally:
+                    entry.in_use = False
+
                 # Stream ended without result — treat as connection issue on first attempt
                 if attempt == 0:
                     logger.warning(f"[WS-GATEWAY] Stream ended without result for agent {agent_id}, will retry")
@@ -150,7 +176,6 @@ class GatewayClient:
                 raise GatewayUnavailableError("Stream ended without result event after retry")
 
             except websockets.ConnectionClosed as exc:
-                entry.in_use = False
                 logger.warning(f"[WS-GATEWAY] Connection closed for agent {agent_id}: {exc}")
                 await self._evict(agent_id)
                 last_error = GatewayUnavailableError(f"WS connection closed: {exc}")
@@ -158,7 +183,6 @@ class GatewayClient:
                     continue  # Retry with fresh connection
                 raise last_error from exc
             except GatewaySessionError as exc:
-                entry.in_use = False
                 # Stale session: gateway expired the session but TCP stayed alive.
                 # Evict and retry once — fresh _connect_and_init will send session_start.
                 if attempt == 0 and "session_start" in str(exc).lower():
@@ -168,7 +192,6 @@ class GatewayClient:
                     continue
                 raise
             except Exception as exc:
-                entry.in_use = False
                 logger.error(f"[WS-GATEWAY] Unexpected error for agent {agent_id}: {exc}", exc_info=True)
                 await self._evict(agent_id)
                 last_error = GatewayUnavailableError(f"Gateway error: {exc}")
