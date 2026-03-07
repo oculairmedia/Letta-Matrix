@@ -686,3 +686,184 @@ class TestGetMappingByAgentName:
             assert result is not None
             assert result["agent_id"] == "agent-1"
             mock_by_id.assert_called_once_with("agent-1")
+
+
+
+# =============================================================================
+# Tests for OpenCode relay skip (duplicate delivery fix)
+# =============================================================================
+
+class TestOpenCodeRelaySkip:
+    """Tests for the OpenCode relay duplicate delivery fix (room membership check)"""
+    
+    @pytest.fixture
+    def mock_room_with_users(self):
+        """Create a mock Matrix room with users dict"""
+        room = Mock()
+        room.room_id = "!MtuqLUCwvKypRU6gll:matrix.oculair.ca"
+        room.display_name = "Test Room"
+        room.users = {}  # Will be populated in tests
+        return room
+    
+    @pytest.fixture
+    def mock_room_no_users_attr(self):
+        """Create a mock Matrix room WITHOUT users attribute (backward compat test)"""
+        room = Mock(spec=['room_id', 'display_name'])  # No 'users' attribute
+        room.room_id = "!MtuqLUCwvKypRU6gll:matrix.oculair.ca"
+        room.display_name = "Test Room"
+        return room
+    
+    @pytest.fixture
+    def mock_event_with_oc_mention(self):
+        """Create a mock event with OpenCode mention"""
+        event = Mock()
+        event.body = "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca please check this"
+        event.sender = "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca"
+        event.event_id = "$oc_mention_123"
+        event.source = {"content": {}}
+        return event
+    
+    @pytest.fixture
+    def mock_event_with_agent_and_oc_mention(self):
+        """Create a mock event with both agent and OpenCode mentions"""
+        event = Mock()
+        event.body = "@Meridian and @oc_matrix_synapse_deployment_v2:matrix.oculair.ca please help"
+        event.sender = "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca"
+        event.event_id = "$mixed_mention_123"
+        event.source = {"content": {}}
+        return event
+    
+    @pytest.mark.asyncio
+    async def test_skips_opencode_relay_when_identity_in_room(
+        self, mock_room_with_users, mock_event_with_oc_mention, mock_config, mock_logger, mock_mapping_service
+    ):
+        """Test that relay is skipped when OpenCode MXID is already in room.users"""
+        from src.matrix.mention_routing import handle_agent_mention_routing
+        
+        # Add OpenCode identity to room users
+        oc_mxid = "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca"
+        mock_room_with_users.users[oc_mxid] = Mock()  # Mock user object
+        
+        admin_client = AsyncMock()
+        
+        with patch('src.matrix.mention_routing.forward_to_opencode_room') as mock_forward_oc, \
+             patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
+            
+            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/matrix-synapse-deployment")
+            
+            await handle_agent_mention_routing(
+                room=mock_room_with_users,
+                event=mock_event_with_oc_mention,
+                sender_mxid=mock_event_with_oc_mention.sender,
+                sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
+                sender_agent_name="Huly - Matrix Synapse Deployment",
+                config=mock_config,
+                logger=mock_logger,
+                admin_client=admin_client,
+            )
+            
+            # forward_to_opencode_room should NOT be called
+            mock_forward_oc.assert_not_called()
+            # resolve_opencode_room should NOT be called either (early skip)
+            mock_resolve_oc.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_forwards_opencode_relay_when_identity_not_in_room(
+        self, mock_room_with_users, mock_event_with_oc_mention, mock_config, mock_logger, mock_mapping_service
+    ):
+        """Test that relay IS forwarded when OpenCode MXID is NOT in room.users"""
+        from src.matrix.mention_routing import handle_agent_mention_routing
+        
+        # Room users dict is empty - OpenCode identity NOT present
+        mock_room_with_users.users = {}
+        
+        admin_client = AsyncMock()
+        
+        with patch('src.matrix.mention_routing.forward_to_opencode_room') as mock_forward_oc, \
+             patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
+            
+            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/matrix-synapse-deployment")
+            mock_forward_oc.return_value = "$forwarded_oc_123"
+            
+            await handle_agent_mention_routing(
+                room=mock_room_with_users,
+                event=mock_event_with_oc_mention,
+                sender_mxid=mock_event_with_oc_mention.sender,
+                sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
+                sender_agent_name="Huly - Matrix Synapse Deployment",
+                config=mock_config,
+                logger=mock_logger,
+                admin_client=admin_client,
+            )
+            
+            # forward_to_opencode_room SHOULD be called
+            mock_forward_oc.assert_called_once()
+            # resolve_opencode_room SHOULD be called to get the relay room
+            mock_resolve_oc.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_skips_relay_but_still_forwards_agent_mentions(
+        self, mock_room_with_users, mock_event_with_agent_and_oc_mention, mock_config, mock_logger, mock_mapping_service
+    ):
+        """Test that agent forwarding happens but relay is skipped when OpenCode in room"""
+        from src.matrix.mention_routing import handle_agent_mention_routing
+        
+        # Add OpenCode identity to room users
+        oc_mxid = "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca"
+        mock_room_with_users.users[oc_mxid] = Mock()
+        
+        admin_client = AsyncMock()
+        
+        with patch('src.matrix.mention_routing.forward_to_agent_room') as mock_forward_agent, \
+             patch('src.matrix.mention_routing.forward_to_opencode_room') as mock_forward_oc, \
+             patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
+            
+            mock_forward_agent.return_value = "$forwarded_agent_123"
+            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/matrix-synapse-deployment")
+            
+            await handle_agent_mention_routing(
+                room=mock_room_with_users,
+                event=mock_event_with_agent_and_oc_mention,
+                sender_mxid=mock_event_with_agent_and_oc_mention.sender,
+                sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
+                sender_agent_name="Huly - Matrix Synapse Deployment",
+                config=mock_config,
+                logger=mock_logger,
+                admin_client=admin_client,
+            )
+            
+            # Agent forwarding SHOULD happen (Meridian mention)
+            mock_forward_agent.assert_called_once()
+            # OpenCode relay should NOT happen (already in room)
+            mock_forward_oc.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_forwards_relay_when_room_has_no_users_attr(
+        self, mock_room_no_users_attr, mock_event_with_oc_mention, mock_config, mock_logger, mock_mapping_service
+    ):
+        """Test backward compatibility: forward relay when room lacks users attribute"""
+        from src.matrix.mention_routing import handle_agent_mention_routing
+        
+        admin_client = AsyncMock()
+        
+        with patch('src.matrix.mention_routing.forward_to_opencode_room') as mock_forward_oc, \
+             patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
+            
+            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/matrix-synapse-deployment")
+            mock_forward_oc.return_value = "$forwarded_oc_123"
+            
+            await handle_agent_mention_routing(
+                room=mock_room_no_users_attr,
+                event=mock_event_with_oc_mention,
+                sender_mxid=mock_event_with_oc_mention.sender,
+                sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
+                sender_agent_name="Huly - Matrix Synapse Deployment",
+                config=mock_config,
+                logger=mock_logger,
+                admin_client=admin_client,
+            )
+            
+            # forward_to_opencode_room SHOULD be called (no users attr = forward normally)
+            mock_forward_oc.assert_called_once()
+            # resolve_opencode_room SHOULD be called
+            mock_resolve_oc.assert_called_once()
