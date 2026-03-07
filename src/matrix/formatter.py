@@ -225,3 +225,46 @@ def wrap_opencode_routing(content: str, opencode_mxid: str) -> str:
         f"\n"
         f'Example: "{opencode_mxid} Here is my response..."\n'
     )
+
+
+def format_portal_contact_envelope(
+    contact_sender: str,
+    room_name: str,
+    chat_id: str,
+    message_id: Optional[str],
+    timestamp: int | float | None,
+    text: str,
+) -> str:
+    """Format a passive observation envelope for bridged portal room messages.
+
+    These are messages from contacts (WhatsApp, Telegram, etc.) that should
+    be observed by the agent but NOT replied to in the portal room.
+    """
+    sender_value = _extract_localpart(contact_sender) if contact_sender else "unknown"
+    metadata_lines = [
+        "- **Channel**: Portal (bridged messaging)",
+        f"- **Chat ID**: {chat_id}",
+        f"- **Message ID**: {message_id}",
+        f"- **Contact**: {sender_value}",
+        f"- **Room**: {room_name}",
+        f"- **Timestamp**: {_format_timestamp(timestamp)}",
+    ]
+    context_lines = [
+        "- **Type**: Passive contact observation",
+        "- **Source**: Bridged messaging room (WhatsApp, Telegram, or similar)",
+        "- **Important**: This is NOT from the user. This is a message from one of the user's contacts.",
+        "- **Action**: Do NOT reply in this room. Observe passively and update your memory if the content is relevant.",
+        "- **Reporting**: If this message contains something that requires the user's attention or action, note it in your memory so you can inform the user in your next direct conversation with them.",
+    ]
+    sections = [
+        "<system-reminder>",
+        "## Message Metadata",
+        *metadata_lines,
+        "",
+        "## Contact Message Context",
+        *context_lines,
+        "</system-reminder>",
+    ]
+    reminder = "\n".join(sections)
+    body = text or ""
+    return f"{reminder}\n\n{body}" if body else reminder

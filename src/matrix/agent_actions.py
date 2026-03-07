@@ -88,7 +88,7 @@ async def send_as_agent_with_event_id(
                 "Content-Type": "application/json",
             }
 
-            message_data: Dict[str, Any] = {"msgtype": "m.notice", "body": message}
+            message_data: Dict[str, Any] = {"msgtype": "m.text", "body": message}
 
             # Convert markdown to HTML for rich rendering
             try:

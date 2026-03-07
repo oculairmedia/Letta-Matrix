@@ -235,6 +235,7 @@ class _MessageCallbackRouter:
         self.client = client
         self.room_agent_mapping = None
         self.sender_mapping = None
+        self.portal_link = None  # Set when room is matched via portal link
 
     def _should_skip_message(self, event, room_id) -> Optional[str]:
         event_id = getattr(event, "event_id", None)
@@ -290,6 +291,7 @@ class _MessageCallbackRouter:
             if portal_link:
                 self.room_agent_mapping = get_mapping_by_agent_id(portal_link["agent_id"])
                 if self.room_agent_mapping:
+                    self.portal_link = portal_link
                     self.logger.info(f"Portal link match: room {room_id} → agent {portal_link['agent_id']}")
 
         room_agent_user_id = self.room_agent_mapping.get("matrix_user_id") if self.room_agent_mapping else None
@@ -507,6 +509,71 @@ async def _handle_stop_command(room, config, logger, room_agent_id, room_agent_n
     return True
 
 
+
+async def _handle_passive_portal_message(
+    room, event, config: Config, logger: logging.Logger,
+    room_agent_id: str, room_agent_name: str, message_text: str,
+) -> None:
+    """Handle portal room messages in passive observation mode.
+
+    Sends the contact message to Letta for processing (memory updates,
+    actionable item detection) but does NOT send any response to the
+    Matrix room. The agent observes silently.
+
+    Follows the same pattern as LettaBot's heartbeat: wrap the message in
+    a system envelope, send through the gateway, discard the response.
+    """
+    import time as _time
+    from src.matrix.config import LettaApiError
+    from src.matrix.letta_bridge import _get_gateway_client
+    from src.matrix import formatter as matrix_formatter
+
+    event_source = getattr(event, "source", None)
+    event_timestamp = None
+    if isinstance(event_source, dict):
+        event_timestamp = event_source.get("origin_server_ts")
+    if event_timestamp is None:
+        event_timestamp = int(_time.time() * 1000)
+
+    # Format with portal contact envelope — clearly marks sender as contact, not user
+    envelope = matrix_formatter.format_portal_contact_envelope(
+        contact_sender=event.sender,
+        room_name=room.display_name or room.room_id,
+        chat_id=room.room_id,
+        message_id=getattr(event, "event_id", None),
+        timestamp=event_timestamp,
+        text=message_text,
+    )
+
+    logger.info(
+        f"[PORTAL-PASSIVE] Ingesting contact message from {event.sender} "
+        f"in {room.display_name or room.room_id} for agent {room_agent_name}"
+    )
+
+    async def _send_to_letta():
+        try:
+            gateway_client = await _get_gateway_client(config, logger)
+            from src.letta.gateway_stream_reader import collect_via_gateway
+
+            result = await collect_via_gateway(
+                client=gateway_client,
+                agent_id=room_agent_id,
+                message=envelope,
+                source={"channel": "portal", "chatId": room.room_id},
+            )
+            resp_len = len(result) if result else 0
+            logger.info(
+                f"[PORTAL-PASSIVE] Agent processed contact message "
+                f"({resp_len} chars response discarded)"
+            )
+        except LettaApiError as e:
+            logger.warning(f"[PORTAL-PASSIVE] Letta API error (non-critical): {e}")
+        except Exception as e:
+            logger.warning(f"[PORTAL-PASSIVE] Failed to send to Letta (non-critical): {e}")
+
+    # Fire-and-forget: agent processes in background, response is discarded
+    asyncio.create_task(_send_to_letta())
+
 async def _dispatch_letta_task(room, event, config, logger, client, room_agent_id, gating_result, message_text) -> bool:
     task_key = (room.room_id, room_agent_id or "unknown")
     existing_task = _active_letta_tasks.get(task_key)
@@ -555,6 +622,32 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
     if not resolved_agent:
         return
     room_agent_id, room_agent_name, room_agent_user_id = resolved_agent
+
+    # Portal rooms: check for @agent mention to activate, otherwise passive observation
+    if router.portal_link:
+        message_text, _ = router._extract_message_content(event)
+        # If the user @mentions the agent by name, treat as active request —
+        # let it fall through to normal processing so the agent responds in-room
+        # Also check the formatted_body for Matrix pills (HTML mentions)
+        formatted_body = (
+            event.source.get("content", {}).get("formatted_body", "")
+            if getattr(event, "source", None) else ""
+        )
+        agent_mentioned = room_agent_name and (
+            f"@{room_agent_name.lower()}" in message_text.lower()
+            or room_agent_name.lower() in message_text.lower()
+            or room_agent_name.lower() in formatted_body.lower()
+        )
+        if not agent_mentioned:
+            await _handle_passive_portal_message(
+                room, event, config, logger, room_agent_id, room_agent_name, message_text
+            )
+            return
+        # Agent was @mentioned — continue to normal dispatch below
+        logger.info(
+            f"[PORTAL-ACTIVE] @{room_agent_name} mentioned in portal room "
+            f"{room.display_name or room.room_id}, processing as active request"
+        )
 
     message_text, _ = router._extract_message_content(event)
     _ = router._is_silent_message(event.sender, [router.sender_mapping])
