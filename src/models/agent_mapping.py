@@ -53,6 +53,12 @@ class AgentMapping(Base):
             result["removed_at"] = self.removed_at.isoformat()
         return result
 
+    def to_public_dict(self) -> Dict:
+        """Convert to dictionary format, excluding sensitive credentials (matrix_password)"""
+        result = self.to_dict()
+        result.pop('matrix_password', None)
+        return result
+
 
 class InvitationStatus(Base):
     """Tracks invitation status for each agent-invitee pair"""

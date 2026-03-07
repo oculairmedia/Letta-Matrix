@@ -153,6 +153,9 @@ async def upsert_agent_mapping(agent_id: str, request: AgentMappingUpsertRequest
         )
         if not mapping:
             raise HTTPException(status_code=500, detail="Failed to upsert mapping")
+        # Strip credentials from API response
+        if isinstance(mapping, dict):
+            mapping.pop("matrix_password", None)
         return {
             "success": True,
             "agent_id": agent_id,
@@ -200,7 +203,7 @@ async def update_agent_mapping(agent_id: str, request: AgentMappingUpdateRequest
         return {
             "success": True,
             "agent_id": agent_id,
-            "mapping": updated.to_dict(),
+            "mapping": updated.to_public_dict(),
         }
     except HTTPException:
         raise
