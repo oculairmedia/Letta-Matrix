@@ -44,13 +44,25 @@ def _check_pill(
     return False, None
 
 
-def _check_text(body: str, bot_localpart: str) -> Tuple[bool, Optional[str]]:
-    """Case-insensitive @localpart word-boundary match."""
-    if not body or not bot_localpart:
+def _check_text(body: str, bot_user_id: str) -> Tuple[bool, Optional[str]]:
+    """Match bot's full MXID or bare @localpart (but not @localpart:other.server)."""
+    if not body or not bot_user_id or not bot_user_id.startswith("@"):
         return False, None
     clean = strip_reply_fallback(body)
-    pat = re.compile(rf"@{re.escape(bot_localpart)}\b", re.IGNORECASE)
-    m = pat.search(clean)
+    parts = bot_user_id[1:].split(":", 1)
+    localpart = parts[0]
+    domain = parts[1] if len(parts) > 1 else ""
+    if not localpart:
+        return False, None
+    # 1. Try full MXID match (@localpart:domain)
+    if domain:
+        full_pat = re.compile(rf"@{re.escape(localpart)}:{re.escape(domain)}\b", re.IGNORECASE)
+        m = full_pat.search(clean)
+        if m:
+            return True, m.group(0)
+    # 2. Bare @localpart only if NOT followed by : (avoids matching @bot:other.server)
+    bare_pat = re.compile(rf"@{re.escape(localpart)}(?!:)\b", re.IGNORECASE)
+    m = bare_pat.search(clean)
     if m:
         return True, m.group(0)
     return False, None
@@ -88,11 +100,8 @@ def detect_matrix_mention(
     if hit:
         return MentionResult(True, "pill", text)
 
-    # 2. @localpart
-    localpart = ""
-    if bot_user_id and bot_user_id.startswith("@"):
-        localpart = bot_user_id[1:].split(":")[0]
-    hit, text = _check_text(body, localpart)
+    # 2. @localpart text (pass full MXID for domain-aware matching)
+    hit, text = _check_text(body, bot_user_id)
     if hit:
         return MentionResult(True, "text", text)
 

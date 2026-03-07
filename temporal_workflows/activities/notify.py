@@ -125,8 +125,24 @@ async def notify_letta_agent(input: NotifyAgentInput) -> NotifyAgentResult:
                 response_text=None,
             )
 
+        _RECEIVE_TIMEOUT = 60  # seconds per event
+        _MAX_EVENTS = 500  # safety cap
         response_chunks: list[str] = []
-        async for raw in ws:
+        event_count = 0
+        while True:
+            event_count += 1
+            if event_count > _MAX_EVENTS:
+                raise NotifyError(
+                    f"Exceeded {_MAX_EVENTS} events without result for agent {input.agent_id}"
+                )
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=_RECEIVE_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise NotifyError(
+                    f"Receive timeout ({_RECEIVE_TIMEOUT}s) waiting for agent {input.agent_id} response"
+                )
+            except websockets.ConnectionClosed:
+                break  # falls through to 'stream ended without result' error
             try:
                 event = json.loads(raw)
             except (json.JSONDecodeError, TypeError):

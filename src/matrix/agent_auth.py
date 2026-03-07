@@ -4,7 +4,8 @@ Agent authentication and token management helpers.
 
 import asyncio
 import logging
-from typing import Optional
+import time
+from typing import Dict, Optional
 
 import aiohttp
 
@@ -14,8 +15,9 @@ from src.matrix.config import Config
 _AGENT_LOGIN_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 
-# Cache to avoid repeated repair attempts for the same agent within a session
-_repair_attempted: set = set()
+# Cooldown tracking: agent_id -> timestamp of last repair attempt
+_REPAIR_COOLDOWN_SECONDS = 300  # 5 minutes
+_repair_last_attempt: Dict[str, float] = {}
 
 
 async def get_agent_token(
@@ -109,9 +111,10 @@ async def repair_agent_password(
     Returns the new password on success, None on failure.
     """
     agent_id = agent_mapping.get("agent_id", "")
-    if agent_id in _repair_attempted:
-        return None  # Already tried this session, don't loop
-    _repair_attempted.add(agent_id)
+    last_attempt = _repair_last_attempt.get(agent_id, 0)
+    if time.monotonic() - last_attempt < _REPAIR_COOLDOWN_SECONDS:
+        return None  # Still in cooldown, don't retry yet
+    _repair_last_attempt[agent_id] = time.monotonic()
 
     agent_username = agent_mapping["matrix_user_id"].split(":")[0].replace("@", "")
     agent_name = agent_mapping.get("agent_name", agent_username)
@@ -120,7 +123,6 @@ async def repair_agent_password(
         import os
         import secrets
         import string
-        import time
 
         # Generate a new password
         charset = string.ascii_letters + string.digits
@@ -173,6 +175,7 @@ async def repair_agent_password(
             await asyncio.sleep(0.5)
 
             # Read response to verify success
+            reset_confirmed = False
             messages_url = (
                 f"{config.homeserver_url}/_matrix/client/v3/rooms/{admin_room}"
                 f"/messages?dir=b&limit=2"
@@ -191,13 +194,19 @@ async def repair_agent_password(
                                 logger.info(
                                     f"[{caller}] Password repair: Tuwunel confirmed reset for {agent_username}"
                                 )
+                                reset_confirmed = True
                             else:
                                 logger.warning(
                                     f"[{caller}] Password repair: unexpected response: {body}"
                                 )
                             break
 
-        # Update DB with new password
+            if not reset_confirmed:
+                logger.error(
+                    f"[{caller}] Password repair: no positive confirmation from Tuwunel for {agent_username}, not persisting new password"
+                )
+                return None
+        # Only persist after positive confirmation from Tuwunel
         from src.models.agent_mapping import AgentMappingDB
         from src.core.mapping_service import invalidate_cache
 

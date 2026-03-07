@@ -165,26 +165,26 @@ class TestCheckPill:
 
 class TestCheckText:
     def test_at_mention(self):
-        hit, text = _check_text("hello @meridian how are you?", "meridian")
+        hit, text = _check_text("hello @meridian how are you?", "@meridian:matrix.oculair.ca")
         assert hit is True
         assert text == "@meridian"
 
     def test_case_insensitive(self):
-        hit, _ = _check_text("hey @MERIDIAN", "meridian")
+        hit, _ = _check_text("hey @MERIDIAN", "@meridian:matrix.oculair.ca")
         assert hit is True
 
     def test_no_mention(self):
-        hit, _ = _check_text("just a normal message", "meridian")
+        hit, _ = _check_text("just a normal message", "@meridian:matrix.oculair.ca")
         assert hit is False
 
     def test_quoted_mention_ignored(self):
         """Reply fallback content should be stripped before matching."""
         body = "> <@someone:x.com> @meridian said hi\n\nactual message"
-        hit, _ = _check_text(body, "meridian")
+        hit, _ = _check_text(body, "@meridian:matrix.oculair.ca")
         assert hit is False
 
     def test_empty_body(self):
-        hit, _ = _check_text("", "meridian")
+        hit, _ = _check_text("", "@meridian:matrix.oculair.ca")
         assert hit is False
 
 

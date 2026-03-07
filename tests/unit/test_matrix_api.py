@@ -385,8 +385,8 @@ class TestListRoomsEndpoint:
 
         mock_session.return_value = mock_session_instance
 
-        # Make request - /rooms/list is a GET endpoint
-        response = client.get("/rooms/list?access_token=token123&homeserver=http://test:8008")
+        # Make request - /rooms/list is a GET endpoint, access_token via header
+        response = client.get("/rooms/list?homeserver=http://test:8008", headers={"X-Access-Token": "token123"})
 
         assert response.status_code == 200
         data = response.json()

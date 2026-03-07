@@ -76,7 +76,7 @@ class MatrixUserManager:
 
         # Self-healing fallback: use pre-configured admin token
         import os
-        fallback_token = os.getenv("MATRIX_ADMIN_TOKEN") or os.getenv("MATRIX_ACCESS_TOKEN")
+        fallback_token = os.getenv("MATRIX_ADMIN_TOKEN")
         if fallback_token:
             logger.info("Using MATRIX_ADMIN_TOKEN fallback (admin password login failed)")
             self.admin_token = fallback_token
