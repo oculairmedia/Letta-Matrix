@@ -140,7 +140,7 @@ class IdentityClientPool:
         room_id: str,
         event_id: str,
         message: str,
-        msgtype: str = "m.notice",
+        msgtype: str = "m.text",
     ) -> Optional[str]:
         client = await self.get_client(identity_id)
         if not client:
@@ -185,7 +185,7 @@ class IdentityClientPool:
         room_id: str,
         event_id: str,
         message: str,
-        msgtype: str = "m.notice",
+        msgtype: str = "m.text",
     ) -> Optional[str]:
         identity_id = f"letta_{agent_id}"
         return await self.edit_message(identity_id, room_id, event_id, message, msgtype)

@@ -28,7 +28,6 @@ class TestEditAsAgentRequestMsgtype:
             room_id="!room:example.com",
             event_id="$event123",
             message="Updated message",
-            msgtype="m.text",
         )
         assert req.msgtype == "m.text"
 
@@ -50,13 +49,11 @@ class TestEditAsAgentRequestMsgtype:
             room_id="!room:example.com",
             event_id="$event123",
             message="Updated message",
-            msgtype="m.text",
         )
         send_req = SendAsAgentRequest(
             agent_id="agent-123",
             room_id="!room:example.com",
             message="New message",
-            msgtype="m.text",
         )
         assert edit_req.msgtype == send_req.msgtype == "m.text"
 

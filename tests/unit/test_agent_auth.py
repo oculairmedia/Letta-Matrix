@@ -198,4 +198,4 @@ async def test_repair_agent_password_respects_cooldown(
 
     assert first is None
     assert second is None
-    assert http_session.post.call_count == 1
+    assert http_session.post.call_count == 1  # Only first call logged in; second was cooldown-blocked

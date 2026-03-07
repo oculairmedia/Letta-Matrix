@@ -109,7 +109,6 @@ class LettaSourceManager:
                     self.logger.debug(f"Folder not found by name: {e}")
 
                 self.logger.info(f"Creating new folder: {folder_name}")
-                embedding_config = await self._run_sync(self.get_embedding_config, agent_id)
 
                 try:
                     folder = await self._run_sync(
