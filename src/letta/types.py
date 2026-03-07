@@ -92,9 +92,8 @@ def extract_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 __all__ = [
-    # SDK types
     "AgentState",
-    "AgentType", 
+    "AgentType",
     "AgentCreateParams",
     "AgentUpdateParams",
     # Custom types

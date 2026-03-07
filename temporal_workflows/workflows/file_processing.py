@@ -29,16 +29,19 @@ with workflow.unsafe.imports_passed_through():
         ingest_to_haystack,
         notify_letta_agent,
         update_matrix_status,
+        cleanup_file_artifacts,
         DownloadInput,
         ParseInput,
         IngestInput,
         NotifyAgentInput,
         MatrixStatusInput,
+        CleanupArtifactsInput,
         DownloadResult,
         ParseResult,
         IngestResult,
         NotifyAgentResult,
         MatrixStatusResult,
+        CleanupArtifactsResult,
         ParseError,
     )
 
@@ -90,6 +93,9 @@ class FileProcessingInput:
     # Retry config (per-activity overrides use their own defaults)
     max_retries: int = 3
     retry_backoff_seconds: int = 2
+
+    # Optional Letta conversation ID for room-scoped context continuity
+    conversation_id: Optional[str] = None
 
 
 @dataclass
@@ -192,6 +198,8 @@ class FileProcessingWorkflow:
             file_name=input.file_name,
         )
         workflow_start = workflow.now()
+        download_result: Optional[DownloadResult] = None
+        ingest_completed = False
 
         try:
             # ---------------------------------------------------------------
@@ -213,33 +221,18 @@ class FileProcessingWorkflow:
                 if input.caption:
                     heads_up_msg += f'\n\nThe user asked: "{input.caption}"'
 
-                heads_up_result: NotifyAgentResult = await workflow.execute_activity(
+                await workflow.execute_activity(
                     notify_letta_agent,
                     NotifyAgentInput(
                         agent_id=input.agent_id,
                         message=heads_up_msg,
+                        room_id=input.room_id,
+                        conversation_id=input.conversation_id or "",
+                        wait_for_result=False,  # Fire-and-forget: don't block pipeline
                     ),
-                    start_to_close_timeout=timedelta(seconds=60),
+                    start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=_NOTIFY_RETRY,
                 )
-
-                # Update the processing status message with agent's response
-                if heads_up_result.response_text:
-                    try:
-                        status_update = await workflow.execute_activity(
-                            update_matrix_status,
-                            MatrixStatusInput(
-                                room_id=input.room_id,
-                                message=heads_up_result.response_text,
-                                agent_id=input.agent_id,
-                                event_id=self._status_event_id,  # Edit the processing status message
-                                msgtype="m.text",
-                            ),
-                            start_to_close_timeout=timedelta(seconds=30),
-                            retry_policy=_NOTIFY_RETRY,
-                        )
-                    except Exception as e:
-                        workflow.logger.warning(f"Failed to update status with agent response: {e}")
             except Exception as e:
                 # Heads-up is best-effort — don't fail the workflow
                 workflow.logger.warning(f"Failed to send agent heads-up: {e}")
@@ -248,11 +241,16 @@ class FileProcessingWorkflow:
             # ---------------------------------------------------------------
             await self._check_paused()
             if self._cancelled:
-                result.status = WorkflowStatus.CANCELLED.value
-                return result
+                return await self._finalize_cancellation(
+                    input=input,
+                    result=result,
+                    workflow_start=workflow_start,
+                    download_result=download_result,
+                    ingest_completed=ingest_completed,
+                )
 
             self._status = WorkflowStatus.DOWNLOADING
-            download_result: DownloadResult = await workflow.execute_activity(
+            download_result = await workflow.execute_activity(
                 download_file_from_matrix,
                 DownloadInput(
                     mxc_url=input.mxc_url,
@@ -262,15 +260,111 @@ class FileProcessingWorkflow:
                 start_to_close_timeout=timedelta(seconds=60),
                 retry_policy=_DOWNLOAD_RETRY,
             )
+            if download_result is None:
+                raise RuntimeError("download_file_from_matrix returned no result")
             result.download_ms = download_result.duration_ms
+
+            # ---------------------------------------------------------------
+            # Step 1b: Duplicate check — skip processing if file already indexed
+            # ---------------------------------------------------------------
+            if download_result.is_duplicate:
+                workflow.logger.info(
+                    f"Duplicate file detected: {input.file_name} "
+                    f"(hash={download_result.file_hash[:12]}...) — skipping processing"
+                )
+                self._status = WorkflowStatus.COMPLETED
+                result.status = WorkflowStatus.COMPLETED.value
+
+                duplicate_note = (
+                    f"[System: Duplicate Document Ready] **{input.file_name}**\n\n"
+                    f"This file is a duplicate of a previously indexed document (hash match: {download_result.file_hash[:12]}...). "
+                    f"No re-indexing was required; the existing indexed content is ready for search.\n\n"
+                    f"Use **search_documents** to answer the user's questions about this document."
+                )
+                if input.caption:
+                    duplicate_note += (
+                        f'\n\nThe user asked: "{input.caption}"\n'
+                        f"Use the search_documents tool to find relevant content and answer their question."
+                    )
+
+                duplicate_notify = await workflow.execute_activity(
+                    notify_letta_agent,
+                    NotifyAgentInput(
+                        agent_id=input.agent_id,
+                        message=duplicate_note,
+                        room_id=input.room_id,
+                        conversation_id=input.conversation_id or "",
+                    ),
+                    start_to_close_timeout=timedelta(seconds=60),
+                    retry_policy=_NOTIFY_RETRY,
+                )
+
+                if duplicate_notify.response_text:
+                    try:
+                        await workflow.execute_activity(
+                            update_matrix_status,
+                            MatrixStatusInput(
+                                room_id=input.room_id,
+                                message=duplicate_notify.response_text,
+                                agent_id=input.agent_id,
+                                msgtype="m.text",
+                            ),
+                            start_to_close_timeout=timedelta(seconds=30),
+                            retry_policy=_STATUS_RETRY,
+                        )
+                    except Exception:
+                        pass
+
+                # Update status message to show duplicate
+                try:
+                    await workflow.execute_activity(
+                        update_matrix_status,
+                        MatrixStatusInput(
+                            room_id=input.room_id,
+                            message=f"\u2705 {input.file_name} — already indexed (duplicate) \u2713",
+                            agent_id=input.agent_id,
+                            event_id=self._status_event_id,
+                        ),
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_STATUS_RETRY,
+                    )
+                except Exception:
+                    pass
+
+                # Cleanup transient temp file for duplicate fast-path
+                try:
+                    await workflow.execute_activity(
+                        cleanup_file_artifacts,
+                        CleanupArtifactsInput(
+                            temp_file_path=download_result.file_path,
+                            persistent_path="",
+                            file_hash="",
+                            remove_persistent=False,
+                        ),
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_STATUS_RETRY,
+                    )
+                except Exception as cleanup_err:
+                    workflow.logger.warning(
+                        f"Failed duplicate cleanup for {input.file_name}: {cleanup_err}"
+                    )
+
+                elapsed = int((workflow.now() - workflow_start).total_seconds() * 1000)
+                result.total_ms = elapsed
+                return result
 
             # ---------------------------------------------------------------
             # Step 2: Parse document with MarkItDown
             # ---------------------------------------------------------------
             await self._check_paused()
             if self._cancelled:
-                result.status = WorkflowStatus.CANCELLED.value
-                return result
+                return await self._finalize_cancellation(
+                    input=input,
+                    result=result,
+                    workflow_start=workflow_start,
+                    download_result=download_result,
+                    ingest_completed=ingest_completed,
+                )
 
             self._status = WorkflowStatus.PARSING
 
@@ -310,8 +404,13 @@ class FileProcessingWorkflow:
             # ---------------------------------------------------------------
             await self._check_paused()
             if self._cancelled:
-                result.status = WorkflowStatus.CANCELLED.value
-                return result
+                return await self._finalize_cancellation(
+                    input=input,
+                    result=result,
+                    workflow_start=workflow_start,
+                    download_result=download_result,
+                    ingest_completed=ingest_completed,
+                )
 
             self._status = WorkflowStatus.INGESTING
 
@@ -344,14 +443,20 @@ class FileProcessingWorkflow:
             )
             result.chunks_stored = ingest_result.chunks_stored
             result.ingest_ms = ingest_result.duration_ms
+            ingest_completed = True
 
             # ---------------------------------------------------------------
             # Step 4: Notify Letta agent
             # ---------------------------------------------------------------
             await self._check_paused()
             if self._cancelled:
-                result.status = WorkflowStatus.CANCELLED.value
-                return result
+                return await self._finalize_cancellation(
+                    input=input,
+                    result=result,
+                    workflow_start=workflow_start,
+                    download_result=download_result,
+                    ingest_completed=ingest_completed,
+                )
 
             self._status = WorkflowStatus.NOTIFYING
 
@@ -380,18 +485,19 @@ class FileProcessingWorkflow:
                 f"{caption_note}"
             )
 
-            notify_result: NotifyAgentResult = await workflow.execute_activity(
+            notify_result = await workflow.execute_activity(
                 notify_letta_agent,
                 NotifyAgentInput(
                     agent_id=input.agent_id,
                     message=agent_msg,
+                    room_id=input.room_id,
+                    conversation_id=input.conversation_id or "",
                 ),
                 start_to_close_timeout=timedelta(seconds=60),
                 retry_policy=_NOTIFY_RETRY,
             )
             result.notify_ms = notify_result.duration_ms
 
-            # Post agent's completion response to the Matrix room
             if notify_result.response_text:
                 try:
                     await workflow.execute_activity(
@@ -400,14 +506,13 @@ class FileProcessingWorkflow:
                             room_id=input.room_id,
                             message=notify_result.response_text,
                             agent_id=input.agent_id,
-                            event_id=None,  # New message, not edit
-                            msgtype="m.text",  # Agent reply, not status notice
+                            msgtype="m.text",
                         ),
                         start_to_close_timeout=timedelta(seconds=30),
-                        retry_policy=_NOTIFY_RETRY,
+                        retry_policy=_STATUS_RETRY,
                     )
-                except Exception as e:
-                    workflow.logger.warning(f"Failed to post agent completion response: {e}")
+                except Exception:
+                    pass
 
             # ---------------------------------------------------------------
             # Step 5: Update final status in room
@@ -452,6 +557,28 @@ class FileProcessingWorkflow:
             workflow.logger.error(
                 f"File processing failed for {input.file_name}: {e}"
             )
+
+            if download_result and not ingest_completed:
+                try:
+                    remove_persistent = self._should_remove_persistent_on_cancel(
+                        download_result,
+                        ingest_completed=False,
+                    )
+                    await workflow.execute_activity(
+                        cleanup_file_artifacts,
+                        CleanupArtifactsInput(
+                            temp_file_path=download_result.file_path,
+                            persistent_path=download_result.persistent_path,
+                            file_hash=download_result.file_hash,
+                            remove_persistent=remove_persistent,
+                        ),
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_STATUS_RETRY,
+                    )
+                except Exception as cleanup_err:
+                    workflow.logger.warning(
+                        f"Failed cleanup after workflow error for {input.file_name}: {cleanup_err}"
+                    )
 
             # Best-effort: update room status with error
             try:
@@ -533,3 +660,74 @@ class FileProcessingWorkflow:
                 return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
             size /= 1024
         return f"{size:.1f} TB"
+
+    @staticmethod
+    def _should_remove_persistent_on_cancel(
+        download_result: DownloadResult,
+        ingest_completed: bool,
+    ) -> bool:
+        return (
+            bool(download_result.persistent_path)
+            and not download_result.is_duplicate
+            and not ingest_completed
+        )
+
+    async def _finalize_cancellation(
+        self,
+        input: FileProcessingInput,
+        result: FileProcessingResult,
+        workflow_start,
+        download_result: Optional[DownloadResult],
+        ingest_completed: bool,
+    ) -> FileProcessingResult:
+        """Run cancellation cleanup/finalization and return a cancelled result."""
+        self._status = WorkflowStatus.CANCELLED
+        result.status = WorkflowStatus.CANCELLED.value
+
+        if download_result:
+            remove_persistent = self._should_remove_persistent_on_cancel(
+                download_result,
+                ingest_completed=ingest_completed,
+            )
+            try:
+                await workflow.execute_activity(
+                    cleanup_file_artifacts,
+                    CleanupArtifactsInput(
+                        temp_file_path=download_result.file_path,
+                        persistent_path=download_result.persistent_path,
+                        file_hash=download_result.file_hash,
+                        remove_persistent=remove_persistent,
+                    ),
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_STATUS_RETRY,
+                )
+            except Exception as cleanup_err:
+                workflow.logger.warning(
+                    f"Failed cancellation cleanup for {input.file_name}: {cleanup_err}"
+                )
+
+        try:
+            if ingest_completed:
+                cancel_msg = (
+                    f"⚪ Processing cancelled after indexing: {input.file_name} "
+                    f"(document remains searchable)"
+                )
+            else:
+                cancel_msg = f"⚪ Processing cancelled: {input.file_name}"
+            await workflow.execute_activity(
+                update_matrix_status,
+                MatrixStatusInput(
+                    room_id=input.room_id,
+                    message=cancel_msg,
+                    agent_id=input.agent_id,
+                    event_id=self._status_event_id,
+                ),
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_STATUS_RETRY,
+            )
+        except Exception:
+            pass
+
+        elapsed = int((workflow.now() - workflow_start).total_seconds() * 1000)
+        result.total_ms = elapsed
+        return result

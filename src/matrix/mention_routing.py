@@ -51,6 +51,10 @@ def strip_reply_fallback(body: str) -> str:
     
     Actual new message here
     """
+    if not body.lstrip().startswith('>'):
+        return body
+    # Strip leading whitespace before processing quote fallback
+    body = body.lstrip()
     if not body.startswith('>'):
         return body
     

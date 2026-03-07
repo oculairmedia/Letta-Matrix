@@ -198,10 +198,10 @@ class LettaService:
             Response dictionary with messages
         """
         try:
-            msg: MessageCreateParam = {
-                "role": role,  # type: ignore[typeddict-item]
-                "content": message
-            }
+            msg = MessageCreateParam(
+                role=role,
+                content=message,
+            )
             response = self.client.agents.messages.create(
                 agent_id=agent_id,
                 messages=[msg],
@@ -238,10 +238,10 @@ class LettaService:
             Response chunks as they arrive
         """
         try:
-            msg: MessageCreateParam = {
-                "role": role,  # type: ignore[typeddict-item]
-                "content": message
-            }
+            msg = MessageCreateParam(
+                role=role,
+                content=message,
+            )
             stream = self.client.agents.messages.stream(
                 agent_id=agent_id,
                 messages=[msg]

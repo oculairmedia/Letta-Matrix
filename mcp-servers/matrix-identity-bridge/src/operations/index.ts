@@ -128,6 +128,7 @@ export function getToolSchema(): Record<string, unknown> {
       user_mxid: { type: 'string', description: 'User MXID for invite' },
       query: { type: 'string', description: 'Search query' },
       limit: { type: 'number', description: 'Result limit' },
+      offset: { type: 'number', description: 'Result offset for pagination' },
       scope: { type: 'string', enum: ['joined', 'server'], description: 'Room scope for room_list' },
       typing: { type: 'boolean', description: 'Typing state' },
       timeout: { type: 'number', description: 'Timeout in ms' },

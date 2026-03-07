@@ -2,7 +2,7 @@
 Unit tests for ConversationService.
 """
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, Mock, patch, AsyncMock
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.exc import IntegrityError
@@ -20,14 +20,13 @@ from src.core.conversation_service import (
 
 
 def make_api_error(message: str = "API error") -> APIError:
-    mock_request = MagicMock()
-    mock_request.url = "http://test"
-    mock_request.method = "POST"
-    return APIError(message, mock_request, body=None)
+    import httpx
+    mock_request = httpx.Request("POST", "http://test/api")
+    return APIError(message, mock_request, body=message)
 
 
 def make_not_found_error(message: str = "Not found") -> NotFoundError:
-    mock_response = MagicMock()
+    mock_response = Mock()
     mock_response.status_code = 404
     mock_response.headers = {}
     return NotFoundError(message, response=mock_response, body=None)

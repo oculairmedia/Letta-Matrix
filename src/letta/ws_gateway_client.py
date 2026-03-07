@@ -38,7 +38,7 @@ class _PoolEntry:
     conversation_id: Optional[str] = None
     last_used: float = field(default_factory=time.monotonic)
     healthy: bool = True
-
+    in_use: bool = False  # True while send_message_streaming is iterating recv
 
 class GatewayClient:
     """Async WebSocket client that pools connections per agent_id."""
@@ -113,6 +113,7 @@ class GatewayClient:
                 msg_payload = json.dumps(payload)
                 await entry.ws.send(msg_payload)
                 entry.last_used = time.monotonic()
+                entry.in_use = True
 
                 async for raw in entry.ws:
                     entry.last_used = time.monotonic()
@@ -134,11 +135,13 @@ class GatewayClient:
 
                     if event_type == "result":
                         yield event
+                        entry.in_use = False
                         return  # Success — exit both the stream loop and the retry loop
 
                     if event_type in ("stream", "session_init"):
                         yield event
 
+                entry.in_use = False
                 # Stream ended without result — treat as connection issue on first attempt
                 if attempt == 0:
                     logger.warning(f"[WS-GATEWAY] Stream ended without result for agent {agent_id}, will retry")
@@ -147,6 +150,7 @@ class GatewayClient:
                 raise GatewayUnavailableError("Stream ended without result event after retry")
 
             except websockets.ConnectionClosed as exc:
+                entry.in_use = False
                 logger.warning(f"[WS-GATEWAY] Connection closed for agent {agent_id}: {exc}")
                 await self._evict(agent_id)
                 last_error = GatewayUnavailableError(f"WS connection closed: {exc}")
@@ -154,6 +158,7 @@ class GatewayClient:
                     continue  # Retry with fresh connection
                 raise last_error from exc
             except GatewaySessionError as exc:
+                entry.in_use = False
                 # Stale session: gateway expired the session but TCP stayed alive.
                 # Evict and retry once — fresh _connect_and_init will send session_start.
                 if attempt == 0 and "session_start" in str(exc).lower():
@@ -163,6 +168,7 @@ class GatewayClient:
                     continue
                 raise
             except Exception as exc:
+                entry.in_use = False
                 logger.error(f"[WS-GATEWAY] Unexpected error for agent {agent_id}: {exc}", exc_info=True)
                 await self._evict(agent_id)
                 last_error = GatewayUnavailableError(f"Gateway error: {exc}")
@@ -268,6 +274,8 @@ class GatewayClient:
                     additional_headers=extra_headers,
                     max_size=2**22,  # 4 MB frames
                     close_timeout=5,
+                    ping_interval=None,  # Disable built-in pings; we run our own health check loop
+                    ping_timeout=None,
                 ),
                 timeout=self._connect_timeout,
             )
@@ -365,10 +373,17 @@ class GatewayClient:
                         logger.info(f"[WS-GATEWAY] Closing idle session for agent {agent_id}")
                         await self._close_entry(entry)
 
-            # Proactive health check — ping live connections outside the lock
+            # Proactive health check — ping live connections outside the lock.
+            # Skip entries with recent activity (within 120s) to avoid killing
+            # connections that are actively streaming (e.g. during model escalation
+            # where Opus thinking time can exceed 60s with no data frames).
             for agent_id, entry in to_ping:
+                if entry.in_use:
+                    continue  # Actively streaming — never health-check
+                if now - entry.last_used < 120:
+                    continue  # Recently active — no health check needed
                 try:
-                    await asyncio.wait_for(entry.ws.ping(), timeout=5.0)
+                    await asyncio.wait_for(entry.ws.ping(), timeout=30.0)
                 except Exception:
                     logger.warning(f"[WS-GATEWAY] Health ping failed for agent {agent_id}, evicting stale connection")
                     await self._evict(agent_id)

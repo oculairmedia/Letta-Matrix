@@ -3,7 +3,7 @@ SQLAlchemy models for agent mappings database storage.
 """
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
-from sqlalchemy import create_engine, Column, String, Boolean, DateTime, ForeignKey, Index
+from sqlalchemy import create_engine, Column, String, Boolean, DateTime, ForeignKey, Index, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session, joinedload
 from sqlalchemy.pool import StaticPool
@@ -73,6 +73,8 @@ class PortalAgentLink(Base):
     agent_id = Column(String, ForeignKey('agent_mappings.agent_id', ondelete='CASCADE'), primary_key=True)
     room_id = Column(String, primary_key=True)
     enabled = Column(Boolean, default=True, nullable=False)
+    relay_mode = Column(Boolean, default=True, nullable=False)
+    mention_enabled = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Indexes for common queries
@@ -86,11 +88,14 @@ class PortalAgentLink(Base):
             "agent_id": self.agent_id,
             "room_id": self.room_id,
             "enabled": self.enabled,
+            "relay_mode": self.relay_mode,
+            "mention_enabled": self.mention_enabled,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 # Database connection setup
 _engine = None  # Singleton engine instance
+_schema_initialized = False
 
 def get_database_url() -> str:
     """Get database URL from environment or use default"""
@@ -154,6 +159,21 @@ def init_database():
     """Initialize database tables"""
     engine = get_engine()
     Base.metadata.create_all(engine)
+    inspector = inspect(engine)
+    if 'portal_agent_links' in inspector.get_table_names():
+        portal_cols = {col['name'] for col in inspector.get_columns('portal_agent_links')}
+        if 'relay_mode' not in portal_cols:
+            with engine.begin() as conn:
+                if engine.dialect.name == 'sqlite':
+                    conn.execute(text("ALTER TABLE portal_agent_links ADD COLUMN relay_mode BOOLEAN NOT NULL DEFAULT 1"))
+                else:
+                    conn.execute(text("ALTER TABLE portal_agent_links ADD COLUMN relay_mode BOOLEAN NOT NULL DEFAULT TRUE"))
+        if 'mention_enabled' not in portal_cols:
+            with engine.begin() as conn:
+                if engine.dialect.name == 'sqlite':
+                    conn.execute(text("ALTER TABLE portal_agent_links ADD COLUMN mention_enabled BOOLEAN NOT NULL DEFAULT 0"))
+                else:
+                    conn.execute(text("ALTER TABLE portal_agent_links ADD COLUMN mention_enabled BOOLEAN NOT NULL DEFAULT FALSE"))
 
 
 # Database operations helper class
@@ -161,6 +181,10 @@ class AgentMappingDB:
     """Helper class for database operations on agent mappings"""
 
     def __init__(self):
+        global _schema_initialized
+        if not _schema_initialized:
+            init_database()
+            _schema_initialized = True
         self.Session = get_session_maker()
 
     def get_by_agent_id(self, agent_id: str) -> Optional[AgentMapping]:
@@ -439,15 +463,33 @@ class AgentMappingDB:
         finally:
             session.close()
 
-    def create_portal_link(self, agent_id: str, room_id: str, enabled: bool = True) -> Dict:
+    def create_portal_link(self, agent_id: str, room_id: str, enabled: bool = True, relay_mode: bool = True, mention_enabled: bool = False) -> Dict:
         """Create a portal link between an agent and a room."""
         session = self.Session()
         try:
-            link = PortalAgentLink(
-                agent_id=agent_id,
-                room_id=room_id,
-                enabled=enabled
-            )
+            existing = session.query(PortalAgentLink).filter_by(
+                agent_id=agent_id, room_id=room_id
+            ).first()
+            if existing:
+                session.query(PortalAgentLink).filter_by(
+                    agent_id=agent_id, room_id=room_id
+                ).update({"enabled": enabled, "relay_mode": relay_mode, "mention_enabled": mention_enabled})
+                session.commit()
+                refreshed = session.query(PortalAgentLink).filter_by(
+                    agent_id=agent_id, room_id=room_id
+                ).first()
+                if not refreshed:
+                    raise RuntimeError("Failed to refresh updated portal link")
+                result = refreshed.to_dict()
+                session.expunge(refreshed)
+                return result
+
+            link = PortalAgentLink()
+            setattr(link, "agent_id", agent_id)
+            setattr(link, "room_id", room_id)
+            setattr(link, "enabled", enabled)
+            setattr(link, "relay_mode", relay_mode)
+            setattr(link, "mention_enabled", mention_enabled)
             session.add(link)
             session.commit()
             session.refresh(link)
@@ -469,6 +511,26 @@ class AgentMappingDB:
             session.delete(link)
             session.commit()
             return True
+        finally:
+            session.close()
+
+    def update_portal_link(self, agent_id: str, room_id: str, **kwargs) -> Optional[Dict]:
+        """Update fields on a portal link."""
+        session = self.Session()
+        try:
+            link = session.query(PortalAgentLink).filter_by(
+                agent_id=agent_id, room_id=room_id
+            ).first()
+            if not link:
+                return None
+            for key, value in kwargs.items():
+                if hasattr(link, key):
+                    setattr(link, key, value)
+            session.commit()
+            session.refresh(link)
+            result = link.to_dict()
+            session.expunge(link)
+            return result
         finally:
             session.close()
 

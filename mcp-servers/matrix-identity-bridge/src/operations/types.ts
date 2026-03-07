@@ -60,6 +60,7 @@ export const MatrixMessagingSchema = z.object({
   user_mxid: z.string().optional().describe('User MXID for invites'),
   query: z.string().optional().describe('Search query'),
   limit: z.number().optional().describe('Result limit'),
+  offset: z.number().optional().describe('Result offset for pagination'),
   scope: z.enum(['joined', 'server']).optional().describe('Room scope: joined (identity rooms) or server (all admin rooms)'),
   
   // Typing parameters

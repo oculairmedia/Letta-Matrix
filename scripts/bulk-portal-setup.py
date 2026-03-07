@@ -113,6 +113,16 @@ def api_post(endpoint: str, body: dict) -> dict:
     return r.json()
 
 
+def api_put(endpoint: str, body: dict) -> dict:
+    r = requests.put(
+        f"{API_SERVER}{endpoint}",
+        headers={"Content-Type": "application/json"},
+        json=body,
+        timeout=30,
+    )
+    return r.json()
+
+
 def get_meridian_token() -> str:
     """Log in as Meridian and return access token."""
     resp = matrix_post("/_matrix/client/v3/login", {
@@ -124,6 +134,18 @@ def get_meridian_token() -> str:
         print(f"  ✗ Failed to log in as Meridian: {resp}")
         sys.exit(1)
     return resp["access_token"]
+
+
+def ensure_meridian_mapping() -> bool:
+    payload = {
+        "agent_name": "Meridian",
+        "matrix_user_id": MERIDIAN_MXID,
+        "matrix_password": MERIDIAN_PASSWORD,
+        "room_id": None,
+        "room_created": False,
+    }
+    resp = api_put(f"/agents/{MERIDIAN_AGENT_ID}/mapping", payload)
+    return bool(resp.get("success"))
 
 
 # ─── Phase 1: Discover portal rooms ─────────────────────────────
@@ -206,7 +228,14 @@ def get_existing_portal_links() -> set[str]:
     return {link["room_id"] for link in links}
 
 
-def setup_room(room_id: str, room_name: str, bridge: str, meridian_token: str, dry_run: bool = False) -> bool:
+def setup_room(
+    room_id: str,
+    room_name: str,
+    bridge: str,
+    meridian_token: str,
+    dry_run: bool = False,
+    send_relay_command: bool = False,
+) -> bool:
     """Set up a single portal room: invite, join, create link, set relay."""
     encoded = encode_room_id(room_id)
     print(f"  [{bridge}] {room_name} ({room_id})")
@@ -253,7 +282,7 @@ def setup_room(room_id: str, room_name: str, bridge: str, meridian_token: str, d
     # Step 2: Create portal link
     resp = api_post(
         f"/agents/{MERIDIAN_AGENT_ID}/portal-links",
-        {"room_id": room_id},
+        {"room_id": room_id, "relay_mode": True},
     )
     if resp.get("success"):
         print(f"    ✓ Portal link created")
@@ -261,12 +290,13 @@ def setup_room(room_id: str, room_name: str, bridge: str, meridian_token: str, d
         print(f"    ✓ Portal link already exists")
     else:
         print(f"    ⚠ Portal link response: {resp}")
-    
+        return False
+
     time.sleep(0.3)
     
     # Step 3: Set relay mode (send bridge command as admin)
     relay_cmd = RELAY_COMMANDS.get(bridge)
-    if relay_cmd:
+    if send_relay_command and relay_cmd:
         txn_id = f"relay_{int(time.time() * 1000)}_{room_id[-8:]}"
         resp = matrix_put(
             f"/_matrix/client/v3/rooms/{encoded}/send/m.room.message/{txn_id}",
@@ -276,6 +306,8 @@ def setup_room(room_id: str, room_name: str, bridge: str, meridian_token: str, d
             print(f"    ✓ Relay command sent: {relay_cmd}")
         else:
             print(f"    ⚠ Relay command issue: {resp}")
+    elif relay_cmd:
+        print(f"    ✓ Relay mode managed by portal link (command skipped)")
     else:
         print(f"    ℹ No relay command for {bridge} (uses global config)")
     
@@ -289,7 +321,10 @@ def main():
     parser = argparse.ArgumentParser(description="Bulk portal agent link setup")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
     parser.add_argument("--bridge", type=str, help="Only process rooms for a specific bridge")
-    parser.add_argument("--skip-relay", action="store_true", help="Skip sending relay commands")
+    parser.add_argument("--skip-relay", action="store_true", help="Deprecated: use --send-relay-command")
+    parser.add_argument("--send-relay-command", action="store_true", help="Send bridge set-relay commands after linking")
+    parser.add_argument("--max-rooms", type=int, default=1, help="Maximum rooms to process in this run (default: 1)")
+    parser.add_argument("--all", action="store_true", help="Process all discovered rooms (disables --max-rooms cap)")
     args = parser.parse_args()
     
     print("=" * 60)
@@ -297,6 +332,9 @@ def main():
     print("=" * 60)
     print(f"Agent: Meridian ({MERIDIAN_AGENT_ID})")
     print(f"Mode: {'DRY RUN' if args.dry_run else 'LIVE'}")
+    effective_cap = None if args.all else max(args.max_rooms, 1)
+    print(f"Room cap: {'ALL' if effective_cap is None else effective_cap}")
+    print(f"Send relay commands: {args.send_relay_command and not args.skip_relay}")
     if args.bridge:
         print(f"Bridge filter: {args.bridge}")
     print()
@@ -355,31 +393,42 @@ def main():
         print("  Logging in as Meridian...")
         meridian_token = get_meridian_token()
         print("  ✓ Logged in")
+        if ensure_meridian_mapping():
+            print("  ✓ Meridian mapping upserted")
+        else:
+            print("  ⚠ Meridian mapping upsert failed; portal link creation may fail")
     else:
         meridian_token = "DRY_RUN"
     
     success = 0
     failed = 0
+    processed = 0
     
     for bridge, rooms in sorted(to_setup.items()):
         print(f"\n  ── {bridge.upper()} ({len(rooms)} rooms) ──")
         for room_id, room_name in rooms:
+            if effective_cap is not None and processed >= effective_cap:
+                break
             try:
-                if args.skip_relay:
-                    # Temporarily remove relay command
-                    orig_cmd = RELAY_COMMANDS.get(bridge)
-                    RELAY_COMMANDS[bridge] = None
-                    ok = setup_room(room_id, room_name, bridge, meridian_token, args.dry_run)
-                    RELAY_COMMANDS[bridge] = orig_cmd
-                else:
-                    ok = setup_room(room_id, room_name, bridge, meridian_token, args.dry_run)
+                ok = setup_room(
+                    room_id,
+                    room_name,
+                    bridge,
+                    meridian_token,
+                    args.dry_run,
+                    send_relay_command=(args.send_relay_command and not args.skip_relay),
+                )
                 if ok:
                     success += 1
                 else:
                     failed += 1
+                processed += 1
             except Exception as e:
                 print(f"    ✗ Error: {e}")
                 failed += 1
+                processed += 1
+        if effective_cap is not None and processed >= effective_cap:
+            break
     
     # Summary
     print(f"\n{'=' * 60}")

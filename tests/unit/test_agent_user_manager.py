@@ -257,8 +257,11 @@ class TestAdminToken:
         assert token == "cached_token"
 
     @pytest.mark.asyncio
-    async def test_get_admin_token_failure(self, mock_config, mock_aiohttp_session):
+    async def test_get_admin_token_failure(self, mock_config, mock_aiohttp_session, monkeypatch):
         """Test handling of failed admin token retrieval"""
+        # Remove env vars so fallback doesn't return a token
+        monkeypatch.delenv('MATRIX_ADMIN_TOKEN', raising=False)
+        monkeypatch.delenv('MATRIX_ACCESS_TOKEN', raising=False)
         mock_response = AsyncMock()
         mock_response.status = 401
         mock_response.text = AsyncMock(return_value="Unauthorized")
@@ -367,8 +370,8 @@ class TestAgentDiscovery:
         with patch('src.letta.client.get_letta_client', return_value=mock_client):
             agents = await manager.get_letta_agents()
 
-        # Should return empty list on error
-        assert agents == []
+        # Should return None on error (distinguishes from empty agent list)
+        assert agents is None
 
 
 # ============================================================================

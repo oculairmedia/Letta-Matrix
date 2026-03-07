@@ -11,7 +11,7 @@ def _format_timestamp(timestamp: int | float | None) -> str:
     return f"{dt.strftime('%A')}, {dt.strftime('%b')} {dt.day}, {dt.strftime('%I:%M %p').lstrip('0')} {dt.strftime('%Z')}"
 
 
-def _extract_localpart(mxid: str) -> str:
+def _extract_localpart(mxid: Optional[str]) -> str:
     value = mxid or ""
     if value.startswith("@"):
         value = value[1:]
@@ -142,7 +142,54 @@ def format_opencode_envelope(opencode_mxid, text, chat_id, message_id, timestamp
     body = text or ""
     return f"{reminder}\n\n{body}" if body else reminder
 
-def is_no_reply(text: str) -> bool:
+
+def format_reaction_route_envelope(
+    *,
+    reactor_mxid: str,
+    emoji: str,
+    target_agent_name: str,
+    target_agent_id: str,
+    chat_id: str,
+    reaction_event_id: str,
+    reacted_event_id: str,
+    timestamp: int | float | None,
+    original_sender: str,
+    original_body: str,
+) -> str:
+    metadata_lines = [
+        "- **Channel**: Matrix",
+        f"- **Chat ID**: {chat_id}",
+        f"- **Message ID**: {reaction_event_id}",
+        f"- **Sender**: {_extract_localpart(reactor_mxid)}",
+        f"- **Timestamp**: {_format_timestamp(timestamp)}",
+    ]
+    original_text = (original_body or "").strip()
+    if len(original_text) > 500:
+        original_text = original_text[:500] + "..."
+    sections = [
+        "<system-reminder>",
+        "## Message Metadata",
+        *metadata_lines,
+        "",
+        "## Chat Context",
+        "- **Type**: Group chat",
+        "- **Hint**: Treat this as a reaction-based forwarding request.",
+        "",
+        "## Reaction Routing Context",
+        f"- **Reactor**: {_extract_localpart(reactor_mxid)}",
+        f"- **Emoji**: {emoji}",
+        f"- **Reacted Event**: {reacted_event_id}",
+        f"- **Original Sender**: {_extract_localpart(original_sender)}",
+        f"- **Target Agent**: {target_agent_name}",
+        f"- **Target Agent ID**: {target_agent_id}",
+        "- **Instruction**: Respond directly to the original message intent, considering the reaction as an explicit routing signal.",
+        "</system-reminder>",
+    ]
+    reminder = "\n".join(sections)
+    body = f"Original message:\n{original_text}" if original_text else "Original message was non-text or unavailable."
+    return f"{reminder}\n\n{body}"
+
+def is_no_reply(text: Optional[str]) -> bool:
     """Check if an agent response is the <no-reply/> directive.
 
     Agents use this to signal they choose not to reply. The bridge should
@@ -179,3 +226,45 @@ def wrap_opencode_routing(content: str, opencode_mxid: str) -> str:
         f'Example: "{opencode_mxid} Here is my response..."\n'
     )
 
+
+def format_portal_contact_envelope(
+    contact_sender: str,
+    room_name: str,
+    chat_id: str,
+    message_id: Optional[str],
+    timestamp: int | float | None,
+    text: str,
+) -> str:
+    """Format a passive observation envelope for bridged portal room messages.
+
+    These are messages from contacts (WhatsApp, Telegram, etc.) that should
+    be observed by the agent but NOT replied to in the portal room.
+    """
+    sender_value = _extract_localpart(contact_sender) if contact_sender else "unknown"
+    metadata_lines = [
+        "- **Channel**: Portal (bridged messaging)",
+        f"- **Chat ID**: {chat_id}",
+        f"- **Message ID**: {message_id}",
+        f"- **Contact**: {sender_value}",
+        f"- **Room**: {room_name}",
+        f"- **Timestamp**: {_format_timestamp(timestamp)}",
+    ]
+    context_lines = [
+        "- **Type**: Passive contact observation",
+        "- **Source**: Bridged messaging room (WhatsApp, Telegram, or similar)",
+        "- **Important**: This is NOT from the user. This is a message from one of the user's contacts.",
+        "- **Action**: Do NOT reply in this room. Observe passively and update your memory if the content is relevant.",
+        "- **Reporting**: If this message contains something that requires the user's attention or action, note it in your memory so you can inform the user in your next direct conversation with them.",
+    ]
+    sections = [
+        "<system-reminder>",
+        "## Message Metadata",
+        *metadata_lines,
+        "",
+        "## Contact Message Context",
+        *context_lines,
+        "</system-reminder>",
+    ]
+    reminder = "\n".join(sections)
+    body = text or ""
+    return f"{reminder}\n\n{body}" if body else reminder

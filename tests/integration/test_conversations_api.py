@@ -368,13 +368,13 @@ class TestFallbackBehavior:
     async def test_graceful_fallback_on_service_error(
         self, conversation_service, mock_letta_client
     ):
+        from unittest.mock import Mock
+        import httpx
         from letta_client import APIError
         
-        mock_request = Mock()
-        mock_request.url = "http://test"
-        mock_request.method = "POST"
+        mock_request = httpx.Request("POST", "http://test/api")
         mock_letta_client.conversations.create.side_effect = APIError(
-            "Service unavailable", mock_request, body=None
+            "Service unavailable", mock_request, body="Service unavailable"
         )
         
         with pytest.raises(APIError):

@@ -19,104 +19,39 @@ import functools
 import logging
 import os
 import uuid
-import tempfile
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, Callable, Awaitable, Union
-from dataclasses import dataclass
 import aiohttp
 from nio import Event
 from src.voice.transcription import transcribe_audio
+from src.matrix.file_download import (
+    FileMetadata,
+    FileUploadError,
+    FileDownloadService,
+    SUPPORTED_FILE_TYPES,
+    SUPPORTED_EXTENSIONS,
+    MAX_FILE_SIZE,
+)
 from src.matrix.document_parser import (
     parse_document, format_document_for_agent,
     is_parseable_document, DocumentParseConfig,
     DocumentParseResult,
 )
 from src.matrix.formatter import wrap_opencode_routing
+from src.matrix.letta_source_manager import LettaSourceManager  # pyright: ignore[reportMissingImports]
+from src.core.retry import retry_async
 
 # Import Letta SDK
 from letta_client import Letta
 
 logger = logging.getLogger("matrix_client.file_handler")
 
-# Known file types - used for extension mapping and temp file suffixes.
-# NOT used for rejection: MarkItDown's PlainTextConverter handles any text-like file.
-SUPPORTED_FILE_TYPES = {
-    'application/pdf': '.pdf',
-    'text/plain': '.txt',
-    'text/markdown': '.md',
-    'text/x-markdown': '.md',
-    'application/json': '.json',
-    # Document types (MarkItDown)
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-    'application/msword': '.doc',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
-    'application/vnd.ms-powerpoint': '.ppt',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-    'application/vnd.ms-excel': '.xls',
-    'text/csv': '.csv',
-    'text/html': '.html',
-    'application/xhtml+xml': '.xhtml',
-    'application/epub+zip': '.epub',
-    # Image types (for vision-capable models)
-    'image/jpeg': '.jpg',
-    'image/jpg': '.jpg',
-    'image/png': '.png',
-    'image/gif': '.gif',
-    'image/webp': '.webp',
-    'image/bmp': '.bmp',
-    'image/tiff': '.tiff',
-    'audio/ogg': '.ogg',
-    'audio/mpeg': '.mp3',
-    'audio/mp4': '.m4a',
-    'audio/wav': '.wav',
-    'audio/x-wav': '.wav',
-    'audio/webm': '.webm',
-    'audio/flac': '.flac',
-    'audio/aac': '.aac',
-    'text/calendar': '.ics',
-    'application/octet-stream': None,  # Accept but determine by extension
-}
-
-# Extension-to-MIME mapping for application/octet-stream resolution (routing to image/audio handlers)
-SUPPORTED_EXTENSIONS = {
-    # Documents
-    '.pdf', '.txt', '.md', '.json', '.markdown',
-    '.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls',
-    '.csv', '.html', '.htm', '.xhtml', '.epub', '.rtf', '.odt',
-    # Images
-    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif',
-    '.ogg', '.mp3', '.m4a', '.wav', '.webm', '.flac', '.aac', '.oga',
-    # Calendar
-    '.ics'
-}
-
-# File size limit (50MB)
-MAX_FILE_SIZE = 50 * 1024 * 1024
-
 # Default embedding model
 DEFAULT_EMBEDDING_MODEL = "letta/letta-free"
 
 # Thread pool for running sync SDK calls
 _executor = ThreadPoolExecutor(max_workers=4)
-
-
-@dataclass
-class FileMetadata:
-    """Metadata for uploaded files"""
-    file_url: str  # mxc:// URL
-    file_name: str
-    file_type: str  # MIME type
-    file_size: int
-    room_id: str
-    sender: str
-    timestamp: int
-    event_id: str
-    caption: Optional[str] = None  # User's caption/question about the file
-
-
-class FileUploadError(Exception):
-    """Raised when file upload operations fail"""
-    pass
 
 
 class LettaFileHandler:
@@ -159,6 +94,7 @@ class LettaFileHandler:
         self.letta_api_url = letta_api_url
         self.letta_token = letta_token
         self.matrix_access_token = matrix_access_token
+        self._download_service = FileDownloadService(homeserver_url, matrix_access_token, logger)
         self.notify_callback = notify_callback
         self.embedding_model = embedding_model
         self.embedding_endpoint = embedding_endpoint
@@ -167,9 +103,6 @@ class LettaFileHandler:
         self.embedding_chunk_size = embedding_chunk_size
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self._source_cache: Dict[str, str] = {}  # room_id -> source_id cache
-        self._folder_cache = self._source_cache  # Alias for backward compatibility
-        self._cache_lock = asyncio.Lock()  # Protect cache from race conditions
         self._pending_cleanup_event_ids: list = []  # Status message event_ids to edit/delete after agent responds
         self._status_summary: Optional[str] = None  # Final compact summary to replace status messages
 
@@ -189,6 +122,23 @@ class LettaFileHandler:
 
         # Initialize Letta SDK client
         self.letta_client = Letta(base_url=letta_api_url, api_key=letta_token)
+
+        config_defaults = {
+            "embedding_model": embedding_model,
+            "embedding_endpoint": embedding_endpoint,
+            "embedding_endpoint_type": embedding_endpoint_type,
+            "embedding_dim": embedding_dim,
+            "embedding_chunk_size": embedding_chunk_size,
+            "max_retries": max_retries,
+            "retry_delay": retry_delay,
+        }
+        self._source_manager = LettaSourceManager(
+            self.letta_client,
+            config_defaults,
+            logger,
+        )
+        self._source_cache = self._source_manager._source_cache
+        self._folder_cache = self._source_manager._source_cache
         
         # Log token status at init
         logger.info(f"LettaFileHandler initialized - matrix_access_token present: {bool(self.matrix_access_token)}, length: {len(self.matrix_access_token) if self.matrix_access_token else 0}")
@@ -215,6 +165,21 @@ class LettaFileHandler:
                 logger.error(f"Failed to send notification: {e}")
         return None
 
+    def _notify_bg(self, room_id: str, message: str) -> None:
+        """Fire-and-forget notification — does not block the caller.
+        
+        The event_id (if any) is collected asynchronously into
+        _pending_cleanup_event_ids so the caller can still clean up later.
+        """
+        async def _do_notify():
+            try:
+                eid = await self._notify(room_id, message)
+                if eid:
+                    self._pending_cleanup_event_ids.append(eid)
+            except Exception as e:
+                logger.debug(f"Background notification failed (non-fatal): {e}")
+
+        asyncio.ensure_future(_do_notify())
     def pop_cleanup_event_ids(self) -> tuple[list, Optional[str]]:
         """Return and clear pending status message event_ids and summary for cleanup after agent responds.
         
@@ -229,39 +194,6 @@ class LettaFileHandler:
         self._status_summary = None
         return ids, summary
 
-    async def _retry_async(self, func: Callable[[], Awaitable[Any]], operation_name: str) -> Any:
-        """
-        Retry an async operation with exponential backoff
-        
-        Args:
-            func: Async function to retry
-            operation_name: Name of operation for logging
-            
-        Returns:
-            Result of the function
-            
-        Raises:
-            Last exception if all retries fail
-        """
-        last_exception: Optional[Exception] = None
-        for attempt in range(self.max_retries):
-            try:
-                return await func()
-            except Exception as e:
-                last_exception = e
-                if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2 ** attempt)
-                    logger.warning(
-                        f"{operation_name} failed (attempt {attempt + 1}/{self.max_retries}), "
-                        f"retrying in {delay}s: {e}"
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(f"{operation_name} failed after {self.max_retries} attempts: {e}")
-        if last_exception is not None:
-            raise last_exception
-        raise FileUploadError(f"{operation_name} failed with no exception")
-        
     async def handle_file_event(self, event: Event, room_id: str, agent_id: Optional[str] = None) -> Union[bool, list, str, None]:
         """
         Handle a file upload event from Matrix
@@ -321,22 +253,19 @@ class LettaFileHandler:
             # Fallback for unknown file types - use Letta source upload flow
             await self._notify(room_id, f"📄 Processing file: {metadata.file_name}")
             
-            # Download file from Matrix
-            file_path = await self._download_matrix_file(metadata)
-            
-            try:
+            async with self._downloaded_file(metadata) as file_path:
                 # Get or create Letta source for this room
-                source_id = await self._get_or_create_source(room_id, agent_id)
+                source_id = await self._source_manager.get_or_create_source(room_id, agent_id)
                 
                 # Upload to Letta
-                file_id = await self._upload_to_letta(file_path, source_id, metadata)
+                file_id = await self._source_manager.upload_to_letta(file_path, source_id, metadata)
                 
                 # Attach source to agent (idempotent)
                 if agent_id:
-                    await self._attach_source_to_agent(source_id, agent_id)
+                    await self._source_manager.attach_source_to_agent(source_id, agent_id)
                 
                 # Poll for completion (using file status endpoint)
-                success = await self._poll_file_status(source_id, file_id)
+                success = await self._source_manager.poll_file_status(source_id, file_id)
                 
                 if success:
                     logger.info(f"Successfully processed file {metadata.file_name} in Letta")
@@ -346,16 +275,30 @@ class LettaFileHandler:
                     await self._notify(room_id, f"⚠️ File processing timed out for {metadata.file_name}")
                 
                 return success
-                
-            finally:
-                # Clean up temporary file
-                if file_path and os.path.exists(file_path):
-                    os.unlink(file_path)
-                    logger.debug(f"Cleaned up temporary file {file_path}")
         except Exception as e:
             logger.error(f"Error handling file event: {e}", exc_info=True)
             raise FileUploadError(f"Failed to process file upload: {e}")
     
+    @asynccontextmanager
+    async def _downloaded_file(self, metadata: FileMetadata):
+        """Download a Matrix file and clean up the temp file when done.
+
+        Usage::
+
+            async with self._downloaded_file(metadata) as file_path:
+                # work with file_path ...
+        """
+        file_path = await self._download_matrix_file(metadata)
+        try:
+            yield file_path
+        finally:
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.unlink(file_path)
+                    logger.debug(f"Cleaned up temporary file {file_path}")
+                except OSError:
+                    pass
+
     async def _handle_image_upload(self, metadata: FileMetadata, room_id: str, agent_id: Optional[str] = None) -> Optional[list]:
         """
         Handle image upload by sending as multimodal message to agent.
@@ -376,10 +319,7 @@ class LettaFileHandler:
         # Notify user that we're processing the image
         await self._notify(room_id, f"🖼️ Processing image: {metadata.file_name}")
         
-        # Download image from Matrix
-        file_path = await self._download_matrix_file(metadata)
-        
-        try:
+        async with self._downloaded_file(metadata) as file_path:
             # Read and encode image as base64
             with open(file_path, 'rb') as f:
                 image_data = base64.standard_b64encode(f.read()).decode('utf-8')
@@ -421,17 +361,9 @@ class LettaFileHandler:
             ]
             logger.info(f"Built multimodal content for image {metadata.file_name}")
             return input_content
-                 
-        finally:
-            # Clean up temporary file
-            if file_path and os.path.exists(file_path):
-                os.unlink(file_path)
-                logger.debug(f"Cleaned up temporary file {file_path}")
 
     async def _handle_audio_upload(self, metadata: FileMetadata) -> str:
-        file_path = await self._download_matrix_file(metadata)
-
-        try:
+        async with self._downloaded_file(metadata) as file_path:
             with open(file_path, 'rb') as audio_file:
                 audio_data = audio_file.read()
 
@@ -446,10 +378,6 @@ class LettaFileHandler:
 
             logger.info(f"Voice transcription succeeded for {metadata.file_name}")
             return f"[Voice message]: {transcribed_text}"
-        finally:
-            if file_path and os.path.exists(file_path):
-                os.unlink(file_path)
-                logger.debug(f"Cleaned up temporary file {file_path}")
     
     # ------------------------------------------------------------------
     # Temporal async file processing
@@ -507,6 +435,24 @@ class LettaFileHandler:
             self._pending_cleanup_event_ids.append(eid)
         self._status_summary = f"\U0001f4c4 {metadata.file_name} — processing asynchronously"
 
+        conversation_id: Optional[str] = None
+        try:
+            from src.core.conversation_service import get_conversation_service
+
+            conv_service = get_conversation_service(self.letta_client)
+            conversation_id = conv_service.get_conversation_id(
+                room_id=room_id,
+                agent_id=agent_id,
+            )
+            if conversation_id:
+                logger.info(
+                    f"[CONVERSATIONS] Reusing conversation {conversation_id} for temporal workflow"
+                )
+        except Exception as conv_err:
+            logger.debug(
+                f"[CONVERSATIONS] Could not resolve conversation for temporal workflow: {conv_err}"
+            )
+
         # Build workflow input
         task_queue = os.environ.get('TEMPORAL_TASK_QUEUE', 'matrix-file-queue')
         workflow_input = FileProcessingInput(
@@ -520,6 +466,7 @@ class LettaFileHandler:
             caption=metadata.caption,
             status_event_id=eid,
             file_size=metadata.file_size,
+            conversation_id=conversation_id,
         )
 
         workflow_id = f"file-{room_id}-{metadata.event_id}-{uuid.uuid4().hex[:8]}"
@@ -565,15 +512,10 @@ class LettaFileHandler:
             Formatted string with document summary for the agent, or None if
             extraction failed (caller should fall back to Letta source upload).
         """
-        # Notify user that we're processing the document
-        eid = await self._notify(room_id, f"📄 Reading document: {metadata.file_name}...")
-        if eid:
-            self._pending_cleanup_event_ids.append(eid)
+        # Notify user that we're processing (fire-and-forget — don't block pipeline)
+        self._notify_bg(room_id, f"📄 Reading document: {metadata.file_name}...")
         
-        # Download file from Matrix
-        file_path = await self._download_matrix_file(metadata)
-        
-        try:
+        async with self._downloaded_file(metadata) as file_path:
             # Parse document with MarkItDown
             result = await parse_document(
                 file_path=file_path,
@@ -584,7 +526,7 @@ class LettaFileHandler:
             if result.error:
                 self._status_summary = f"⚠️ {metadata.file_name} — extraction failed"
                 logger.warning(f"Document parsing failed for {metadata.file_name}: {result.error}")
-                await self._notify(room_id, f"⚠️ Could not extract text from {metadata.file_name}: {result.error}")
+                self._notify_bg(room_id, f"⚠️ Could not extract text from {metadata.file_name}: {result.error}")
                 # Return None so the caller can fall back to Letta source upload
                 return None
             
@@ -607,12 +549,10 @@ class LettaFileHandler:
             )
             
             if ingest_success:
-                eid = await self._notify(
+                self._notify_bg(
                     room_id,
                     f"✅ Document indexed: {metadata.file_name}{page_info}{ocr_info} — {char_count} chars stored in shared document library"
                 )
-                if eid:
-                    self._pending_cleanup_event_ids.append(eid)
                 self._status_summary = f"📄 {metadata.file_name}{page_info}{ocr_info} — {char_count:,} chars indexed ✓"
                 # Return a brief notification to the agent — NOT the full text
                 caption_note = ""
@@ -628,12 +568,10 @@ class LettaFileHandler:
             else:
                 # Fallback: ingest failed, send truncated text directly
                 logger.warning(f"Haystack ingest failed for {metadata.file_name}, falling back to direct text")
-                eid = await self._notify(
+                self._notify_bg(
                     room_id,
                     f"⚠️ Document store unavailable, sending text directly: {metadata.file_name}{page_info}{ocr_info}"
                 )
-                if eid:
-                    self._pending_cleanup_event_ids.append(eid)
                 self._status_summary = f"⚠️ {metadata.file_name}{page_info}{ocr_info} — sent directly (document store unavailable)"
                 # Truncate to a safe size for context (max ~8000 chars)
                 truncated_text = result.text[:8000]
@@ -651,12 +589,6 @@ class LettaFileHandler:
             
             logger.info(f"Document handling complete for {metadata.file_name}, returning {len(agent_msg)} chars to agent")
             return agent_msg
-            
-        finally:
-            # Clean up temporary file
-            if file_path and os.path.exists(file_path):
-                os.unlink(file_path)
-                logger.debug(f"Cleaned up temporary file {file_path}")
 
     async def _send_multimodal_message(self, agent_id: str, content: list) -> Optional[Any]:
         """
@@ -680,7 +612,13 @@ class LettaFileHandler:
                     }]
                 )
             
-            response = await self._retry_async(_do_send, "Multimodal message send")
+            response = await retry_async(
+                _do_send,
+                operation_name="Multimodal message send",
+                max_attempts=self.max_retries,
+                base_delay=self.retry_delay,
+                logger=logger,
+            )
             logger.debug(f"Multimodal message response: {type(response)}")
             return response
             
@@ -734,479 +672,38 @@ class LettaFileHandler:
             logger.error(f"Error extracting assistant response: {e}")
             return None
     
-    def _extract_file_metadata(self, event: Event, room_id: str) -> Optional[FileMetadata]:
-        """Extract file metadata from Matrix event"""
-        try:
-            # Check if this is a file message event
-            if not hasattr(event, 'source') or not isinstance(event.source, dict):
-                return None
-            
-            content = event.source.get('content', {})
-            msgtype = content.get('msgtype')
-            
-            if msgtype not in ['m.file', 'm.image', 'm.audio']:
-                return None
-            
-            # Extract file information
-            url = content.get('url')  # mxc:// URL
-            body = content.get('body', 'unnamed_file')  # filename or caption
-            info = content.get('info', {})
-            
-            if not url:
-                logger.warning("File event missing URL")
-                return None
-            
-            # Get actual filename from info.filename if available (Matrix spec)
-            # The 'body' field may contain a user caption instead of filename
-            actual_filename = info.get('filename') or body
-            
-            # Determine if body is a caption (different from filename)
-            # If body looks like a filename (has extension), use it as filename
-            # Otherwise, treat it as a caption/question from the user
-            caption = None
-            import os
-            _, ext = os.path.splitext(body)
-            if ext and ext.lower() in SUPPORTED_EXTENSIONS:
-                # body looks like a filename
-                actual_filename = body
-            elif body != actual_filename:
-                # body is different from filename - it's a caption
-                caption = body
-                logger.info(f"Detected caption for image: {caption[:50]}...")
-            
-            return FileMetadata(
-                file_url=url,
-                file_name=actual_filename,
-                file_type=info.get('mimetype', 'application/octet-stream'),
-                file_size=info.get('size', 0),
-                room_id=room_id,
-                sender=event.sender,
-                timestamp=event.server_timestamp,
-                event_id=event.event_id,
-                caption=caption
-            )
-            
-        except Exception as e:
-            logger.error(f"Error extracting file metadata: {e}", exc_info=True)
-            return None
-    
-    def _validate_file(self, metadata: FileMetadata) -> Optional[str]:
-        """
-        Validate file type and size
-        
-        Args:
-            metadata: File metadata to validate
-            
-        Returns:
-            Error message if validation fails, None if valid
-        """
-        import os
-        
-        # Check file size
-        if metadata.file_size > MAX_FILE_SIZE:
-            size_mb = metadata.file_size / (1024 * 1024)
-            max_mb = MAX_FILE_SIZE / (1024 * 1024)
-            return f"File '{metadata.file_name}' is too large ({size_mb:.1f}MB). Maximum size is {max_mb:.0f}MB."
-        
-        # Try-first approach: accept any file type. MarkItDown handles text-like files
-        # via PlainTextConverter fallback. Only images/audio need special MIME routing.
-        # We log unrecognized types but don't reject them.
-        if metadata.file_type not in SUPPORTED_FILE_TYPES:
-            logger.info(f"Non-whitelisted MIME type '{metadata.file_type}' for {metadata.file_name} - will try MarkItDown")
-        
-        # For application/octet-stream, try to resolve MIME from extension for routing
-        if metadata.file_type == 'application/octet-stream':
-            _, ext = os.path.splitext(metadata.file_name.lower())
-            if ext not in SUPPORTED_EXTENSIONS:
-                logger.info(f"Unknown extension '{ext}' for octet-stream - will try MarkItDown")
-            # Update the file_type based on extension for better handling
-            if ext in ['.md', '.markdown']:
-                metadata.file_type = 'text/markdown'
-            elif ext == '.txt':
-                metadata.file_type = 'text/plain'
-            elif ext == '.pdf':
-                metadata.file_type = 'application/pdf'
-            elif ext == '.json':
-                metadata.file_type = 'application/json'
-            elif ext in ['.jpg', '.jpeg']:
-                metadata.file_type = 'image/jpeg'
-            elif ext == '.png':
-                metadata.file_type = 'image/png'
-            elif ext == '.gif':
-                metadata.file_type = 'image/gif'
-            elif ext == '.webp':
-                metadata.file_type = 'image/webp'
-            elif ext in ['.bmp']:
-                metadata.file_type = 'image/bmp'
-            elif ext in ['.tiff', '.tif']:
-                metadata.file_type = 'image/tiff'
-            elif ext in ['.ogg', '.oga']:
-                metadata.file_type = 'audio/ogg'
-            elif ext == '.mp3':
-                metadata.file_type = 'audio/mpeg'
-            elif ext == '.m4a':
-                metadata.file_type = 'audio/mp4'
-            elif ext == '.wav':
-                metadata.file_type = 'audio/wav'
-            elif ext == '.webm':
-                metadata.file_type = 'audio/webm'
-            elif ext == '.flac':
-                metadata.file_type = 'audio/flac'
-            elif ext == '.aac':
-                metadata.file_type = 'audio/aac'
-            # Document types
-            elif ext == '.docx':
-                metadata.file_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            elif ext == '.doc':
-                metadata.file_type = 'application/msword'
-            elif ext == '.pptx':
-                metadata.file_type = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-            elif ext == '.ppt':
-                metadata.file_type = 'application/vnd.ms-powerpoint'
-            elif ext == '.xlsx':
-                metadata.file_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            elif ext == '.xls':
-                metadata.file_type = 'application/vnd.ms-excel'
-            elif ext == '.csv':
-                metadata.file_type = 'text/csv'
-            elif ext in ['.html', '.htm']:
-                metadata.file_type = 'text/html'
-            elif ext == '.epub':
-                metadata.file_type = 'application/epub+zip'
-            elif ext == '.ics':
-                metadata.file_type = 'text/calendar'
-
-        return None
-    
-    async def _download_matrix_file(self, metadata: FileMetadata) -> str:
-        """
-        Download file from Matrix media repository
-        
-        Args:
-            metadata: File metadata containing mxc:// URL
-            
-        Returns:
-            Path to downloaded temporary file
-        """
-        # Convert mxc:// URL to HTTP download URL
-        # mxc://server.name/mediaId -> http://homeserver/_matrix/media/v3/download/server.name/mediaId
-        mxc_url = metadata.file_url
-        if not mxc_url.startswith('mxc://'):
-            raise FileUploadError(f"Invalid mxc:// URL: {mxc_url}")
-        
-        # Parse mxc URL
-        parts = mxc_url[6:].split('/', 1)  # Remove "mxc://" prefix
-        if len(parts) != 2:
-            raise FileUploadError(f"Malformed mxc:// URL: {mxc_url}")
-        
-        server_name, media_id = parts
-        # Use authenticated media endpoint (MSC3916) - requires auth token
-        # The legacy /_matrix/media/v3/download endpoint may be disabled on some servers
-        download_url = f"{self.homeserver_url}/_matrix/client/v1/media/download/{server_name}/{media_id}"
-        
-        logger.debug(f"Downloading file from {download_url}")
-        
-        # Create temporary file
-        suffix = SUPPORTED_FILE_TYPES.get(metadata.file_type, '.bin')
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-        temp_path = temp_file.name
-        
-        # Prepare headers with authentication if available
-        headers = {}
-        logger.debug(f"Download - matrix_access_token present: {bool(self.matrix_access_token)}")
-        if self.matrix_access_token:
-            headers["Authorization"] = f"Bearer {self.matrix_access_token}"
-            logger.info(f"Using Matrix auth token for download (length: {len(self.matrix_access_token)})")
-        else:
-            logger.warning("No Matrix access token available for download - may fail with 403")
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(download_url, headers=headers) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise FileUploadError(f"Failed to download file: {response.status} - {error_text}")
-                    
-                    # Write to temporary file
-                    with open(temp_path, 'wb') as f:
-                        async for chunk in response.content.iter_chunked(8192):
-                            f.write(chunk)
-            
-            logger.info(f"Downloaded file to {temp_path} ({os.path.getsize(temp_path)} bytes)")
-            return temp_path
-            
-        except Exception as e:
-            # Clean up on error
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-            raise FileUploadError(f"Error downloading file: {e}")
-    
     def _get_embedding_config(self, agent_id: Optional[str] = None) -> dict:
-        """
-        Get embedding configuration, optionally from agent
-        
-        Args:
-            agent_id: Optional agent ID to fetch config from
-            
-        Returns:
-            Embedding config dict
-        """
-        # Try to get agent's embedding config
-        if agent_id:
-            try:
-                agent = self.letta_client.agents.retrieve(agent_id)
-                if agent and agent.embedding_config:
-                    ec = agent.embedding_config
-                    config = {
-                        "embedding_model": ec.embedding_model,
-                        "embedding_endpoint_type": ec.embedding_endpoint_type or "openai",
-                        "embedding_dim": ec.embedding_dim,
-                        "embedding_chunk_size": ec.embedding_chunk_size or 300
-                    }
-                    if ec.embedding_endpoint:
-                        config["embedding_endpoint"] = ec.embedding_endpoint
-                    logger.info(f"Using agent's embedding config: model={config['embedding_model']}, dim={config['embedding_dim']}")
-                    return config
-            except Exception as e:
-                logger.warning(f"Failed to fetch agent embedding config: {e}")
-        
-        # Fall back to instance defaults
-        config = {
-            "embedding_model": self.embedding_model,
-            "embedding_endpoint_type": self.embedding_endpoint_type,
-            "embedding_dim": self.embedding_dim,
-            "embedding_chunk_size": self.embedding_chunk_size
-        }
-        if self.embedding_endpoint:
-            config["embedding_endpoint"] = self.embedding_endpoint
-        logger.info(f"Using fallback embedding config: model={self.embedding_model}, dim={self.embedding_dim}")
-        return config
-    
+        """Backward-compatible proxy to source manager."""
+        return self._source_manager.get_embedding_config(agent_id)
+
+    def _extract_file_metadata(self, event: Event, room_id: str) -> Optional[FileMetadata]:
+        return self._download_service.extract_file_metadata(event, room_id)
+
+    def _validate_file(self, metadata: FileMetadata) -> Optional[str]:
+        return self._download_service.validate_file(metadata)
+
+    async def _download_matrix_file(self, metadata: FileMetadata) -> str:
+        return await self._download_service.download_file(metadata)
+
     async def _get_or_create_source(self, room_id: str, agent_id: Optional[str] = None) -> str:
-        """
-        Get or create Letta folder (source) for Matrix room using SDK v1.x
-        
-        Note: In SDK v1.x, "sources" are now called "folders"
-        
-        Args:
-            room_id: Matrix room ID
-            agent_id: Optional agent ID to get embedding config from
-            
-        Returns:
-            Letta folder ID
-        """
-        # Check cache first (with lock for thread safety)
-        async with self._cache_lock:
-            if room_id in self._source_cache:
-                return self._source_cache[room_id]
-        
-        # Sanitize room_id for use in folder name (remove special chars)
-        safe_room_id = room_id.replace("!", "").replace(":", "-")
-        folder_name = f"matrix-{safe_room_id}"
-        
-        async def _do_get_or_create() -> str:
-            # Try to get existing folder by name (SDK v1.x: use folders.list with name filter)
-            try:
-                folders_page = await self._run_sync(
-                    self.letta_client.folders.list,
-                    name=folder_name
-                )
-                # SDK v1.x returns paginated result with .items
-                folders = folders_page.items if hasattr(folders_page, 'items') else folders_page
-                if folders and len(folders) > 0:
-                    folder_id = folders[0].id
-                    logger.info(f"Found existing folder by name: {folder_id}")
-                    return folder_id
-            except Exception as e:
-                logger.debug(f"Folder not found by name: {e}")
-            
-            # Create new folder
-            logger.info(f"Creating new folder: {folder_name}")
-            embedding_config = await self._run_sync(self._get_embedding_config, agent_id)
-            
-            try:
-                folder = await self._run_sync(
-                    self.letta_client.folders.create,
-                    name=folder_name,
-                    description=f"Documents from Matrix room {room_id}"
-                )
-                logger.info(f"Created new folder {folder_name}: {folder.id}")
-                return folder.id
-            except Exception as e:
-                error_str = str(e)
-                if "409" in error_str or "already exists" in error_str.lower() or "unique" in error_str.lower():
-                    # Folder exists but wasn't found - try list again
-                    logger.info(f"Folder {folder_name} already exists (conflict), fetching...")
-                    try:
-                        folders_page = await self._run_sync(
-                            self.letta_client.folders.list,
-                            name=folder_name
-                        )
-                        folders = folders_page.items if hasattr(folders_page, 'items') else folders_page
-                        if folders and len(folders) > 0:
-                            folder_id = folders[0].id
-                            logger.info(f"Found folder after conflict: {folder_id}")
-                            return folder_id
-                    except Exception as e2:
-                        logger.error(f"Failed to get folder after 409: {e2}")
-                raise FileUploadError(f"Failed to create folder: {e}")
-        
-        folder_id = await self._retry_async(_do_get_or_create, "Get/create Letta folder")
-        
-        # Cache the folder ID
-        async with self._cache_lock:
-            self._source_cache[room_id] = folder_id
-        
-        return folder_id
-    
+        """Backward-compatible proxy to source manager."""
+        return await self._source_manager.get_or_create_source(room_id, agent_id)
+
     async def _attach_source_to_agent(self, source_id: str, agent_id: str):
-        """
-        Attach a folder to an agent using SDK v1.x (idempotent)
-        
-        Note: In SDK v1.x, use agents.folders instead of agents.sources
-        
-        Args:
-            source_id: Letta folder ID
-            agent_id: Letta agent ID
-        """
-        try:
-            # Check if already attached (SDK v1.x returns paginated result)
-            attached_page = await self._run_sync(
-                self.letta_client.agents.folders.list,
-                agent_id
-            )
-            attached_folders = attached_page.items if hasattr(attached_page, 'items') else attached_page
-            
-            for folder in attached_folders:
-                if folder.id == source_id:
-                    logger.info(f"Folder {source_id} already attached to agent {agent_id}")
-                    return
-            
-            # Attach folder to agent (SDK v1.x: folder_id positional, agent_id keyword)
-            await self._run_sync(
-                lambda: self.letta_client.agents.folders.attach(source_id, agent_id=agent_id)
-            )
-            logger.info(f"Attached folder {source_id} to agent {agent_id}")
-            
-        except Exception as e:
-            logger.warning(f"Failed to attach folder to agent: {e}")
-            # Don't raise - attachment failure shouldn't block the upload
-    
+        """Backward-compatible proxy to source manager."""
+        return await self._source_manager.attach_source_to_agent(source_id, agent_id)
+
     async def _upload_to_letta(self, file_path: str, source_id: str, metadata: FileMetadata) -> str:
-        """
-        Upload file to Letta folder using SDK v1.x
-        
-        Note: In SDK v1.x, use folders.files instead of sources.files
-        
-        Args:
-            file_path: Local path to file
-            source_id: Letta folder ID
-            metadata: File metadata
-            
-        Returns:
-            File ID for tracking upload progress
-        """
-        async def _do_upload() -> str:
-            # Read file content
-            with open(file_path, 'rb') as f:
-                file_content = f.read()
-            
-            # Upload file using SDK v1.x - file param expects tuple (filename, content, content_type)
-            result = await self._run_sync(
-                self.letta_client.folders.files.upload,
-                source_id,
-                file=(metadata.file_name, file_content, metadata.file_type)
-            )
-            
-            # Get file ID from result (returns Job object)
-            file_id = result.id if hasattr(result, 'id') else str(result)
-            
-            logger.info(f"File uploaded to Letta, file ID: {file_id}")
-            return file_id
-        
-        return await self._retry_async(_do_upload, "Letta file upload")
-    
+        """Backward-compatible proxy to source manager."""
+        return await self._source_manager.upload_to_letta(file_path, source_id, metadata)
+
     async def _poll_file_status(self, source_id: str, file_id: str, timeout: int = 300, interval: int = 2) -> bool:
-        """
-        Poll Letta file status until processing completes
-        
-        Note: In SDK v1.x, use folders.files instead of sources.files
-        
-        Args:
-            source_id: Folder ID containing the file
-            file_id: File ID to poll
-            timeout: Maximum time to wait (seconds)
-            interval: Polling interval (seconds)
-            
-        Returns:
-            True if file processed successfully
-        """
-        # Handle sync-complete case (file was processed immediately)
-        if file_id == "sync-complete":
-            return True
-        
-        elapsed = 0
-        consecutive_errors = 0
-        max_consecutive_errors = 3
-        
-        while elapsed < timeout:
-            try:
-                # Get file status using SDK v1.x (returns paginated result)
-                files_page = await self._run_sync(
-                    self.letta_client.folders.files.list,
-                    source_id
-                )
-                files = files_page.items if hasattr(files_page, 'items') else files_page
-                
-                # Find our file
-                file_data = None
-                for f in files:
-                    if f.id == file_id:
-                        file_data = f
-                        break
-                
-                if not file_data:
-                    logger.warning(f"File {file_id} not found in folder {source_id}")
-                    consecutive_errors += 1
-                    if consecutive_errors >= max_consecutive_errors:
-                        return False
-                    await asyncio.sleep(interval)
-                    elapsed += interval
-                    continue
-                
-                consecutive_errors = 0  # Reset on success
-                status = (file_data.processing_status or '').lower()
-                
-                logger.debug(f"File {file_id} processing_status: {status}")
-                
-                if status in ['completed', 'success', 'done', 'embedded']:
-                    logger.info(f"File {file_id} processed successfully")
-                    return True
-                elif status in ['error', 'failed']:
-                    error_msg = getattr(file_data, 'error_message', 'Unknown error')
-                    logger.error(f"File {file_id} processing failed: {error_msg}")
-                    return False
-                
-                # Still processing (parsing, embedding, etc.)
-                await asyncio.sleep(interval)
-                elapsed += interval
-                
-            except Exception as e:
-                consecutive_errors += 1
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.error(f"Error polling file status after {max_consecutive_errors} attempts: {e}")
-                    return False
-                logger.warning(f"Error polling file status: {e}")
-                await asyncio.sleep(interval)
-                elapsed += interval
-        
-        logger.warning(f"File {file_id} polling timed out after {timeout}s")
-        return False
-    
-    # Alias for backward compatibility with tests
+        """Backward-compatible proxy to source manager."""
+        return await self._source_manager.poll_file_status(source_id, file_id, timeout=timeout, interval=interval)
+
     async def _get_or_create_folder(self, room_id: str, agent_id: Optional[str] = None) -> str:
-        """Alias for _get_or_create_source for backward compatibility"""
-        return await self._get_or_create_source(room_id, agent_id)
+        """Backward-compatible proxy to source manager."""
+        return await self._source_manager.get_or_create_folder(room_id, agent_id)
 
     async def _ingest_to_haystack(self, text: str, filename: str, room_id: str, sender: str) -> bool:
         """
@@ -1283,43 +780,5 @@ class LettaFileHandler:
             return False
 
     async def ensure_search_tool_attached(self, agent_id: str) -> None:
-        """
-        Ensure the search_documents tool is attached to the given agent.
-        
-        Called as an explicit prerequisite in file_callback() BEFORE the agent
-        run starts. Looks up the tool by name, checks if the agent already has
-        it, and attaches it if missing.
-        
-        Raises on failure so the caller can decide whether to proceed.
-"""
-        try:
-            # Find the search_documents tool by name
-            tools_page = await self._run_sync(
-                self.letta_client.tools.list, name="search_documents"
-            )
-            tools_list = list(tools_page)  # SyncArrayPage → list
-            if not tools_list:
-                logger.warning("search_documents tool not found in Letta — cannot auto-attach")
-                return
-            
-            search_tool = tools_list[0]
-            search_tool_id = search_tool.id
-            
-            # Check if agent already has this tool
-            agent_tools_page = await self._run_sync(
-                self.letta_client.agents.tools.list, agent_id
-            )
-            agent_tools = list(agent_tools_page)  # SyncArrayPage → list
-            for t in agent_tools:
-                if t.id == search_tool_id:
-                    logger.debug(f"search_documents already attached to agent {agent_id}")
-                    return
-            
-            # Attach it
-            await self._run_sync(
-                self.letta_client.agents.tools.attach, search_tool_id, agent_id=agent_id
-            )
-            logger.info(f"Auto-attached search_documents tool to agent {agent_id}")
-            
-        except Exception as e:
-            logger.warning(f"Failed to auto-attach search_documents to agent {agent_id}: {e}")
+        """Backward-compatible proxy to source manager."""
+        await self._source_manager.ensure_search_tool_attached(agent_id)

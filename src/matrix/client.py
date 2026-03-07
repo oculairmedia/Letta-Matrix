@@ -1,12 +1,8 @@
 import asyncio
 import os
 import logging
-import json
 import time
-import uuid
-import aiohttp
 from typing import Optional, Dict, Any, Tuple, Union
-from dataclasses import dataclass
 from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset, RoomMessageMedia, RoomMessageAudio, UnknownEvent
 from nio.responses import JoinError
 from nio.exceptions import RemoteProtocolError
@@ -24,10 +20,45 @@ from src.core.agent_user_manager import run_agent_sync
 from src.matrix.event_dedupe import is_duplicate_event
 from src.matrix.poll_handler import process_agent_response, is_poll_command, handle_poll_vote, POLL_RESPONSE_TYPE
 
-MATRIX_API_URL = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
+# ── Extracted modules ────────────────────────────────────────────────
+from src.matrix.config import (
+    Config,
+    LettaApiError,
+    MatrixClientError,
+    ConfigurationError,
+    LettaCodeApiError,
+    setup_logging,
+)
+from src.matrix.letta_code_service import (
+    get_letta_code_room_state,
+    update_letta_code_room_state,
+    call_letta_code_api,
+    resolve_letta_project_dir,
+    run_letta_code_task,
+    handle_letta_code_command,
+)
+from src.matrix.agent_actions import (
+    send_as_agent,
+    send_as_agent_with_event_id,
+    delete_message_as_agent,
+    edit_message_as_agent,
+    send_reaction_as_agent,
+    send_read_receipt_as_agent,
+    set_typing_as_agent,
+    TypingIndicatorManager,
+    upload_and_send_audio,
+    fetch_and_send_image,
+    fetch_and_send_file,
+    fetch_and_send_video,
+)
+from src.matrix.letta_bridge import (
+    send_to_letta_api,
+    send_to_letta_api_streaming,
+    retry_with_backoff,
+)
+from src.matrix.message_processor import process_letta_message, MessageContext
 
-# Agent Mail MCP server URL for reverse bridge
-AGENT_MAIL_URL = os.getenv("AGENT_MAIL_URL", "http://192.168.50.90:8766/mcp/")
+MATRIX_API_URL = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
 
 # Background Letta task tracking — keyed by (room_id, agent_id)
 # Prevents sync loop blocking when streaming calls hang
@@ -62,2042 +93,9 @@ async def cancel_all_letta_tasks() -> None:
     await asyncio.gather(*_active_letta_tasks.values(), return_exceptions=True)
     _active_letta_tasks.clear()
 
-
-
-
-async def forward_to_agent_mail(
-    sender_code_name: str,
-    recipient_code_name: str,
-    subject: str,
-    body_md: str,
-    thread_id: Optional[str],
-    original_message_id: Optional[int],
-    logger: logging.Logger
-) -> bool:
-    """
-    Forward a Matrix response back to Agent Mail (reverse bridge).
-    
-    This is called when an agent responds to a message that originated
-    from Agent Mail, allowing the original sender to see the response.
-    
-    Args:
-        sender_code_name: Agent Mail code name of the responder (e.g., "WhiteStone")
-        recipient_code_name: Agent Mail code name of the original sender (e.g., "BlueCreek")
-        subject: Subject line (typically "Re: <original subject>")
-        body_md: Response body in Markdown
-        thread_id: Original thread ID for reply chain continuity
-        original_message_id: ID of the message being replied to
-        logger: Logger instance
-        
-    Returns:
-        True if forwarded successfully, False otherwise
-    """
-    if not AGENT_MAIL_URL:
-        logger.warning("[REVERSE-BRIDGE] AGENT_MAIL_URL not configured, skipping forward")
-        return False
-    
-    try:
-        # Use reply_message if we have the original message ID, otherwise send_message
-        if original_message_id:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": f"reverse-bridge-{time.time()}",
-                "method": "tools/call",
-                "params": {
-                    "name": "reply_message",
-                    "arguments": {
-                        "project_key": "/opt/stacks/matrix-synapse-deployment",
-                        "message_id": original_message_id,
-                        "sender_name": sender_code_name,
-                        "body_md": body_md,
-                        "to": [recipient_code_name]
-                    }
-                }
-            }
-        else:
-            # Fallback to send_message if no original message ID
-            payload = {
-                "jsonrpc": "2.0",
-                "id": f"reverse-bridge-{time.time()}",
-                "method": "tools/call",
-                "params": {
-                    "name": "send_message",
-                    "arguments": {
-                        "project_key": "/opt/stacks/matrix-synapse-deployment",
-                        "sender_name": sender_code_name,
-                        "to": [recipient_code_name],
-                        "subject": subject,
-                        "body_md": body_md,
-                        "thread_id": thread_id
-                    }
-                }
-            }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                AGENT_MAIL_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    logger.info(f"[REVERSE-BRIDGE] Forwarded response from {sender_code_name} to {recipient_code_name}")
-                    logger.debug(f"[REVERSE-BRIDGE] Response: {result}")
-                    return True
-                else:
-                    response_text = await resp.text()
-                    logger.warning(f"[REVERSE-BRIDGE] Failed to forward: {resp.status} - {response_text[:200]}")
-                    return False
-                    
-    except Exception as e:
-        logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {e}", exc_info=True)
-        return False
-
-
-def load_agent_mail_mappings(logger: logging.Logger) -> Dict[str, Dict[str, Any]]:
-    """
-    Load Agent Mail mappings to get code names for agents.
-    
-    Returns a dict keyed by agent_id with code name and other info.
-    """
-    mappings_file = "/app/data/agent_mail_mappings.json"
-    try:
-        if os.path.exists(mappings_file):
-            with open(mappings_file, 'r') as f:
-                return json.load(f)
-    except Exception as e:
-        logger.warning(f"[REVERSE-BRIDGE] Could not load agent mail mappings: {e}")
-    return {}
-
-
-def get_agent_code_name(agent_id: str, logger: logging.Logger) -> Optional[str]:
-    """
-    Get the Agent Mail code name for a Letta agent ID.
-    
-    Args:
-        agent_id: Letta agent UUID
-        logger: Logger instance
-        
-    Returns:
-        Agent Mail code name (e.g., "WhiteStone") or None if not found
-    """
-    mappings = load_agent_mail_mappings(logger)
-    agent_info = mappings.get(agent_id)
-    if agent_info:
-        return agent_info.get('agent_mail_name')
-    return None
-
-
-# Custom exception classes
-class LettaApiError(Exception):
-    """Raised when Letta API calls fail"""
-    def __init__(self, message: str, status_code: Optional[int] = None, response_body: Optional[str] = None):
-        super().__init__(message)
-        self.status_code = status_code
-        self.response_body = response_body
-
-class MatrixClientError(Exception):
-    """Raised when Matrix client operations fail"""
-    pass
-
-class ConfigurationError(Exception):
-    """Raised when configuration is invalid"""
-    pass
-
-class LettaCodeApiError(Exception):
-    def __init__(self, status_code: int, message: str, details: Optional[Any] = None):
-        super().__init__(message)
-        self.status_code = status_code
-        self.details = details
-
-# Configuration dataclass
-@dataclass
-class Config:
-    homeserver_url: str
-    username: str
-    password: str
-    room_id: str
-    letta_api_url: str
-    letta_token: str
-    letta_agent_id: str
-    log_level: str = "INFO"
-    letta_code_api_url: str = os.getenv("LETTA_CODE_API_URL", "http://192.168.50.90:3099")
-    letta_code_enabled: bool = os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true"
-
-    # Embedding configuration for Letta file uploads
-    embedding_model: str = "letta/letta-free"
-    embedding_endpoint: str = ""  # e.g., http://192.168.50.80:11434/v1 for Ollama
-    embedding_endpoint_type: str = "openai"
-    embedding_dim: int = 1536
-    embedding_chunk_size: int = 300
-    # Matrix access token (set after login)
-    matrix_token: Optional[str] = None
-    # Streaming configuration
-    letta_streaming_enabled: bool = False  # Feature flag for step streaming
-    letta_streaming_timeout: float = 120.0  # Streaming timeout in seconds
-    letta_streaming_idle_timeout: float = 120.0  # Kill stream if no real data (only pings) for this long
-    letta_streaming_live_edit: bool = False  # Edit single message in-place instead of sending separate messages
-    letta_max_tool_calls: int = 100  # Abort stream if agent exceeds this many tool calls (loop detection)
-    # Typing indicators
-    letta_typing_enabled: bool = False  # Show typing indicator while agent is processing
-    # Conversations API configuration (context isolation per room)
-    letta_conversations_enabled: bool = False  # Feature flag for Conversations API
-    # Gateway configuration (route messages through lettabot WS gateway)
-    letta_gateway_enabled: bool = False  # Feature flag for WS gateway
-    letta_gateway_url: str = "ws://192.168.50.90:8407/api/v1/agent-gateway"  # WebSocket gateway URL
-    letta_gateway_api_key: str = ""  # API key for gateway auth (X-Api-Key header)
-    letta_gateway_idle_timeout: float = 3600.0  # Close idle WS connections after 1 hour
-    letta_gateway_max_connections: int = 20  # Max concurrent WS connections
-    # Document parsing configuration (MarkItDown)
-    document_parsing_enabled: bool = True  # Extract text from uploaded documents
-    document_parsing_max_file_size_mb: int = 50  # Max file size for parsing
-    document_parsing_timeout: float = 120.0  # Timeout for document conversion
-    document_parsing_ocr_enabled: bool = True  # OCR fallback for scanned PDFs
-    document_parsing_ocr_dpi: int = 200  # DPI for rendering PDF pages to images
-    document_parsing_max_text_length: int = 50000  # Truncate extracted text beyond this
-    
-    @classmethod
-    def from_env(cls) -> "Config":
-        """Load configuration from environment variables"""
-        try:
-            return cls(
-                homeserver_url=os.getenv("MATRIX_HOMESERVER_URL", "http://localhost:8008"),
-                username=os.getenv("MATRIX_USERNAME", "@letta:matrix.oculair.ca"),
-                password=os.getenv("MATRIX_PASSWORD", "letta"),
-                # MATRIX_ROOM_ID is optional. If unset or empty, we skip joining a base room.
-                room_id=os.getenv("MATRIX_ROOM_ID", "") or "",
-                letta_api_url=os.getenv("LETTA_API_URL", "http://192.168.50.90:8289"),
-                letta_token=os.getenv("LETTA_TOKEN", "lettaSecurePass123"),
-                letta_agent_id=os.getenv("LETTA_AGENT_ID", "agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444"),
-                log_level=os.getenv("LOG_LEVEL", "INFO"),
-                # Embedding configuration
-                embedding_model=os.getenv("LETTA_EMBEDDING_MODEL", "letta/letta-free"),
-                embedding_endpoint=os.getenv("LETTA_EMBEDDING_ENDPOINT", ""),
-                embedding_endpoint_type=os.getenv("LETTA_EMBEDDING_ENDPOINT_TYPE", "openai"),
-                embedding_dim=int(os.getenv("LETTA_EMBEDDING_DIM", "1536")),
-                embedding_chunk_size=int(os.getenv("LETTA_EMBEDDING_CHUNK_SIZE", "300")),
-                # Streaming configuration
-                letta_streaming_enabled=os.getenv("LETTA_STREAMING_ENABLED", "false").lower() == "true",
-                letta_streaming_timeout=float(os.getenv("LETTA_STREAMING_TIMEOUT", "120.0")),
-                letta_streaming_idle_timeout=float(os.getenv("LETTA_STREAMING_IDLE_TIMEOUT", "120.0")),
-                letta_streaming_live_edit=os.getenv("LETTA_STREAMING_LIVE_EDIT", "false").lower() == "true",
-                letta_code_api_url=os.getenv("LETTA_CODE_API_URL", "http://192.168.50.90:3099"),
-                letta_code_enabled=os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true",
-                letta_max_tool_calls=int(os.getenv("LETTA_MAX_TOOL_CALLS", "100")),
-                letta_conversations_enabled=os.getenv("LETTA_CONVERSATIONS_ENABLED", "false").lower() == "true",
-                letta_typing_enabled=os.getenv("LETTA_TYPING_ENABLED", "false").lower() == "true",
-                letta_gateway_enabled=os.getenv("LETTA_GATEWAY_ENABLED", "false").lower() == "true",
-                letta_gateway_url=os.getenv("LETTA_GATEWAY_URL", "ws://192.168.50.90:8407/api/v1/agent-gateway"),
-                letta_gateway_api_key=os.getenv("LETTA_GATEWAY_API_KEY", ""),
-                letta_gateway_idle_timeout=float(os.getenv("LETTA_GATEWAY_IDLE_TIMEOUT", "3600.0")),
-                letta_gateway_max_connections=int(os.getenv("LETTA_GATEWAY_MAX_CONNECTIONS", "20")),
-                # Document parsing configuration
-                document_parsing_enabled=os.getenv("DOCUMENT_PARSING_ENABLED", "true").lower() == "true",
-                document_parsing_max_file_size_mb=int(os.getenv("DOCUMENT_PARSING_MAX_FILE_SIZE_MB", "50")),
-                document_parsing_timeout=float(os.getenv("DOCUMENT_PARSING_TIMEOUT_SECONDS", "120.0")),
-                document_parsing_ocr_enabled=os.getenv("DOCUMENT_PARSING_OCR_ENABLED", "true").lower() == "true",
-                document_parsing_ocr_dpi=int(os.getenv("DOCUMENT_PARSING_OCR_DPI", "200")),
-                document_parsing_max_text_length=int(os.getenv("DOCUMENT_PARSING_MAX_TEXT_LENGTH", "50000")),
-            )
-        except Exception as e:
-            raise ConfigurationError(f"Failed to load configuration: {e}")
-
-LETTACODE_STATE_PATH = os.getenv("LETTA_CODE_STATE_PATH", "/app/data/letta_code_state.json")
-_letta_code_state: Dict[str, Dict[str, Any]] = {}
-
-
-def _load_letta_code_state() -> None:
-    global _letta_code_state
-    if _letta_code_state:
-        return
-    try:
-        if os.path.exists(LETTACODE_STATE_PATH):
-            with open(LETTACODE_STATE_PATH, "r") as fh:
-                data = json.load(fh)
-                if isinstance(data, dict):
-                    _letta_code_state = data
-    except Exception:
-        _letta_code_state = {}
-
-
-def _save_letta_code_state() -> None:
-    dir_path = os.path.dirname(LETTACODE_STATE_PATH)
-    if dir_path and not os.path.exists(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
-    with open(LETTACODE_STATE_PATH, "w") as fh:
-        json.dump(_letta_code_state, fh)
-
-
-def get_letta_code_room_state(room_id: str) -> Dict[str, Any]:
-    _load_letta_code_state()
-    room_state = _letta_code_state.get(room_id, {})
-    return dict(room_state)
-
-
-def update_letta_code_room_state(room_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
-    _load_letta_code_state()
-    room_state = _letta_code_state.get(room_id, {})
-    room_state.update(updates)
-    _letta_code_state[room_id] = room_state
-    _save_letta_code_state()
-    return dict(room_state)
-
-async def resolve_letta_project_dir(
-    room_id: str,
-    agent_id: str,
-    config: Config,
-    logger: logging.Logger,
-    override_path: Optional[str] = None,
-) -> Optional[str]:
-    if override_path:
-        update_letta_code_room_state(room_id, {"projectDir": override_path})
-        return override_path
-    state = get_letta_code_room_state(room_id)
-    project_dir = state.get("projectDir")
-    if project_dir:
-        return project_dir
-    try:
-        session_info = await call_letta_code_api(config, 'GET', f"/api/letta-code/sessions/{agent_id}")
-        if session_info:
-            project_dir = session_info.get('projectDir')
-            if project_dir:
-                update_letta_code_room_state(room_id, {"projectDir": project_dir})
-                return project_dir
-    except LettaCodeApiError as exc:
-        if exc.status_code != 404:
-            logger.warning("Failed to resolve Letta Code session", extra={
-                "room_id": room_id,
-                "agent_id": agent_id,
-                "status_code": exc.status_code,
-                "error": str(exc),
-            })
-    except Exception as exc:
-        logger.debug(f"Letta Code API unreachable for session resolve: {exc}")
-    return None
-
-# Setup structured logging
- 
-def setup_logging(config: Config) -> logging.Logger:
-
-    """Setup structured JSON logging"""
-    logger = logging.getLogger("matrix_client")
-    logger.setLevel(getattr(logging, config.log_level.upper()))
-    
-    # Remove existing handlers
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-    
-    # Create console handler with JSON formatter
-    handler = logging.StreamHandler()
-    handler.setLevel(getattr(logging, config.log_level.upper()))
-    
-    class JSONFormatter(logging.Formatter):
-        def format(self, record):
-            log_entry = {
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime(record.created)),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-                "module": record.module,
-                "function": record.funcName,
-                "line": record.lineno
-            }
-            
-            # Add exception info if present
-            if record.exc_info:
-                log_entry["exception"] = self.formatException(record.exc_info)
-            
-            # Add extra fields
-            extra_fields = getattr(record, 'extra', None)
-            if isinstance(extra_fields, dict):
-                log_entry.update(extra_fields)
-            return json.dumps(log_entry)
-    
-    handler.setFormatter(JSONFormatter())
-    logger.addHandler(handler)
-    logger.propagate = False
-    return logger
-
-async def call_letta_code_api(config: Config, method: str, path: str, payload: Optional[Dict[str, Any]] = None, timeout: float = 600.0) -> Dict[str, Any]:
-    base = (config.letta_code_api_url or "").rstrip('/')
-    if not base:
-        raise LettaCodeApiError(503, "Letta Code API URL not configured")
-    url = f"{base}{path}"
-    client_timeout = aiohttp.ClientTimeout(total=timeout)
-    async with aiohttp.ClientSession(timeout=client_timeout) as session:
-        async with session.request(method, url, json=payload) as response:
-            text = await response.text()
-            data: Optional[Any] = None
-            if text:
-                try:
-                    data = json.loads(text)
-                except json.JSONDecodeError:
-                    data = {"raw": text}
-            if response.status >= 400:
-                message = ""
-                if isinstance(data, dict):
-                    message = data.get("error") or data.get("message") or ""
-                raise LettaCodeApiError(response.status, message or text or "Request failed", data)
-            if data is None:
-                return {}
-            return data
-
-async def run_letta_code_task(
-    *,
-    room_id: str,
-    agent_id: str,
-    agent_name: str,
-    project_dir: Optional[str],
-    prompt: str,
-    config: Config,
-    logger: logging.Logger,
-    wrap_response: bool = True,
-) -> bool:
-    if not project_dir:
-        await send_as_agent(room_id, "No filesystem session found. Run /fs-link first.", config, logger)
-        return False
-    payload = {
-        "agentId": agent_id,
-        "prompt": prompt,
-        "projectDir": project_dir,
-    }
-    try:
-        result = await call_letta_code_api(config, 'POST', '/api/letta-code/task', payload, timeout=900.0)
-        output = result.get('result') or result.get('message') or ''
-        if not output:
-            output = 'Task completed with no output.'
-        if len(output) > 4000:
-            output = output[:4000] + '…'
-        success = result.get('success', False)
-        if wrap_response:
-            status_line = "Task succeeded" if success else "Task failed"
-            response_text = f"[Filesystem Task]\n{status_line}\nAgent: {agent_name}\nPath: {project_dir}\n\n{output}"
-            if not success:
-                error_text = result.get('error') or ''
-                if error_text:
-                    response_text += f"\nError: {error_text}"
-        else:
-            if success:
-                response_text = output
-            else:
-                error_text = result.get('error') or ''
-                response_text = f"[Filesystem Error]\n{error_text or output}"
-        await send_as_agent(room_id, response_text, config, logger)
-        return success
-    except LettaCodeApiError as exc:
-        detail = ""
-        if isinstance(exc.details, dict):
-            detail = exc.details.get('error') or exc.details.get('message') or ""
-        message = f"Filesystem task failed ({exc.status_code}): {detail or str(exc)}"
-        await send_as_agent(room_id, message, config, logger)
-        return False
-
-async def handle_letta_code_command(
-    room,
-    event,
-    config: Config,
-    logger: logging.Logger,
-    agent_mapping: Optional[Dict[str, Any]] = None,
-    agent_id_hint: Optional[str] = None,
-    agent_name_hint: Optional[str] = None,
-) -> bool:
-    if not config.letta_code_enabled:
-        return False
-    body = getattr(event, 'body', None)
-    if not body:
-        return False
-    trimmed = body.strip()
-    lowered = trimmed.lower()
-    if not lowered.startswith('/fs-'):
-        return False
-    from src.models.agent_mapping import AgentMappingDB
-    agent_id = agent_id_hint
-    agent_name = agent_name_hint
-    if agent_mapping and not agent_name:
-        agent_name = agent_mapping.get("agent_name") or agent_mapping.get("agentName")
-    mapping_obj = agent_mapping
-    if not agent_id or not agent_name:
-        db = AgentMappingDB()
-        mapping = db.get_by_room_id(room.room_id)
-        if not mapping:
-            await send_as_agent(room.room_id, "No agent mapping for this room.", config, logger)
-            return True
-        agent_id = str(mapping.agent_id)
-        agent_name = str(mapping.agent_name)
-        mapping_obj = {
-            "matrix_user_id": mapping.matrix_user_id,
-            "room_id": mapping.room_id,
-        }
-    state = get_letta_code_room_state(room.room_id)
-    parts = trimmed.split(' ', 1)
-    command = parts[0].lower()
-    args = parts[1].strip() if len(parts) > 1 else ""
-    if command == '/fs-link':
-        project_dir = args if args else None
-        
-        # Auto-detect path from VibSync if no path provided
-        if not project_dir and agent_name:
-            try:
-                # Fetch all projects from VibSync and match by name
-                projects_response = await call_letta_code_api(config, 'GET', '/api/projects')
-                projects = projects_response.get('projects', [])
-                
-                # Extract project name from agent name (e.g., "Huly - Personal Site" -> "Personal Site")
-                search_name = agent_name
-                if search_name.startswith("Huly - "):
-                    search_name = search_name[7:]  # Remove "Huly - " prefix
-                
-                # Find matching project by name (case-insensitive)
-                for proj in projects:
-                    if proj.get('name', '').lower() == search_name.lower():
-                        project_dir = proj.get('filesystem_path')
-                        if project_dir:
-                            logger.info(f"Auto-detected filesystem path for {agent_name}: {project_dir}")
-                        break
-            except Exception as e:
-                logger.warning(f"Failed to auto-detect filesystem path: {e}")
-        
-        if not project_dir:
-            await send_as_agent(room.room_id, "Usage: /fs-link /path/to/project\n(Could not auto-detect path for this agent)", config, logger)
-            return True
-            
-        payload = {
-            "agentId": agent_id,
-            "projectDir": project_dir,
-            "agentName": agent_name,
-        }
-        try:
-            response = await call_letta_code_api(config, 'POST', '/api/letta-code/link', payload)
-            message = response.get('message') or f"Agent {agent_id} linked to {project_dir}"
-            update_letta_code_room_state(room.room_id, {"projectDir": project_dir})
-            await send_as_agent(room.room_id, message, config, logger)
-        except LettaCodeApiError as exc:
-            detail = ""
-            if isinstance(exc.details, dict):
-                detail = exc.details.get('error') or exc.details.get('message') or ""
-            await send_as_agent(room.room_id, f"Link failed ({exc.status_code}): {detail or str(exc)}", config, logger)
-        return True
-    if command == '/fs-run':
-        if not args:
-            await send_as_agent(room.room_id, "Usage: /fs-run [--path=/opt/project] prompt", config, logger)
-            return True
-        prompt_text = args
-        path_override = None
-        if prompt_text.startswith('--path='):
-            first_space = prompt_text.find(' ')
-            if first_space == -1:
-                path_override = prompt_text[len('--path='):].strip()
-                prompt_text = ''
-            else:
-                path_override = prompt_text[len('--path='):first_space].strip()
-                prompt_text = prompt_text[first_space + 1:].strip()
-        if not prompt_text:
-            await send_as_agent(room.room_id, "Provide a prompt after the path option.", config, logger)
-            return True
-        project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger, override_path=path_override)
-        if not project_dir:
-            await send_as_agent(room.room_id, "No filesystem session found. Run /fs-link first.", config, logger)
-            return True
-        
-        fs_run_prompt = prompt_text
-        if event.sender.startswith("@oc_"):
-            fs_run_prompt = matrix_formatter.wrap_opencode_routing(prompt_text, event.sender)
-            logger.info("[OPENCODE-FS-RUN] Injected @mention instruction for /fs-run command")
-        
-        await run_letta_code_task(
-            room_id=room.room_id,
-            agent_id=agent_id,
-            agent_name=agent_name,
-            project_dir=project_dir,
-            prompt=fs_run_prompt,
-            config=config,
-            logger=logger,
-            wrap_response=True,
-        )
-        return True
-    if command == '/fs-task':
-        normalized = args.lower()
-        state_enabled = bool(state.get("enabled"))
-        if not args:
-            desired = not state_enabled
-        elif normalized in ('on', 'enable', 'start'):
-            desired = True
-        elif normalized in ('off', 'disable', 'stop'):
-            desired = False
-        elif normalized in ('status', 'state'):
-            status = "ENABLED" if state_enabled else "DISABLED"
-            info = state.get("projectDir") or "not set"
-            environment = "Letta Code" if state_enabled else "Cloud-only"
-            await send_as_agent(
-                room.room_id,
-                f"Filesystem mode is {status}\nEnvironment: {environment}\nProject path: {info}",
-                config,
-                logger,
-            )
-            return True
-        else:
-            await send_as_agent(room.room_id, "Usage: /fs-task [on|off|status]", config, logger)
-            return True
-        if desired:
-            project_dir = state.get("projectDir")
-            if not project_dir:
-                project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger)
-            if not project_dir:
-                await send_as_agent(room.room_id, "Link a project with /fs-link before enabling filesystem mode.", config, logger)
-                return True
-            update_letta_code_room_state(room.room_id, {"enabled": True, "projectDir": project_dir})
-            await send_as_agent(
-                room.room_id,
-                f"Filesystem mode ENABLED\nEnvironment: Letta Code (path: {project_dir})\nAll new prompts will run inside the project workspace.",
-                config,
-                logger,
-            )
-        else:
-            update_letta_code_room_state(room.room_id, {"enabled": False})
-            await send_as_agent(
-                room.room_id,
-                "Filesystem mode DISABLED\nEnvironment: Cloud-only (standard Letta API).",
-                config,
-                logger,
-            )
-        return True
-    return False
-
-
 # Global variables for backwards compatibility
 client = None
 auth_manager_global = None
-
-async def retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0, logger: Optional[logging.Logger] = None):
-    """
-    Retry a function with exponential backoff
-    """
-    for attempt in range(max_retries):
-        try:
-            return await func()
-        except Exception as e:
-            if attempt == max_retries - 1:
-                if logger:
-                    logger.error("All retry attempts failed", extra={"attempts": max_retries, "error": str(e)})
-                raise
-            
-            delay = min(base_delay * (2 ** attempt), max_delay)
-            if logger:
-                logger.warning("Retry attempt failed, waiting before next try", 
-                             extra={"attempt": attempt + 1, "delay": delay, "error": str(e)})
-            await asyncio.sleep(delay)
-
-async def get_agent_from_room_members(room_id: str, config: Config, logger: logging.Logger) -> Optional[tuple]:
-    """
-    Extract agent ID from room members by finding agent Matrix users.
-    Returns (agent_id, agent_name) or None if not found.
-    """
-    try:
-        # Get room members using Matrix API
-        admin_token = config.matrix_token
-        members_url = f"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/members"
-        headers = {"Authorization": f"Bearer {admin_token}"}
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(members_url, headers=headers) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Failed to get room members: {resp.status}")
-                    return None
-                
-                members_data = await resp.json()
-                members = members_data.get('chunk', [])
-                
-                # Look for agent users in room members
-                # Agent user IDs follow pattern: @agent_<UUID>:matrix.oculair.ca
-                from src.models.agent_mapping import AgentMappingDB
-                db = AgentMappingDB()
-                all_mappings = db.get_all()
-                
-                for member in members:
-                    user_id = member.get('state_key')  # Matrix user ID
-                    if not user_id:
-                        continue
-                    
-                    # Check if this user_id matches any agent mapping
-                    for mapping in all_mappings:
-                        if mapping.matrix_user_id == user_id:
-                            logger.info(f"Found agent via room members: {mapping.agent_name} ({mapping.agent_id})")
-                            return (mapping.agent_id, mapping.agent_name)
-                
-                logger.warning(f"No agent users found in room {room_id} members")
-                return None
-                
-    except Exception as e:
-        logger.warning(f"Error extracting agent from room members: {e}", exc_info=True)
-        return None
-
-
-async def send_to_letta_api_streaming(
-    message_body: Union[str, list], 
-    sender_id: str, 
-    config: Config, 
-    logger: logging.Logger, 
-    room_id: str,
-    reply_to_event_id: Optional[str] = None,
-    reply_to_sender: Optional[str] = None,
-    opencode_sender: Optional[str] = None,
-    room_member_count: int = 3,
-) -> str:
-    from src.matrix.streaming import StreamingMessageHandler, StreamEventType
-    from src.letta.client import get_letta_client, LettaConfig
-    from src.voice.directive_parser import parse_directives, VoiceDirective, ImageDirective, FileDirective, VideoDirective
-    from src.voice.tts import is_tts_configured, synthesize_speech
-    
-    agent_id_to_use = config.letta_agent_id
-    agent_name_found = "DEFAULT"
-    
-    if room_id:
-        try:
-            from src.models.agent_mapping import AgentMappingDB
-            db = AgentMappingDB()
-            mapping = db.get_by_room_id(room_id)
-            if mapping:
-                agent_id_to_use = str(mapping.agent_id)
-                agent_name_found = str(mapping.agent_name)
-                logger.info(f"[STREAMING] Found agent mapping: {agent_name_found} ({agent_id_to_use})")
-            else:
-                # Check portal links for bridged rooms
-                portal_link = db.get_portal_link_by_room_id(room_id)
-                if portal_link:
-                    portal_mapping = db.get_by_agent_id(portal_link['agent_id'])
-                    if portal_mapping:
-                        agent_id_to_use = str(portal_mapping.agent_id)
-                        agent_name_found = str(portal_mapping.agent_name)
-                        logger.info(f"[STREAMING] Portal link match: {agent_name_found} ({agent_id_to_use})")
-                    else:
-                        member_result = await get_agent_from_room_members(room_id, config, logger)
-                        if member_result:
-                            agent_id_to_use, agent_name_found = member_result
-                else:
-                    member_result = await get_agent_from_room_members(room_id, config, logger)
-                    if member_result:
-                        agent_id_to_use, agent_name_found = member_result
-        except Exception as e:
-            logger.warning(f"[STREAMING] Could not query agent mappings: {e}")
-    
-    logger.info(f"[STREAMING] Sending message with streaming to agent {agent_name_found}")
-    
-    sdk_config = LettaConfig(
-        base_url=config.letta_api_url,
-        api_key=config.letta_token,
-        timeout=config.letta_streaming_timeout,
-        max_retries=3
-    )
-    letta_client = get_letta_client(sdk_config)
-    
-    conversation_id: Optional[str] = None
-    if config.letta_conversations_enabled:
-        try:
-            from src.core.conversation_service import get_conversation_service
-            conv_service = get_conversation_service(letta_client)
-            conversation_id, created = await conv_service.get_or_create_room_conversation(
-                room_id=room_id,
-                agent_id=agent_id_to_use,
-                room_member_count=room_member_count,
-                user_mxid=sender_id if room_member_count == 2 else None,
-            )
-            logger.info(f"[CONVERSATIONS] Using conversation {conversation_id} (created={created})")
-        except Exception as e:
-            logger.warning(f"[CONVERSATIONS] Failed to get conversation, falling back to agents API: {e}")
-            conversation_id = None
-    
-    # Gateway is REQUIRED — direct API is deprecated and breaks conversation state
-    from src.letta.ws_gateway_client import get_gateway_client, GatewayUnavailableError
-    try:
-        gateway_client = await get_gateway_client(
-            gateway_url=config.letta_gateway_url,
-            idle_timeout=config.letta_gateway_idle_timeout,
-            max_connections=config.letta_gateway_max_connections,
-            api_key=config.letta_gateway_api_key or config.letta_token,
-        )
-        logger.info("[STREAMING] Gateway connected")
-    except Exception as e:
-        raise LettaApiError(f"Gateway unavailable — cannot process message: {e}")
-
-    async def send_message(rid: str, content: str) -> str:
-        """Send a progress message and return event_id (no reply context)"""
-        event_id = await send_as_agent_with_event_id(rid, content, config, logger)
-        return event_id or ""
-    
-    async def send_final_message(rid: str, content: str) -> str:
-        final_content = content
-        
-        logger.debug(f"[OPENCODE] send_final_message: opencode_sender={opencode_sender}, content_len={len(content) if content else 0}")
-        
-        if opencode_sender:
-            if opencode_sender not in content:
-                logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_sender}")
-                final_content = f"{opencode_sender} {content}"
-            else:
-                logger.debug(f"[OPENCODE] Agent response already contains @mention")
-        
-        poll_handled, remaining_text, poll_event_id = await process_agent_response(
-            room_id=rid,
-            response_text=final_content,
-            config=config,
-            logger_instance=logger,
-            reply_to_event_id=reply_to_event_id,
-            reply_to_sender=reply_to_sender
-        )
-        
-        if poll_handled:
-            logger.info(f"[POLL] Poll command handled in streaming, event_id: {poll_event_id}")
-            if not remaining_text:
-                return poll_event_id or ""
-            final_content = remaining_text
-        
-        event_id = await send_as_agent_with_event_id(
-            rid, final_content, config, logger,
-            reply_to_event_id=reply_to_event_id,
-            reply_to_sender=reply_to_sender
-        )
-        return event_id or ""
-    
-    async def delete_message(rid: str, event_id: str) -> None:
-        await delete_message_as_agent(rid, event_id, config, logger)
-
-    async def edit_message(rid: str, event_id: str, new_body: str) -> None:
-        await edit_message_as_agent(rid, event_id, new_body, config, logger)
-
-    if config.letta_streaming_live_edit:
-        from src.matrix.streaming import LiveEditStreamingHandler
-        logger.info("[STREAMING] Using live-edit mode (single message, edited in-place)")
-        handler = LiveEditStreamingHandler(
-            send_message=send_message,
-            edit_message=edit_message,
-            room_id=room_id,
-            send_final_message=send_final_message,
-            delete_message=delete_message,
-        )
-    else:
-        handler = StreamingMessageHandler(
-            send_message=send_message,
-            delete_message=delete_message,
-            room_id=room_id,
-            delete_progress=False,
-            send_final_message=send_final_message,
-        )
-    
-    final_response = ""
-    typing_manager = TypingIndicatorManager(room_id, config, logger) if config.letta_typing_enabled else None
-    voice_logger = logging.getLogger("matrix_client.voice")
-    
-    try:
-        if typing_manager:
-            await typing_manager.start()
-        
-        from src.letta.gateway_stream_reader import stream_via_gateway
-        event_source = stream_via_gateway(
-            client=gateway_client,
-            agent_id=agent_id_to_use,
-            message=message_body,
-            conversation_id=conversation_id,
-            max_tool_calls=config.letta_max_tool_calls,
-            source={"channel": "matrix", "chatId": room_id},
-        )
-        logger.info("[STREAMING] Using WS gateway as event source")
-
-        async for event in event_source:
-            logger.debug(f"[STREAMING] Event: {event.type.value}")
-
-            if event.type == StreamEventType.ASSISTANT and event.content:
-                parse_result = parse_directives(event.content)
-                voice_logger.debug("[VOICE-DEBUG] Parsed content (%d chars): directives=%d, clean=%r", len(event.content), len(parse_result.directives), event.content[:100])
-
-                if parse_result.directives:
-                    # Process each directive (voice or image)
-                    transcript_parts = []
-                    caption_parts = []
-
-                    for directive in parse_result.directives:
-                        if isinstance(directive, VoiceDirective):
-                            if not is_tts_configured():
-                                voice_logger.info("[VOICE] Voice directive found but TTS is not configured")
-                                continue
-                            await handler.show_progress("🎙️ Generating voice...")
-                            audio_data = await synthesize_speech(directive.text)
-                            if not audio_data:
-                                voice_logger.warning("[VOICE] TTS synthesis returned no audio")
-                                await handler.update_last_progress("❌ Voice synthesis failed")
-                                continue
-                            filename = f"voice-{uuid.uuid4().hex}.mp3"
-                            audio_event_id = await upload_and_send_audio(
-                                room_id=room_id,
-                                audio_data=audio_data,
-                                filename=filename,
-                                mimetype="audio/mpeg",
-                                config=config,
-                                logger=voice_logger,
-                            )
-                            if audio_event_id:
-                                voice_logger.info("[VOICE] Sent voice message event %s", audio_event_id)
-                                transcript_parts.append(directive.text)
-                                await handler.update_last_progress("✅ Voice sent")
-                            else:
-                                voice_logger.warning("[VOICE] Failed to upload/send voice message")
-                                await handler.update_last_progress("❌ Voice upload failed")
-
-                        elif isinstance(directive, ImageDirective):
-                            await handler.show_progress("🖼️ Fetching image...")
-                            image_event_id = await fetch_and_send_image(
-                                room_id=room_id,
-                                image_url=directive.url,
-                                alt=directive.alt,
-                                config=config,
-                                logger=voice_logger,
-                            )
-                            if image_event_id:
-                                voice_logger.info("[IMAGE] Sent image event %s", image_event_id)
-                                if directive.caption:
-                                    caption_parts.append(directive.caption)
-                                await handler.update_last_progress("✅ Image sent")
-                            else:
-                                voice_logger.warning("[IMAGE] Failed to fetch/send image from %s", directive.url)
-                                await handler.update_last_progress("❌ Image failed")
-
-                        elif isinstance(directive, FileDirective):
-                            await handler.show_progress("📄 Fetching file...")
-                            file_event_id = await fetch_and_send_file(
-                                room_id=room_id,
-                                file_url=directive.url,
-                                filename=directive.filename,
-                                config=config,
-                                logger=voice_logger,
-                            )
-                            if file_event_id:
-                                voice_logger.info("[FILE] Sent file event %s", file_event_id)
-                                if directive.caption:
-                                    caption_parts.append(directive.caption)
-                                await handler.update_last_progress("✅ File sent")
-                            else:
-                                voice_logger.warning("[FILE] Failed to fetch/send file from %s", directive.url)
-                                await handler.update_last_progress("❌ File failed")
-
-                        elif isinstance(directive, VideoDirective):
-                            await handler.show_progress("🎬 Fetching video...")
-                            video_event_id = await fetch_and_send_video(
-                                room_id=room_id,
-                                video_url=directive.url,
-                                alt=directive.alt,
-                                config=config,
-                                logger=voice_logger,
-                            )
-                            if video_event_id:
-                                voice_logger.info("[VIDEO] Sent video event %s", video_event_id)
-                                if directive.caption:
-                                    caption_parts.append(directive.caption)
-                                await handler.update_last_progress("✅ Video sent")
-                            else:
-                                voice_logger.warning("[VIDEO] Failed to fetch/send video from %s", directive.url)
-                                await handler.update_last_progress("❌ Video failed")
-
-                    # Build the text to display: clean_text + voice transcripts + image captions
-                    display_parts = []
-                    if parse_result.clean_text.strip():
-                        display_parts.append(parse_result.clean_text.strip())
-                    if transcript_parts:
-                        display_parts.append("\ud83d\udde3\ufe0f " + " ".join(transcript_parts))
-                    if caption_parts:
-                        display_parts.append("\n".join(caption_parts))
-
-                    if display_parts:
-                        event.content = "\n\n".join(display_parts)
-                        final_response = event.content
-                    else:
-                        final_response = "(media sent)"
-                        continue
-                elif event.content:
-                    final_response = event.content
-            
-            await handler.handle_event(event)
-            
-            if event.type == StreamEventType.ERROR:
-                logger.error(f"[STREAMING] Error: {event.content}")
-                if not final_response:
-                    final_response = f"Error: {event.content}"
-        
-        await handler.cleanup()
-        
-    except Exception as e:
-        logger.error(f"[STREAMING] Exception during streaming: {e}", exc_info=True)
-        await handler.cleanup()
-        raise LettaApiError(f"Streaming error: {e}")
-    finally:
-        if typing_manager:
-            await typing_manager.stop()
-    
-    if not final_response:
-        final_response = "Agent processed the request (no text response)."
-    
-    return final_response
-
-
-# --- Agent Auth Helper ---
-# All agent-as-user functions share this login pattern.
-# Centralizing it here eliminates 10x code duplication
-# and ensures consistent timeout/error handling.
-
-_AGENT_LOGIN_TIMEOUT = aiohttp.ClientTimeout(total=10)
-_AGENT_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=30)
-_AGENT_SEND_TIMEOUT = aiohttp.ClientTimeout(total=15)
-
-
-async def _get_agent_token(
-    room_id: str,
-    config,
-    logger: logging.Logger,
-    session: aiohttp.ClientSession,
-    caller: str = '',
-) -> Optional[str]:
-    """
-    Look up agent mapping for a room, login as the agent user, return access token.
-    Returns None on any failure (logs the issue).
-    """
-    from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_agent_id, get_portal_link_by_room_id
-    agent_mapping = get_mapping_by_room_id(room_id)
-    if not agent_mapping:
-        # Check portal links for bridged rooms
-        portal_link = get_portal_link_by_room_id(room_id)
-        if portal_link:
-            agent_mapping = get_mapping_by_agent_id(portal_link['agent_id'])
-    if not agent_mapping:
-        logger.warning(f"[{caller}] No agent mapping for room {room_id}")
-        return None
-
-    agent_username = agent_mapping['matrix_user_id'].split(':')[0].replace('@', '')
-    agent_password = agent_mapping['matrix_password']
-
-    login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
-    login_data = {"type": "m.login.password", "user": agent_username, "password": agent_password}
-
-    try:
-        async with session.post(login_url, json=login_data, timeout=_AGENT_LOGIN_TIMEOUT) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                logger.error(f"[{caller}] Login failed for {agent_username}: {resp.status} - {error_text}")
-                return None
-            auth_data = await resp.json()
-            token = auth_data.get('access_token')
-            if not token:
-                logger.error(f"[{caller}] No access_token in login response for {agent_username}")
-                return None
-            return token
-    except asyncio.TimeoutError:
-        logger.error(f"[{caller}] Login timed out for {agent_username}")
-        return None
-    except Exception as e:
-        logger.error(f"[{caller}] Login exception for {agent_username}: {e}")
-        return None
-
-
-async def upload_and_send_audio(
-    room_id: str,
-    audio_data: bytes,
-    filename: str,
-    mimetype: str,
-    config,
-    logger,
-    duration_ms: Optional[int] = None,
-) -> Optional[str]:
-    try:
-        async with aiohttp.ClientSession() as session:
-            agent_token = await _get_agent_token(room_id, config, logger, session, caller="VOICE")
-            if not agent_token:
-                return None
-
-            upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
-            upload_headers = {
-                "Authorization": f"Bearer {agent_token}",
-                "Content-Type": mimetype,
-            }
-
-            async with session.post(
-                upload_url,
-                headers=upload_headers,
-                params={"filename": filename},
-                data=audio_data,
-                timeout=_AGENT_UPLOAD_TIMEOUT,
-            ) as upload_response:
-                if upload_response.status != 200:
-                    upload_error = await upload_response.text()
-                    logger.error(
-                        "[VOICE] Audio upload failed: %s - %s",
-                        upload_response.status,
-                        upload_error,
-                    )
-                    return None
-
-                upload_data = await upload_response.json()
-                content_uri = upload_data.get("content_uri")
-                if not content_uri:
-                    logger.error("[VOICE] Upload response missing content_uri")
-                    return None
-
-            txn_id = str(uuid.uuid4())
-            message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
-            message_headers = {
-                "Authorization": f"Bearer {agent_token}",
-                "Content-Type": "application/json",
-            }
-
-            info = {
-                "mimetype": mimetype,
-                "size": len(audio_data),
-                "duration": duration_ms,
-            }
-            message_data = {
-                "msgtype": "m.audio",
-                "url": content_uri,
-                "body": filename,
-                "info": info,
-                "org.matrix.msc1767.audio": {},
-                "org.matrix.msc3245.voice": {},
-            }
-
-            async with session.put(
-                message_url,
-                headers=message_headers,
-                json=message_data,
-                timeout=_AGENT_SEND_TIMEOUT,
-            ) as send_response:
-                if send_response.status != 200:
-                    send_error = await send_response.text()
-                    logger.error(
-                        "[VOICE] Audio send failed: %s - %s",
-                        send_response.status,
-                        send_error,
-                    )
-                    return None
-
-                send_result = await send_response.json()
-                event_id = send_result.get("event_id")
-                logger.debug("[VOICE] Sent audio event_id: %s", event_id)
-                return event_id
-
-    except Exception as e:
-        logger.error(f"[VOICE] Exception while uploading/sending audio: {e}", exc_info=True)
-        return None
-
-async def fetch_and_send_image(
-    room_id: str,
-    image_url: str,
-    alt: str,
-    config,
-    logger,
-) -> Optional[str]:
-    """Fetch an image from a URL, upload to Matrix media repo, and send as m.image."""
-    try:
-        fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
-        async with aiohttp.ClientSession() as session:
-            # Step 1: Fetch the image from the URL
-            try:
-                async with session.get(image_url, headers=fetch_headers, timeout=aiohttp.ClientTimeout(total=30)) as img_response:
-                    if img_response.status != 200:
-                        logger.error("[IMAGE] Failed to fetch image from %s: %s", image_url, img_response.status)
-                        return None
-                    image_data = await img_response.read()
-                    content_type = img_response.headers.get("Content-Type", "image/png")
-                    # Normalize content type (strip params like charset)
-                    mimetype = content_type.split(";")[0].strip()
-                    if not mimetype.startswith("image/"):
-                        mimetype = "image/png"
-            except Exception as fetch_err:
-                logger.error("[IMAGE] Exception fetching image from %s: %s", image_url, fetch_err)
-                return None
-
-            if not image_data or len(image_data) < 100:
-                logger.warning("[IMAGE] Fetched image too small (%d bytes) from %s", len(image_data) if image_data else 0, image_url)
-                return None
-
-            # Derive filename from URL
-            from urllib.parse import urlparse
-            url_path = urlparse(image_url).path
-            filename = url_path.split("/")[-1] if "/" in url_path else "image.png"
-            if not filename or "." not in filename:
-                ext = mimetype.split("/")[-1].replace("jpeg", "jpg")
-                filename = f"image.{ext}"
-
-            logger.info("[IMAGE] Fetched %s (%d bytes, %s)", filename, len(image_data), mimetype)
-
-            # Step 2: Login as agent
-            agent_token = await _get_agent_token(room_id, config, logger, session, caller="IMAGE")
-            if not agent_token:
-                return None
-
-            # Step 3: Upload to Matrix media repo
-            upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
-            upload_headers = {
-                "Authorization": f"Bearer {agent_token}",
-                "Content-Type": mimetype,
-            }
-
-            async with session.post(
-                upload_url,
-                headers=upload_headers,
-                params={"filename": filename},
-                data=image_data,
-                timeout=_AGENT_UPLOAD_TIMEOUT,
-            ) as upload_response:
-                if upload_response.status != 200:
-                    upload_error = await upload_response.text()
-                    logger.error("[IMAGE] Upload failed: %s - %s", upload_response.status, upload_error)
-                    return None
-                upload_result = await upload_response.json()
-                content_uri = upload_result.get("content_uri")
-                if not content_uri:
-                    logger.error("[IMAGE] Upload response missing content_uri")
-                    return None
-
-            # Step 4: Generate thumbnail and upload it
-            thumbnail_uri = None
-            thumbnail_info = None
-            try:
-                from PIL import Image as PILImage
-                import io
-                img = PILImage.open(io.BytesIO(image_data))
-                orig_w, orig_h = img.size
-                # Generate thumbnail (max 320px on longest side)
-                thumb_size = (320, 320)
-                img.thumbnail(thumb_size, PILImage.Resampling.LANCZOS)
-                thumb_w, thumb_h = img.size
-                thumb_buf = io.BytesIO()
-                img.save(thumb_buf, format='PNG')
-                thumb_data = thumb_buf.getvalue()
-
-                async with session.post(
-                    upload_url, headers={**upload_headers, 'Content-Type': 'image/png'},
-                    params={'filename': 'thumbnail.png'}, data=thumb_data,
-                    timeout=_AGENT_UPLOAD_TIMEOUT,
-                ) as thumb_resp:
-                    if thumb_resp.status == 200:
-                        thumb_result = await thumb_resp.json()
-                        thumbnail_uri = thumb_result.get('content_uri')
-                        thumbnail_info = {
-                            'w': thumb_w, 'h': thumb_h,
-                            'mimetype': 'image/png', 'size': len(thumb_data),
-                        }
-                        logger.debug('[IMAGE] Uploaded thumbnail %dx%d (%d bytes)', thumb_w, thumb_h, len(thumb_data))
-            except ImportError:
-                orig_w, orig_h = None, None
-                logger.debug('[IMAGE] Pillow not available, skipping thumbnail')
-            except Exception as thumb_err:
-                orig_w, orig_h = None, None
-                logger.debug('[IMAGE] Thumbnail generation failed: %s', thumb_err)
-
-            # Step 5: Send m.image event
-            txn_id = str(uuid.uuid4())
-            message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
-            message_headers = {
-                "Authorization": f"Bearer {agent_token}",
-                "Content-Type": "application/json",
-            }
-
-            image_info: Dict[str, Any] = {
-                "mimetype": mimetype,
-                "size": len(image_data),
-            }
-            if orig_w and orig_h:
-                image_info['w'] = orig_w
-                image_info['h'] = orig_h
-            if thumbnail_uri and thumbnail_info:
-                image_info['thumbnail_url'] = thumbnail_uri
-                image_info['thumbnail_info'] = thumbnail_info
-
-            message_data = {
-                "msgtype": "m.image",
-                "url": content_uri,
-                "body": alt or filename,
-                "info": image_info,
-            }
-
-            async with session.put(
-                message_url,
-                headers=message_headers,
-                json=message_data,
-                timeout=_AGENT_SEND_TIMEOUT,
-            ) as send_response:
-                if send_response.status != 200:
-                    send_error = await send_response.text()
-                    logger.error("[IMAGE] Send failed: %s - %s", send_response.status, send_error)
-                    return None
-                send_result = await send_response.json()
-                event_id = send_result.get("event_id")
-                logger.info("[IMAGE] Sent image event_id: %s", event_id)
-                return event_id
-
-    except Exception as e:
-        logger.error(f"[IMAGE] Exception while fetching/sending image: {e}", exc_info=True)
-        return None
-
-async def fetch_and_send_file(
-    room_id: str,
-    file_url: str,
-    filename: str,
-    config,
-    logger,
-) -> Optional[str]:
-    """Fetch a file from a URL, upload to Matrix media repo, and send as m.file."""
-    try:
-        fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
-        async with aiohttp.ClientSession() as session:
-            # Fetch the file
-            try:
-                async with session.get(file_url, headers=fetch_headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                    if resp.status != 200:
-                        logger.error("[FILE] Failed to fetch file from %s: %s", file_url, resp.status)
-                        return None
-                    file_data = await resp.read()
-                    content_type = resp.headers.get("Content-Type", "application/octet-stream")
-                    mimetype = content_type.split(";")[0].strip()
-            except Exception as fetch_err:
-                logger.error("[FILE] Exception fetching file from %s: %s", file_url, fetch_err)
-                return None
-
-            if not file_data or len(file_data) < 10:
-                logger.warning("[FILE] Fetched file too small (%d bytes)", len(file_data) if file_data else 0)
-                return None
-
-            # Derive filename from URL if not provided
-            if not filename:
-                from urllib.parse import urlparse
-                url_path = urlparse(file_url).path
-                filename = url_path.split("/")[-1] if "/" in url_path else "file"
-                if not filename or "." not in filename:
-                    filename = "file.bin"
-
-            logger.info("[FILE] Fetched %s (%d bytes, %s)", filename, len(file_data), mimetype)
-
-            # Login as agent
-            agent_token = await _get_agent_token(room_id, config, logger, session, caller="FILE")
-            if not agent_token:
-                return None
-
-            # Upload to Matrix
-            upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
-            upload_headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": mimetype}
-            async with session.post(
-                upload_url,
-                headers=upload_headers,
-                params={"filename": filename},
-                data=file_data,
-                timeout=_AGENT_UPLOAD_TIMEOUT,
-            ) as upload_resp:
-                if upload_resp.status != 200:
-                    logger.error("[FILE] Upload failed: %s", upload_resp.status)
-                    return None
-                content_uri = (await upload_resp.json()).get("content_uri")
-                if not content_uri:
-                    return None
-
-            # Send m.file event
-            txn_id = str(uuid.uuid4())
-            msg_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
-            msg_headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
-            msg_data = {
-                "msgtype": "m.file",
-                "url": content_uri,
-                "body": filename,
-                "filename": filename,
-                "info": {"mimetype": mimetype, "size": len(file_data)},
-            }
-            async with session.put(
-                msg_url,
-                headers=msg_headers,
-                json=msg_data,
-                timeout=_AGENT_SEND_TIMEOUT,
-            ) as send_resp:
-                if send_resp.status != 200:
-                    logger.error("[FILE] Send failed: %s", send_resp.status)
-                    return None
-                event_id = (await send_resp.json()).get("event_id")
-                logger.info("[FILE] Sent file event_id: %s", event_id)
-                return event_id
-
-    except Exception as e:
-        logger.error(f"[FILE] Exception: {e}", exc_info=True)
-        return None
-
-
-async def fetch_and_send_video(
-    room_id: str,
-    video_url: str,
-    alt: str,
-    config,
-    logger,
-) -> Optional[str]:
-    """Fetch a video from a URL, upload to Matrix media repo, and send as m.video."""
-    try:
-        fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
-        async with aiohttp.ClientSession() as session:
-            # Fetch the video
-            try:
-                async with session.get(video_url, headers=fetch_headers, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                    if resp.status != 200:
-                        logger.error("[VIDEO] Failed to fetch from %s: %s", video_url, resp.status)
-                        return None
-                    video_data = await resp.read()
-                    content_type = resp.headers.get("Content-Type", "video/mp4")
-                    mimetype = content_type.split(";")[0].strip()
-                    if not mimetype.startswith("video/"):
-                        mimetype = "video/mp4"
-            except Exception as fetch_err:
-                logger.error("[VIDEO] Exception fetching from %s: %s", video_url, fetch_err)
-                return None
-
-            if not video_data or len(video_data) < 100:
-                logger.warning("[VIDEO] Fetched video too small (%d bytes)", len(video_data) if video_data else 0)
-                return None
-
-            # Derive filename from URL
-            from urllib.parse import urlparse
-            url_path = urlparse(video_url).path
-            filename = url_path.split("/")[-1] if "/" in url_path else "video.mp4"
-            if not filename or "." not in filename:
-                ext = mimetype.split("/")[-1]
-                filename = f"video.{ext}"
-
-            logger.info("[VIDEO] Fetched %s (%d bytes, %s)", filename, len(video_data), mimetype)
-
-            # Login as agent
-            agent_token = await _get_agent_token(room_id, config, logger, session, caller="VIDEO")
-            if not agent_token:
-                return None
-
-            # Upload to Matrix
-            upload_url = f"{config.homeserver_url}/_matrix/media/v3/upload"
-            upload_headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": mimetype}
-            async with session.post(
-                upload_url,
-                headers=upload_headers,
-                params={"filename": filename},
-                data=video_data,
-                timeout=_AGENT_UPLOAD_TIMEOUT,
-            ) as upload_resp:
-                if upload_resp.status != 200:
-                    logger.error("[VIDEO] Upload failed: %s", upload_resp.status)
-                    return None
-                content_uri = (await upload_resp.json()).get("content_uri")
-                if not content_uri:
-                    return None
-
-            # Send m.video event
-            txn_id = str(uuid.uuid4())
-            msg_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
-            msg_headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
-            msg_data = {
-                "msgtype": "m.video",
-                "url": content_uri,
-                "body": alt or filename,
-                "info": {"mimetype": mimetype, "size": len(video_data)},
-            }
-            async with session.put(
-                msg_url,
-                headers=msg_headers,
-                json=msg_data,
-                timeout=_AGENT_SEND_TIMEOUT,
-            ) as send_resp:
-                if send_resp.status != 200:
-                    logger.error("[VIDEO] Send failed: %s", send_resp.status)
-                    return None
-                event_id = (await send_resp.json()).get("event_id")
-                logger.info("[VIDEO] Sent video event_id: %s", event_id)
-                return event_id
-
-    except Exception as e:
-        logger.error(f"[VIDEO] Exception: {e}", exc_info=True)
-        return None
-
-
-async def send_to_letta_api(
-    message_body: Union[str, list],
-    sender_id: str,
-    config: Config,
-    logger: logging.Logger,
-    room_id: Optional[str] = None,
-    room_member_count: int = 3,
-) -> str:
-    if sender_id.startswith('@'):
-        username = sender_id[1:].split(':')[0]
-    else:
-        username = sender_id
-    
-    agent_id_to_use = config.letta_agent_id
-    agent_name_found = "DEFAULT"
-    routing_method = "default"
-
-    if room_id:
-        try:
-            from src.models.agent_mapping import AgentMappingDB
-            db = AgentMappingDB()
-            
-            mapping = db.get_by_room_id(room_id)
-            if mapping:
-                agent_id_to_use = str(mapping.agent_id)
-                agent_name_found = str(mapping.agent_name)
-                routing_method = "database_room_id"
-                logger.info(f"Found agent mapping in DB for room {room_id}: {agent_name_found} ({agent_id_to_use})")
-            else:
-                # Check portal links for bridged rooms (WhatsApp, FB, Telegram, etc.)
-                portal_link = db.get_portal_link_by_room_id(room_id)
-                if portal_link:
-                    portal_mapping = db.get_by_agent_id(portal_link['agent_id'])
-                    if portal_mapping:
-                        agent_id_to_use = str(portal_mapping.agent_id)
-                        agent_name_found = str(portal_mapping.agent_name)
-                        routing_method = "portal_link"
-                        logger.info(f"Portal link match for room {room_id}: {agent_name_found} ({agent_id_to_use})")
-                    else:
-                        logger.warning(f"Portal link found but agent mapping missing for {portal_link['agent_id']}")
-                
-                if routing_method == "default":
-                    logger.info(f"No direct mapping for room {room_id}, checking room members...")
-                    member_result = await get_agent_from_room_members(room_id, config, logger)
-                    if member_result:
-                        agent_id_to_use, agent_name_found = member_result
-                        routing_method = "room_members"
-                        logger.info(f"Resolved agent via room members: {agent_name_found} ({agent_id_to_use})")
-                    else:
-                        all_mappings = db.get_all()
-                        logger.warning(f"No agent mapping found for room {room_id}, using default agent")
-                        logger.info(f"Room has no mapping. Total mappings in DB: {len(all_mappings)}")
-                
-        except Exception as e:
-            logger.warning(f"Could not query agent mappings database: {e}")
-    
-    logger.warning(f"[DEBUG] AGENT ROUTING: Room {room_id} -> Agent {agent_id_to_use}")
-    logger.warning(f"[DEBUG] Agent Name: {agent_name_found}")
-    logger.warning(f"[DEBUG] Routing Method: {routing_method}")
-    
-    if isinstance(message_body, str):
-        message_preview = message_body[:100] + "..." if len(message_body) > 100 else message_body
-    else:
-        message_preview = f"[multimodal content: {len(message_body)} parts]"
-
-    logger.info("Sending message to Letta API", extra={
-        "message_preview": message_preview,
-        "sender": username,
-        "agent_id": agent_id_to_use,
-        "room_id": room_id
-    })
-
-    # Note: letta_client is only needed for conversation_id resolution above.
-    # The actual message delivery goes through the WS gateway exclusively.
-    typing_manager = TypingIndicatorManager(room_id, config, logger) if (config.letta_typing_enabled and room_id) else None
-    
-    try:
-        if typing_manager:
-            await typing_manager.start()
-        
-        # Gateway is REQUIRED — direct API is deprecated and breaks conversation state
-        from src.letta.ws_gateway_client import get_gateway_client, GatewayUnavailableError
-        from src.letta.gateway_stream_reader import collect_via_gateway
-        gw_client = await get_gateway_client(
-            gateway_url=config.letta_gateway_url,
-            idle_timeout=config.letta_gateway_idle_timeout,
-            max_connections=config.letta_gateway_max_connections,
-            api_key=config.letta_gateway_api_key or config.letta_token,
-        )
-        gateway_result = await collect_via_gateway(
-            client=gw_client,
-            agent_id=agent_id_to_use,
-            message=message_body,
-            conversation_id=conversation_id,
-            source={"channel": "matrix", "chatId": room_id} if room_id else None,
-        )
-        if gateway_result:
-            logger.info(f"[API] Got response via WS gateway ({len(gateway_result)} chars)")
-            return gateway_result
-        else:
-            return "Agent processed the request (no text response)."
-
-    except aiohttp.ClientResponseError as e:
-        # Legacy aiohttp error handling (kept for backward compatibility)
-        logger.error("Letta API HTTP error", extra={"status_code": e.status, "message": str(e.message)[:200]})
-        raise LettaApiError(f"Letta API returned error {e.status}", e.status, str(e.message)[:200])
-    except Exception as e:
-        # Handle SDK errors and other exceptions
-        error_str = str(e)
-        if "Error code:" in error_str:
-            # Parse SDK error format: "Error code: 500 - {...}"
-            import re
-            match = re.search(r"Error code: (\d+)", error_str)
-            status_code = int(match.group(1)) if match else 500
-            logger.error("Letta SDK API error", extra={"status_code": status_code, "message": error_str[:200]})
-            raise LettaApiError(f"Letta API returned error {status_code}", status_code, error_str[:200])
-        else:
-            logger.error("Unexpected error in Letta API call", extra={"error": error_str}, exc_info=True)
-            raise LettaApiError(f"An unexpected error occurred with the Letta SDK: {e}")
-    finally:
-        if typing_manager:
-            await typing_manager.stop()
-
-async def delete_message_as_agent(room_id: str, event_id: str, config: Config, logger: logging.Logger) -> bool:
-    """Redact (delete) a message as the agent user for this room"""
-    try:
-        from src.core.mapping_service import get_mapping_by_room_id
-        agent_mapping = get_mapping_by_room_id(room_id)
-        if not agent_mapping:
-            logger.warning(f"No agent mapping found for room {room_id}")
-            return False
-        agent_name = agent_mapping.get("agent_name", "Unknown")
-        logger.debug(f"[DELETE_AS_AGENT] Attempting to delete message as agent: {agent_name} in room {room_id}")
-
-        async with aiohttp.ClientSession() as session:
-            agent_token = await _get_agent_token(room_id, config, logger, session, caller="DELETE_AS_AGENT")
-            if not agent_token:
-                return False
-            
-            # Redact (delete) the message
-            txn_id = str(uuid.uuid4())
-            redact_url = f"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/redact/{event_id}/{txn_id}"
-            headers = {
-                "Authorization": f"Bearer {agent_token}",
-                "Content-Type": "application/json"
-            }
-            
-            # Reason for redaction (optional)
-            redact_data = {
-                "reason": "Progress message replaced"
-            }
-            
-            async with session.put(
-                redact_url,
-                headers=headers,
-                json=redact_data,
-                timeout=_AGENT_SEND_TIMEOUT,
-            ) as response:
-                if response.status == 200:
-                    logger.debug(f"[DELETE_AS_AGENT] Successfully deleted message {event_id}")
-                    return True
-                else:
-                    response_text = await response.text()
-                    logger.warning(f"[DELETE_AS_AGENT] Failed to delete message: {response.status} - {response_text}")
-                    return False
-                    
-    except Exception as e:
-        logger.error(f"[DELETE_AS_AGENT] Exception occurred: {e}", exc_info=True)
-        return False
-
-
-async def edit_message_as_agent(
-    room_id: str,
-    event_id: str,
-    new_body: str,
-    config: Config,
-    logger: logging.Logger,
-) -> bool:
-    try:
-        async with aiohttp.ClientSession() as session:
-            agent_token = await _get_agent_token(room_id, config, logger, session, caller="EDIT_AS_AGENT")
-            if not agent_token:
-                return False
-
-            txn_id = str(uuid.uuid4())
-            msg_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
-            headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
-
-            message_data = {
-                "msgtype": "m.text",
-                "body": f"* {new_body}",
-                "m.new_content": {
-                    "msgtype": "m.text",
-                    "body": new_body,
-                },
-                "m.relates_to": {
-                    "rel_type": "m.replace",
-                    "event_id": event_id,
-                },
-            }
-
-            async with session.put(
-                msg_url,
-                headers=headers,
-                json=message_data,
-                timeout=_AGENT_SEND_TIMEOUT,
-            ) as response:
-                if response.status == 200:
-                    logger.debug(f"[EDIT_AS_AGENT] Edited message {event_id}")
-                    return True
-                else:
-                    resp_text = await response.text()
-                    logger.warning(f"[EDIT_AS_AGENT] Edit failed: {response.status} - {resp_text}")
-                    return False
-
-    except Exception as e:
-        logger.error(f"[EDIT_AS_AGENT] Exception: {e}", exc_info=True)
-        return False
-
-
-async def send_reaction_as_agent(
-    room_id: str,
-    event_id: str,
-    emoji: str,
-    config: Config,
-    logger: logging.Logger,
-) -> Optional[str]:
-    """Send a reaction (emoji) to a message as the agent user for this room."""
-    try:
-        async with aiohttp.ClientSession() as session:
-            agent_token = await _get_agent_token(room_id, config, logger, session, caller="REACTION")
-            if not agent_token:
-                return None
-
-            txn_id = str(uuid.uuid4())
-            url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.reaction/{txn_id}"
-            headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
-            content = {
-                "m.relates_to": {
-                    "rel_type": "m.annotation",
-                    "event_id": event_id,
-                    "key": emoji
-                }
-            }
-
-            async with session.put(
-                url,
-                headers=headers,
-                json=content,
-                timeout=_AGENT_SEND_TIMEOUT,
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    reaction_event_id = result.get("event_id")
-                    logger.debug(f"[REACTION] Sent {emoji} to {event_id}, event_id: {reaction_event_id}")
-                    return reaction_event_id
-                else:
-                    resp_text = await response.text()
-                    logger.warning(f"[REACTION] Failed: {response.status} - {resp_text}")
-                    return None
-
-    except Exception as e:
-        logger.error(f"[REACTION] Exception: {e}", exc_info=True)
-        return None
-
-
-async def send_read_receipt_as_agent(
-    room_id: str,
-    event_id: str,
-    config: Config,
-    logger: logging.Logger,
-) -> bool:
-    """Send a read receipt for a message as the agent user for this room."""
-    try:
-        async with aiohttp.ClientSession() as session:
-            agent_token = await _get_agent_token(room_id, config, logger, session, caller="READ_RECEIPT")
-            if not agent_token:
-                return False
-
-            url = f"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/receipt/m.read/{event_id}"
-            headers = {"Authorization": f"Bearer {agent_token}", "Content-Type": "application/json"}
-
-            async with session.post(url, headers=headers, json={}, timeout=_AGENT_SEND_TIMEOUT) as response:
-                if response.status == 200:
-                    logger.debug(f"[READ_RECEIPT] Sent for {event_id} in {room_id}")
-                    return True
-                else:
-                    logger.debug(f"[READ_RECEIPT] Failed: {response.status}")
-                    return False
-
-    except Exception as e:
-        logger.debug(f"[READ_RECEIPT] Exception: {e}")
-        return False
-
-
-async def _get_agent_typing_context(room_id: str, config: Config, logger: logging.Logger) -> Optional[Dict[str, str]]:
-    """Resolve agent credentials and build reusable typing context for a room."""
-    from src.core.mapping_service import get_mapping_by_room_id
-    agent_mapping = get_mapping_by_room_id(room_id)
-    if not agent_mapping:
-        return None
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            token = await _get_agent_token(room_id, config, logger, session, caller="TYPING")
-            if not token:
-                return None
-    except Exception as e:
-        logger.debug(f"[TYPING] Login failed: {e}")
-        return None
-
-    from urllib.parse import quote
-    encoded_user_id = quote(agent_mapping['matrix_user_id'], safe='')
-    typing_url = f"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/typing/{encoded_user_id}"
-
-    return {"token": token, "typing_url": typing_url}
-
-
-# Matches lettabot pattern: 4s heartbeat < 5s timeout = seamless indicator
-_TYPING_HEARTBEAT_INTERVAL = 4.0
-_TYPING_TIMEOUT_MS = 5000
-
-
-async def _put_typing(session: aiohttp.ClientSession, typing_url: str, token: str, typing: bool, timeout_ms: int, logger: logging.Logger) -> bool:
-    """Fire a single typing PUT request using a pre-authenticated token."""
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    typing_data: Dict[str, Any] = {"typing": typing}
-    if typing:
-        typing_data["timeout"] = timeout_ms
-
-    try:
-        async with session.put(
-            typing_url,
-            headers=headers,
-            json=typing_data,
-            timeout=_AGENT_SEND_TIMEOUT,
-        ) as response:
-            if response.status == 200:
-                if not typing:
-                    # Workaround: force immediate expiry on servers that ignore typing=false
-                    expire_data = {"typing": True, "timeout": 1}
-                    async with session.put(
-                        typing_url,
-                        headers=headers,
-                        json=expire_data,
-                        timeout=_AGENT_SEND_TIMEOUT,
-                    ):
-                        pass
-                return True
-            else:
-                logger.debug(f"[TYPING] PUT failed: {response.status}")
-                return False
-    except Exception as e:
-        logger.debug(f"[TYPING] PUT exception: {e}")
-        return False
-
-
-async def set_typing_as_agent(room_id: str, typing: bool, config: Config, logger: logging.Logger, timeout_ms: int = 5000) -> bool:
-    """Set typing indicator as the agent user (one-shot, re-authenticates each call)."""
-    ctx = await _get_agent_typing_context(room_id, config, logger)
-    if not ctx:
-        return False
-    async with aiohttp.ClientSession() as session:
-        return await _put_typing(session, ctx["typing_url"], ctx["token"], typing, timeout_ms, logger)
-
-
-class TypingIndicatorManager:
-    """Typing heartbeat with cached auth. Logs in once, refreshes every 4s."""
-
-    def __init__(self, room_id: str, config: Config, logger: logging.Logger):
-        self.room_id = room_id
-        self.config = config
-        self.logger = logger
-        self._typing_task: Optional[asyncio.Task] = None
-        self._stop_event = asyncio.Event()
-        self._ctx: Optional[Dict[str, str]] = None
-        self._session: Optional[aiohttp.ClientSession] = None
-
-    async def _typing_loop(self):
-        try:
-            while not self._stop_event.is_set():
-                if self._ctx and self._session:
-                    await _put_typing(self._session, self._ctx["typing_url"], self._ctx["token"], True, _TYPING_TIMEOUT_MS, self.logger)
-                try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=_TYPING_HEARTBEAT_INTERVAL)
-                    break
-                except asyncio.TimeoutError:
-                    continue
-        except asyncio.CancelledError:
-            pass
-        finally:
-            if self._ctx and self._session:
-                await _put_typing(self._session, self._ctx["typing_url"], self._ctx["token"], False, _TYPING_TIMEOUT_MS, self.logger)
-
-    async def start(self):
-        self._stop_event.clear()
-        self._ctx = await _get_agent_typing_context(self.room_id, self.config, self.logger)
-        if not self._ctx:
-            self.logger.debug(f"[TYPING] No agent context for room {self.room_id}, skipping")
-            return
-        self._session = aiohttp.ClientSession()
-        self._typing_task = asyncio.create_task(self._typing_loop())
-        self.logger.debug(f"[TYPING] Started 4s heartbeat for room {self.room_id}")
-
-    async def stop(self):
-        self._stop_event.set()
-        if self._typing_task:
-            self._typing_task.cancel()
-            try:
-                await self._typing_task
-            except asyncio.CancelledError:
-                pass
-            self._typing_task = None
-        if self._ctx and self._session:
-            await _put_typing(self._session, self._ctx["typing_url"], self._ctx["token"], False, _TYPING_TIMEOUT_MS, self.logger)
-        if self._session:
-            await self._session.close()
-            self._session = None
-        self._ctx = None
-        self.logger.debug(f"[TYPING] Stopped typing for room {self.room_id}")
-
-    async def __aenter__(self):
-        await self.start()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.stop()
-        return False
-
-
-async def send_as_agent_with_event_id(
-    room_id: str, 
-    message: str, 
-    config: Config, 
-    logger: logging.Logger,
-    reply_to_event_id: Optional[str] = None,
-    reply_to_sender: Optional[str] = None,
-    reply_to_body: Optional[str] = None
-) -> Optional[str]:
-    """
-    Send a message as the agent user for this room and return the event ID.
-    
-    Args:
-        room_id: The Matrix room ID to send the message to
-        message: The message text to send
-        config: Application configuration
-        logger: Logger instance
-        reply_to_event_id: Optional event ID to reply to (creates a rich reply thread)
-        reply_to_sender: Optional sender of the original message (for m.mentions)
-    
-    Returns the event_id on success, None on failure.
-    """
-    try:
-        from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_agent_id, get_portal_link_by_room_id
-        agent_mapping = get_mapping_by_room_id(room_id)
-
-        if not agent_mapping:
-            # Check portal links for bridged rooms
-            portal_link = get_portal_link_by_room_id(room_id)
-            if portal_link:
-                agent_mapping = get_mapping_by_agent_id(portal_link['agent_id'])
-            if not agent_mapping:
-                logger.warning(f"No agent mapping found for room {room_id}")
-                return None
-
-        agent_name = agent_mapping.get("agent_name", "Unknown")
-        logger.debug(f"[SEND_AS_AGENT] Sending as agent: {agent_name} in room {room_id}")
-
-        async with aiohttp.ClientSession() as session:
-            agent_token = await _get_agent_token(room_id, config, logger, session, caller="SEND_AS_AGENT")
-            if not agent_token:
-                return None
-            
-            txn_id = str(uuid.uuid4())
-            message_url = f"{config.homeserver_url}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
-            headers = {
-                "Authorization": f"Bearer {agent_token}",
-                "Content-Type": "application/json"
-            }
-            
-            message_data: Dict[str, Any] = {
-                "msgtype": "m.notice",
-                "body": message
-            }
-
-            # Convert markdown to HTML for rich rendering in Matrix clients
-            try:
-                import markdown
-                html_body = markdown.markdown(
-                    message,
-                    extensions=['tables', 'fenced_code', 'nl2br', 'sane_lists'],
-                )
-                # Only add formatted_body if HTML differs from plain text
-                # (i.e., markdown actually produced formatting)
-                if html_body and html_body != f'<p>{message}</p>':
-                    message_data['format'] = 'org.matrix.custom.html'
-                    message_data['formatted_body'] = html_body
-            except ImportError:
-                pass  # markdown not installed, send plain text
-
-            # Add rich reply relationship if replying to a specific message
-            if reply_to_event_id:
-                message_data["m.relates_to"] = {
-                    "m.in_reply_to": {
-                        "event_id": reply_to_event_id
-                    }
-                }
-                # Build <mx-reply> fallback for proper client rendering
-                quoted_sender = reply_to_sender or 'user'
-                quoted_body = reply_to_body or ''
-                if quoted_body:
-                    # Truncate long quoted messages
-                    if len(quoted_body) > 200:
-                        quoted_body = quoted_body[:200] + '...'
-                    # Plain text fallback with > quoting
-                    message_data['body'] = f"> <{quoted_sender}> {quoted_body}\n\n{message}"
-                    # HTML formatted reply
-                    mx_reply_html = (
-                        f'<mx-reply><blockquote>'
-                        f'<a href="https://matrix.to/#/{room_id}/{reply_to_event_id}">In reply to</a> '
-                        f'<a href="https://matrix.to/#/{quoted_sender}">{quoted_sender}</a><br/>'
-                        f'{quoted_body}'
-                        f'</blockquote></mx-reply>'
-                    )
-                    existing_html = message_data.get('formatted_body', message)
-                    message_data['format'] = 'org.matrix.custom.html'
-                    message_data['formatted_body'] = mx_reply_html + existing_html
-                # Mention the original sender
-                if reply_to_sender:
-                    message_data["m.mentions"] = {
-                        "user_ids": [reply_to_sender]
-                    }
-                logger.debug(f"[SEND_AS_AGENT] Creating rich reply to event {reply_to_event_id}")
-            
-            async with session.put(
-                message_url,
-                headers=headers,
-                json=message_data,
-                timeout=_AGENT_SEND_TIMEOUT,
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    event_id = result.get("event_id")
-                    logger.debug(f"[SEND_AS_AGENT] Sent message, event_id: {event_id}" + 
-                                (f" (reply to {reply_to_event_id})" if reply_to_event_id else ""))
-                    return event_id
-                else:
-                    response_text = await response.text()
-                    logger.error(f"[SEND_AS_AGENT] Failed to send message: {response.status} - {response_text}")
-                    return None
-                    
-    except Exception as e:
-        logger.error(f"[SEND_AS_AGENT] Exception occurred: {e}", exc_info=True)
-        return None
-
-
-async def send_as_agent(
-    room_id: str, 
-    message: str, 
-    config: Config, 
-    logger: logging.Logger,
-    reply_to_event_id: Optional[str] = None,
-    reply_to_sender: Optional[str] = None
-) -> bool:
-    """
-    Send a message as the agent user for this room.
-    
-    Args:
-        room_id: The Matrix room ID to send the message to
-        message: The message text to send
-        config: Application configuration
-        logger: Logger instance
-        reply_to_event_id: Optional event ID to reply to (creates a rich reply thread)
-        reply_to_sender: Optional sender of the original message (for m.mentions)
-    
-    Returns True on success, False on failure.
-    """
-    # Use the event_id version and convert to bool
-    event_id = await send_as_agent_with_event_id(
-        room_id, message, config, logger, 
-        reply_to_event_id=reply_to_event_id,
-        reply_to_sender=reply_to_sender
-    )
-    return event_id is not None
 
 
 async def poll_response_callback(room, event, config: Config, logger: logging.Logger):
@@ -2226,628 +224,463 @@ async def file_callback(room, event, config: Config, logger: logging.Logger, fil
     except Exception as e:
         logger.error(f"Unexpected error in file callback: {e}", exc_info=True)
 
-async def _process_letta_message(
-    event_body: str,
-    event_sender: str,
-    event_source: Optional[Dict],
-    original_event_id: Optional[str],
-    room_id: str,
-    room_display_name: str,
-    room_agent_id: Optional[str],
-    config: Config,
-    logger: logging.Logger,
-    client: Optional[AsyncClient] = None,
-) -> None:
-    try:
-        from src.core.mapping_service import get_mapping_by_matrix_user
-        
-        if client and 'auth_manager_global' in globals() and auth_manager_global is not None:
-            await auth_manager_global.ensure_valid_token(client)
-        
-        message_to_send = event_body
-        event_timestamp = None
-        if event_source and isinstance(event_source, dict):
-            event_timestamp = event_source.get("origin_server_ts")
-        if event_timestamp is None:
-            event_timestamp = int(time.time() * 1000)
-        is_inter_agent_message = False
-        from_agent_id = None
-        from_agent_name = None
-        
-        is_agent_mail_message = False
-        agent_mail_metadata = None
-        reply_to_event_id_for_envelope = None
-        reply_to_sender_for_envelope = None
-        
-        if event_source and isinstance(event_source, dict):
-            content = event_source.get("content", {})
-            from_agent_id = content.get("m.letta.from_agent_id")
-            from_agent_name = content.get("m.letta.from_agent_name")
-            
-            if from_agent_id and from_agent_name:
-                is_inter_agent_message = True
-                logger.info(f"Detected inter-agent message (via metadata) from {from_agent_name} ({from_agent_id})")
-            
-            agent_mail_metadata = content.get("m.agent_mail")
-            if agent_mail_metadata:
-                is_agent_mail_message = True
-                logger.info(f"[REVERSE-BRIDGE] Detected Agent Mail message from {agent_mail_metadata.get('sender_friendly_name', 'Unknown')}")
+class _MessageCallbackRouter:
+    def __init__(self, room, config: Config, logger: logging.Logger, client: Optional[AsyncClient]):
+        self.room = room
+        self.config = config
+        self.logger = logger
+        self.client = client
+        self.room_agent_mapping = None
+        self.sender_mapping = None
+        self.portal_link = None  # Set when room is matched via portal link
 
-            # Extract reply threading context
-            relates_to = content.get("m.relates_to", {})
-            in_reply_to = relates_to.get("m.in_reply_to", {}) if isinstance(relates_to, dict) else {}
-            reply_to_event_id_for_envelope = in_reply_to.get("event_id") if isinstance(in_reply_to, dict) else None
-            reply_to_sender_for_envelope = content.get("m.letta.reply_to_sender")  # custom field if set
-            if not reply_to_sender_for_envelope and reply_to_event_id_for_envelope:
-                # Try to extract from Matrix reply fallback body
-                body_text = content.get("body", "")
-                if body_text.startswith("> <@"):
-                    try:
-                        reply_to_sender_for_envelope = body_text.split(">", 2)[1].strip().strip("<>")
-                    except (IndexError, ValueError):
-                        pass
-        
-        if not is_inter_agent_message:
-            sender_agent_mapping = get_mapping_by_matrix_user(event_sender)
-            if sender_agent_mapping:
-                from_agent_id = sender_agent_mapping.get("agent_id")
-                from_agent_name = sender_agent_mapping.get("agent_name", "Unknown Agent")
-                is_inter_agent_message = True
-                logger.info(f"Detected inter-agent message (via sender check) from {from_agent_name} ({from_agent_id})")
-        
-        if is_inter_agent_message and from_agent_id and from_agent_name:
-            raw_body = event_body or ""
-            payload_lines = raw_body.splitlines()
-            if payload_lines and payload_lines[0].startswith("[Inter-Agent Message from"):
-                payload = "\n".join(payload_lines[1:]).lstrip("\n")
-            else:
-                payload = raw_body
+    def _should_skip_message(self, event, room_id) -> Optional[str]:
+        event_id = getattr(event, "event_id", None)
+        if event_id and is_duplicate_event(event_id, self.logger):
+            return "duplicate"
 
-            message_to_send = matrix_formatter.format_inter_agent_envelope(
-                sender_agent_name=from_agent_name,
-                sender_agent_id=from_agent_id,
-                text=payload,
-                chat_id=room_id,
-                message_id=original_event_id,
-                timestamp=event_timestamp,
-                reply_to_event_id=reply_to_event_id_for_envelope,
-                reply_to_sender=reply_to_sender_for_envelope,
-            )
-            logger.info(f"[INTER-AGENT CONTEXT] Enhanced message for receiving agent:")
-            logger.info(f"[INTER-AGENT CONTEXT] Sender: {from_agent_name} ({from_agent_id})")
-            logger.info(f"[INTER-AGENT CONTEXT] Full enhanced message:\n{message_to_send}")
+        if self.client and event.sender == self.client.user_id:
+            return "self_message"
 
-        is_opencode_sender = event_sender.startswith("@oc_")
-        opencode_mxid: Optional[str] = None
-        if is_opencode_sender and not is_inter_agent_message:
-            opencode_mxid = event_sender
-            message_to_send = matrix_formatter.format_opencode_envelope(
-                opencode_mxid=opencode_mxid,
-                text=event_body,
-                chat_id=room_id,
-                message_id=original_event_id,
-                timestamp=event_timestamp,
-                reply_to_event_id=reply_to_event_id_for_envelope,
-                reply_to_sender=reply_to_sender_for_envelope,
-            )
-            logger.info(f"[OPENCODE] Detected message from OpenCode identity: {opencode_mxid}")
-            logger.info(f"[OPENCODE] Injected @mention instruction for response routing")
-        elif not is_inter_agent_message:
-            room_display = room_display_name or room_id
-            message_to_send = matrix_formatter.format_message_envelope(
-                channel="Matrix",
-                chat_id=room_id,
-                message_id=original_event_id,
-                sender=event_sender,
-                sender_name=event_sender,
-                timestamp=event_timestamp,
-                text=event_body,
-                is_group=True,
-                group_name=room_display,
-                is_mentioned=False,
-                reply_to_event_id=reply_to_event_id_for_envelope,
-                reply_to_sender=reply_to_sender_for_envelope,
-            )
-            logger.debug(f"[MATRIX-CONTEXT] Added context for sender {event_sender}")
+        source = getattr(event, "source", None)
+        if isinstance(source, dict):
+            content = source.get("content", {})
+            if content.get("m.letta_historical"):
+                self.logger.debug(f"Ignoring historical message from {event.sender}")
+                return "historical"
+            if content.get("m.bridge_originated"):
+                self.logger.debug(f"Ignoring bridge-originated message from {event.sender}")
+                return "bridge_originated"
 
-        # Send read receipt to show agent has seen the message
-        if original_event_id:
-            asyncio.create_task(send_read_receipt_as_agent(room_id, original_event_id, config, logger))
+        disabled_agent_ids = [a.strip() for a in os.getenv("DISABLED_AGENT_IDS", "").split(",") if a.strip()]
+        if not disabled_agent_ids:
+            return None
 
-        if config.letta_streaming_enabled:
-            logger.info("[STREAMING] Using streaming mode for Letta API call")
-            letta_response = await send_to_letta_api_streaming(
-                message_to_send, event_sender, config, logger, room_id,
-                reply_to_event_id=None,
-                reply_to_sender=None,
-                opencode_sender=opencode_mxid
-            )
-            logger.info("Successfully processed streaming response", extra={
-                "response_length": len(letta_response),
-                "room_id": room_id,
-                "streaming": True,
-                "reply_to": original_event_id
-            })
-            
-            if is_agent_mail_message and agent_mail_metadata and room_agent_id:
-                try:
-                    responder_code_name = get_agent_code_name(room_agent_id, logger)
-                    sender_code_name = agent_mail_metadata.get('sender_code_name')
-                    
-                    if responder_code_name and sender_code_name:
-                        original_subject = agent_mail_metadata.get('subject', 'No subject')
-                        original_msg_id = agent_mail_metadata.get('message_id')
-                        thread_id = agent_mail_metadata.get('thread_id')
-                        
-                        await forward_to_agent_mail(
-                            sender_code_name=responder_code_name,
-                            recipient_code_name=sender_code_name,
-                            subject=f"Re: {original_subject}",
-                            body_md=letta_response,
-                            thread_id=thread_id,
-                            original_message_id=original_msg_id,
-                            logger=logger
-                        )
-                    else:
-                        logger.warning(f"[REVERSE-BRIDGE] Could not get code names: responder={responder_code_name}, sender={sender_code_name}")
-                except Exception as bridge_error:
-                    logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
-        else:
-            letta_response = await send_to_letta_api(message_to_send, event_sender, config, logger, room_id)
+        from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_agent_id, get_portal_link_by_room_id
 
-            # Suppress <no-reply/> responses — agent chose not to reply
-            if matrix_formatter.is_no_reply(letta_response):
-                logger.info(f"[DIRECT-API] Agent chose not to reply (no-reply marker) in {room_id}")
-            else:
-                if opencode_mxid and opencode_mxid not in letta_response:
-                    logger.info(f"[OPENCODE] Agent response missing @mention, prepending {opencode_mxid}")
-                    letta_response = f"{opencode_mxid} {letta_response}"
+        room_agent_mapping = get_mapping_by_room_id(room_id)
+        if not room_agent_mapping:
+            portal_link = get_portal_link_by_room_id(room_id)
+            if portal_link:
+                room_agent_mapping = get_mapping_by_agent_id(portal_link["agent_id"])
 
-                sent_as_agent = False
+        if not room_agent_mapping:
+            return None
 
-                poll_handled, remaining_text, poll_event_id = await process_agent_response(
-                    room_id=room_id,
-                    response_text=letta_response,
-                    config=config,
-                    logger_instance=logger,
-                    reply_to_event_id=None,
-                    reply_to_sender=None
-                )
+        room_agent_id = room_agent_mapping.get("agent_id")
+        room_agent_name = room_agent_mapping.get("agent_name", "Unknown")
+        if room_agent_id and room_agent_id in disabled_agent_ids:
+            self.logger.debug(f"Skipping disabled agent {room_agent_id} ({room_agent_name})")
+            return "disabled_agent"
+        return None
 
-                if poll_handled:
-                    logger.info(f"[POLL] Poll command handled, event_id: {poll_event_id}")
-                    if remaining_text:
-                        letta_response = remaining_text
-                    else:
-                        sent_as_agent = True
-                        letta_response = ""
-
-                if not poll_handled or remaining_text:
-                    sent_as_agent = await send_as_agent(
-                        room_id,
-                        letta_response,
-                        config,
-                        logger,
-                        reply_to_event_id=None,
-                        reply_to_sender=None
-                    )
-
-                if not sent_as_agent:
-                    if client:
-                        logger.warning("Failed to send as agent, falling back to main client")
-                        message_content: Dict[str, Any] = {"msgtype": "m.text", "body": letta_response}
-                        await client.room_send(
-                            room_id,
-                            "m.room.message",
-                            message_content
-                        )
-                    else:
-                        logger.error("No client available and agent send failed")
-
-                logger.info("Successfully sent response to Matrix", extra={
-                    "response_length": len(letta_response),
-                    "room_id": room_id,
-                    "sent_as_agent": sent_as_agent,
-                    "reply_to": original_event_id
-                })
-        
-        if is_agent_mail_message and agent_mail_metadata and room_agent_id:
-            try:
-                responder_code_name = get_agent_code_name(room_agent_id, logger)
-                sender_code_name = agent_mail_metadata.get('sender_code_name')
-                
-                if responder_code_name and sender_code_name:
-                    original_subject = agent_mail_metadata.get('subject', 'No subject')
-                    original_msg_id = agent_mail_metadata.get('message_id')
-                    thread_id = agent_mail_metadata.get('thread_id')
-                    
-                    await forward_to_agent_mail(
-                        sender_code_name=responder_code_name,
-                        recipient_code_name=sender_code_name,
-                        subject=f"Re: {original_subject}",
-                        body_md=letta_response,
-                        thread_id=thread_id,
-                        original_message_id=original_msg_id,
-                        logger=logger
-                    )
-                else:
-                    logger.warning(f"[REVERSE-BRIDGE] Could not get code names: responder={responder_code_name}, sender={sender_code_name}")
-            except Exception as bridge_error:
-                logger.error(f"[REVERSE-BRIDGE] Error forwarding to Agent Mail: {bridge_error}", exc_info=True)
-        
-    except LettaApiError as e:
-        from src.letta.ws_gateway_client import GatewayUnavailableError
-        is_gateway_down = (
-            "Gateway unavailable" in str(e)
-            or "Cannot connect to gateway" in str(e)
-            or isinstance(e.__cause__, GatewayUnavailableError)
+    async def _resolve_agent_for_room(self, room_id, event) -> Optional[Tuple]:
+        from src.core.mapping_service import (
+            get_mapping_by_room_id,
+            get_mapping_by_matrix_user,
+            get_mapping_by_agent_id,
+            get_portal_link_by_room_id,
         )
 
-        if is_gateway_down:
-            from src.letta.message_retry_buffer import get_retry_buffer, PendingMessage
-            buffer = get_retry_buffer()
+        self.room_agent_mapping = get_mapping_by_room_id(room_id)
+        if not self.room_agent_mapping:
+            portal_link = get_portal_link_by_room_id(room_id)
+            if portal_link:
+                self.room_agent_mapping = get_mapping_by_agent_id(portal_link["agent_id"])
+                if self.room_agent_mapping:
+                    self.portal_link = portal_link
+                    self.logger.info(f"Portal link match: room {room_id} → agent {portal_link['agent_id']}")
 
-            stash_conversation_id: Optional[str] = None
-            try:
-                from src.letta.client import get_letta_client, LettaConfig
-                from src.core.conversation_service import get_conversation_service
-                sdk_cfg = LettaConfig(
-                    base_url=config.letta_api_url,
-                    api_key=config.letta_token,
-                    timeout=10.0,
-                    max_retries=1,
-                )
-                conv_svc = get_conversation_service(get_letta_client(sdk_cfg))
-                stash_conversation_id, _ = await conv_svc.get_or_create_room_conversation(
-                    room_id=room_id,
-                    agent_id=room_agent_id or config.letta_agent_id,
-                    room_member_count=3,
-                )
-            except Exception:
-                pass
+        room_agent_user_id = self.room_agent_mapping.get("matrix_user_id") if self.room_agent_mapping else None
+        room_agent_id = self.room_agent_mapping.get("agent_id") if self.room_agent_mapping else None
+        room_agent_name = self.room_agent_mapping.get("agent_name", "Unknown") if self.room_agent_mapping else None
 
-            async def _reply_cb(rid, text, cfg, log):
-                await send_as_agent(rid, text, cfg, log)
+        self.sender_mapping = get_mapping_by_matrix_user(event.sender)
+        if self.sender_mapping and self.sender_mapping.get("agent_id"):
+            from src.matrix.mention_routing import handle_agent_mention_routing
 
-            async def _error_cb(rid, text, cfg, log):
-                await send_as_agent(rid, text, cfg, log)
-
-            pending = PendingMessage(
-                room_id=room_id,
-                agent_id=room_agent_id or config.letta_agent_id,
-                message_body=message_to_send,
-                conversation_id=stash_conversation_id,
-                sender=event_sender,
-                config=config,
-                is_streaming=config.letta_streaming_enabled,
-                reply_callback=_reply_cb,
-                error_callback=_error_cb,
+            await handle_agent_mention_routing(
+                room=self.room,
+                event=event,
+                sender_mxid=event.sender,
+                sender_agent_id=self.sender_mapping["agent_id"],
+                sender_agent_name=self.sender_mapping.get("agent_name", "Unknown"),
+                config=self.config,
+                logger=self.logger,
+                admin_client=self.client,
             )
-            count = await buffer.stash(pending)
-            logger.warning(
-                f"[RETRY-BUFFER] Gateway down, stashed message for room {room_id} "
-                f"(buffer={count}). Will retry automatically."
-            )
-            try:
-                await send_as_agent(
-                    room_id,
-                    "I'm having a temporary connection issue. Your message has been "
-                    "queued and I'll process it automatically when I reconnect.",
-                    config, logger,
-                )
-            except Exception:
-                pass
-            return
 
-        logger.error("Letta API error in background task", extra={
-            "error": str(e),
-            "status_code": e.status_code,
-            "sender": event_sender
-        })
+        if room_agent_user_id and event.sender == room_agent_user_id:
+            self.logger.debug(f"Ignoring message from room's own agent {event.sender}")
+            return None
+
+        if self.sender_mapping and event.sender != room_agent_user_id:
+            self.logger.info(f"Received inter-agent message from {event.sender} in {self.room.display_name}")
+
+        if not self.room_agent_mapping:
+            self.logger.debug(f"No agent mapping for room {room_id}, skipping message processing (relay room)")
+            return None
+
+        return room_agent_id, room_agent_name, room_agent_user_id
+
+    def _extract_message_content(self, event) -> Tuple[str, Optional[str]]:
+        message_text = getattr(event, "body", "") or ""
+        reply_to_event_id = None
+        source = getattr(event, "source", None)
+        if not isinstance(source, dict):
+            return message_text, reply_to_event_id
+
+        content = source.get("content", {})
+        relates_to = content.get("m.relates_to", {})
+        in_reply_to = relates_to.get("m.in_reply_to", {})
+        if isinstance(in_reply_to, dict):
+            reply_to_event_id = in_reply_to.get("event_id")
+        if not reply_to_event_id:
+            reply_to_event_id = relates_to.get("event_id")
+        return message_text, reply_to_event_id
+
+    def _is_silent_message(self, sender, agent_mappings) -> bool:
+        if not sender or not agent_mappings:
+            return False
+        return any(sender == mapping.get("matrix_user_id") for mapping in agent_mappings if mapping)
+
+    def _apply_group_gating(self, event, room_agent_user_id, message_text):
+        if not self.config.matrix_groups:
+            return False, None
+
+        from src.matrix.group_gating import apply_group_gating
+
+        event_source = getattr(event, "source", None)
+        gating_result = apply_group_gating(
+            room_id=self.room.room_id,
+            sender_id=event.sender,
+            body=message_text,
+            event_source=event_source if isinstance(event_source, dict) else None,
+            bot_user_id=room_agent_user_id or (self.client.user_id if self.client else self.config.username),
+            groups_config=self.config.matrix_groups,
+        )
+        if gating_result is None:
+            self.logger.debug(f"[GROUP_GATING] Filtered message in {self.room.room_id} from {event.sender}")
+            return True, None
+
+        self.logger.info(
+            f"[GROUP_GATING] room={self.room.room_id} mode={gating_result.mode} "
+            f"mentioned={gating_result.was_mentioned} method={gating_result.method} "
+            f"silent={gating_result.silent}"
+        )
+        return False, gating_result
+
+
+async def _maybe_handle_fs_mode(room, event, config, logger, room_agent_id, room_agent_name) -> bool:
+    fs_state = get_letta_code_room_state(room.room_id)
+    fs_enabled = fs_state.get("enabled")
+    is_huly_agent = room_agent_name and (room_agent_name.startswith("Huly - ") or room_agent_name == "Huly-PM-Control")
+    fs_mode_agents = [a.strip() for a in os.getenv("FS_MODE_AGENTS", "Meridian").split(",") if a.strip()]
+    is_fs_mode_agent = room_agent_name and room_agent_name in fs_mode_agents
+    use_fs_mode = fs_enabled is True or (fs_enabled is None and (is_huly_agent or is_fs_mode_agent))
+    if not use_fs_mode:
+        return False
+
+    agent_id = room_agent_id
+    agent_name = room_agent_name or "Filesystem Agent"
+    if not agent_id or not agent_name:
+        from src.models.agent_mapping import AgentMappingDB
+
+        db = AgentMappingDB()
+        mapping = db.get_by_room_id(room.room_id)
+        if mapping:
+            agent_id = str(mapping.agent_id)
+            agent_name = str(mapping.agent_name)
+    if not agent_id:
+        await send_as_agent(room.room_id, "No agent configured for filesystem mode.", config, logger)
+        return True
+
+    project_dir = fs_state.get("projectDir")
+    if not project_dir:
+        project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger)
+
+    if not project_dir and is_huly_agent and agent_name:
         try:
-            from src.matrix.alerting import alert_streaming_timeout, alert_letta_error
-            if "timeout" in str(e).lower() or "Timeout" in str(e):
-                await alert_streaming_timeout(room_agent_id or "unknown", room_id, "streaming", config.letta_streaming_timeout)
-            else:
-                await alert_letta_error(room_agent_id or "unknown", room_id, str(e))
+            projects_response = await call_letta_code_api(config, "GET", "/api/projects")
+            projects = projects_response.get("projects", [])
+            search_name = agent_name[7:] if agent_name.startswith("Huly - ") else agent_name
+            for proj in projects:
+                if proj.get("name", "").lower() == search_name.lower():
+                    project_dir = proj.get("filesystem_path")
+                    if project_dir:
+                        update_letta_code_room_state(room.room_id, {"projectDir": project_dir})
+                        logger.info(f"[HULY-FS] Auto-linked {agent_name} to {project_dir}")
+                    break
+        except Exception as e:
+            logger.warning(f"[HULY-FS] Auto-link failed for {agent_name}: {e}")
+
+    if not project_dir:
+        await send_as_agent(room.room_id, "Filesystem mode enabled but no project linked. Run /fs-link.", config, logger)
+        return True
+
+    fs_prompt = event.body
+    fs_event_timestamp = getattr(event, "server_timestamp", None)
+    event_source_for_fs = getattr(event, "source", None)
+    if fs_event_timestamp is None and isinstance(event_source_for_fs, dict):
+        fs_event_timestamp = event_source_for_fs.get("origin_server_ts")
+    if fs_event_timestamp is None:
+        fs_event_timestamp = int(time.time() * 1000)
+
+    if event.sender.startswith("@oc_"):
+        opencode_mxid = event.sender
+        fs_prompt = matrix_formatter.format_opencode_envelope(
+            opencode_mxid=opencode_mxid,
+            text=event.body,
+            chat_id=room.room_id,
+            message_id=getattr(event, "event_id", None),
+            timestamp=fs_event_timestamp,
+        )
+        logger.info(f"[OPENCODE-FS] Detected message from OpenCode identity: {opencode_mxid}")
+    else:
+        room_display = room.display_name or room.room_id
+        fs_prompt = matrix_formatter.format_message_envelope(
+            channel="Matrix",
+            chat_id=room.room_id,
+            message_id=getattr(event, "event_id", None),
+            sender=event.sender,
+            sender_name=event.sender,
+            timestamp=fs_event_timestamp,
+            text=event.body,
+            is_group=True,
+            group_name=room_display,
+            is_mentioned=False,
+        )
+        logger.debug(f"[MATRIX-FS] Added context for sender {event.sender}")
+
+    if config.letta_code_enabled:
+        try:
+            await run_letta_code_task(
+                room_id=room.room_id,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                project_dir=project_dir,
+                prompt=fs_prompt,
+                config=config,
+                logger=logger,
+                send_fn=send_as_agent,
+                wrap_response=False,
+            )
+            return True
+        except Exception as fs_err:
+            logger.warning(f"[FS-FALLBACK] letta-code task failed ({fs_err}), falling back to streaming Letta API")
+    else:
+        logger.info("[FS-SKIP] letta_code_enabled=false, using streaming Letta API for fs-mode room")
+
+    return False
+
+
+async def _handle_stop_command(room, config, logger, room_agent_id, room_agent_name, message_text) -> bool:
+    if message_text.strip().lower() != "/stop":
+        return False
+
+    existing = _active_letta_tasks.get((room.room_id, room_agent_id or "unknown"))
+    stopped = False
+    if existing and not existing.done():
+        existing.cancel()
+        _active_letta_tasks.pop((room.room_id, room_agent_id or "unknown"), None)
+        stopped = True
+        logger.info(f"[STOP] Cancelled active task for {room_agent_name} in {room.room_id}")
+
+    if room_agent_id:
+        try:
+            from src.letta.ws_gateway_client import get_gateway_client
+
+            gw = await get_gateway_client(
+                gateway_url=config.letta_gateway_url,
+                api_key=config.letta_gateway_api_key,
+            )
+            aborted = await gw.abort(room_agent_id)
+            if aborted:
+                stopped = True
+                logger.info(f"[STOP] Sent gateway abort for agent {room_agent_id}")
+        except Exception as e:
+            logger.warning(f"[STOP] Gateway abort failed: {e}")
+
+    msg = "⏹ Stopped." if stopped else "Nothing running to stop."
+    await send_as_agent(room.room_id, msg, config, logger)
+    return True
+
+
+
+async def _handle_passive_portal_message(
+    room, event, config: Config, logger: logging.Logger,
+    room_agent_id: str, room_agent_name: str, message_text: str,
+) -> None:
+    """Handle portal room messages in passive observation mode.
+
+    Sends the contact message to Letta for processing (memory updates,
+    actionable item detection) but does NOT send any response to the
+    Matrix room. The agent observes silently.
+
+    Follows the same pattern as LettaBot's heartbeat: wrap the message in
+    a system envelope, send through the gateway, discard the response.
+    """
+    import time as _time
+    from src.matrix.config import LettaApiError
+    from src.matrix.letta_bridge import _get_gateway_client
+    from src.matrix import formatter as matrix_formatter
+
+    event_source = getattr(event, "source", None)
+    event_timestamp = None
+    if isinstance(event_source, dict):
+        event_timestamp = event_source.get("origin_server_ts")
+    if event_timestamp is None:
+        event_timestamp = int(_time.time() * 1000)
+
+    # Format with portal contact envelope — clearly marks sender as contact, not user
+    envelope = matrix_formatter.format_portal_contact_envelope(
+        contact_sender=event.sender,
+        room_name=room.display_name or room.room_id,
+        chat_id=room.room_id,
+        message_id=getattr(event, "event_id", None),
+        timestamp=event_timestamp,
+        text=message_text,
+    )
+
+    logger.info(
+        f"[PORTAL-PASSIVE] Ingesting contact message from {event.sender} "
+        f"in {room.display_name or room.room_id} for agent {room_agent_name}"
+    )
+
+    async def _send_to_letta():
+        try:
+            gateway_client = await _get_gateway_client(config, logger)
+            from src.letta.gateway_stream_reader import collect_via_gateway
+
+            result = await collect_via_gateway(
+                client=gateway_client,
+                agent_id=room_agent_id,
+                message=envelope,
+                source={"channel": "portal", "chatId": room.room_id},
+            )
+            resp_len = len(result) if result else 0
+            logger.info(
+                f"[PORTAL-PASSIVE] Agent processed contact message "
+                f"({resp_len} chars response discarded)"
+            )
+        except LettaApiError as e:
+            logger.warning(f"[PORTAL-PASSIVE] Letta API error (non-critical): {e}")
+        except Exception as e:
+            logger.warning(f"[PORTAL-PASSIVE] Failed to send to Letta (non-critical): {e}")
+
+    # Fire-and-forget: agent processes in background, response is discarded
+    asyncio.create_task(_send_to_letta())
+
+async def _dispatch_letta_task(room, event, config, logger, client, room_agent_id, gating_result, message_text) -> bool:
+    task_key = (room.room_id, room_agent_id or "unknown")
+    existing_task = _active_letta_tasks.get(task_key)
+    if existing_task and not existing_task.done():
+        logger.warning(f"[BG-TASK] Agent still processing previous message for {task_key}, sending notice")
+        try:
+            await send_as_agent(room.room_id, "⏳ Still processing previous message...", config, logger)
         except Exception:
             pass
-        error_message = f"Sorry, I encountered an error while processing your message: {str(e)[:100]}"
-        try:
-            sent_as_agent = await send_as_agent(
-                room_id, error_message, config, logger,
-                reply_to_event_id=None,
-                reply_to_sender=None
-            )
-            if not sent_as_agent and client:
-                error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_message}
-                await client.room_send(
-                    room_id,
-                    "m.room.message",
-                    error_content
-                )
-        except Exception as send_error:
-            logger.error("Failed to send error message", extra={"error": str(send_error)})
-            
-    except Exception as e:
-        logger.error("Unexpected error in background Letta task", extra={
-            "error": str(e),
-            "sender": event_sender
-        }, exc_info=True)
-        
-        try:
-            error_msg = f"Sorry, I encountered an unexpected error: {str(e)[:100]}"
-            sent_as_agent = await send_as_agent(
-                room_id, error_msg, config, logger,
-                reply_to_event_id=None,
-                reply_to_sender=None
-            )
-            if not sent_as_agent and client:
-                error_content: Dict[str, Any] = {"msgtype": "m.text", "body": error_msg}
-                await client.room_send(
-                    room_id,
-                    "m.room.message",
-                    error_content
-                )
-        except Exception as send_error:
-            logger.error("Failed to send error message", extra={"error": str(send_error)})
+        return True
+
+    event_source = getattr(event, "source", None)
+    event_source = event_source if isinstance(event_source, dict) else None
+    silent_mode = bool(gating_result and gating_result.silent) if gating_result else False
+    msg_ctx = MessageContext(
+        event_body=message_text,
+        event_sender=event.sender,
+        event_source=event_source,
+        original_event_id=getattr(event, "event_id", None),
+        room_id=room.room_id,
+        room_display_name=room.display_name or room.room_id,
+        room_agent_id=room_agent_id,
+        config=config,
+        logger=logger,
+        client=client,
+        silent_mode=silent_mode,
+        auth_manager=auth_manager_global,
+    )
+    task = asyncio.create_task(process_letta_message(msg_ctx))
+    task.add_done_callback(lambda t: _on_letta_task_done(task_key, t))
+    _active_letta_tasks[task_key] = task
+    logger.info(f"[BG-TASK] Dispatched background Letta task for {task_key}")
+    return True
+
 
 async def message_callback(room, event, config: Config, logger: logging.Logger, client: Optional[AsyncClient] = None):
     """Callback function for handling new text messages."""
-    if isinstance(event, RoomMessageText):
-        # Check for duplicate events via shared dedupe store
-        event_id = getattr(event, 'event_id', None)
-        if event_id and is_duplicate_event(event_id, logger):
-            return
-        
-        # Ignore messages from ourselves to prevent loops
-        if client and event.sender == client.user_id:
-            return
+    if not isinstance(event, RoomMessageText):
+        return
 
-        # Ignore historical messages imported from Letta (to prevent re-processing)
-        if hasattr(event, 'source') and isinstance(event.source, dict):
-            content = event.source.get("content", {})
-            if content.get("m.letta_historical"):
-                logger.debug(f"Ignoring historical message from {event.sender}")
-                return
-            
-            # Ignore messages posted by the webhook bridge (prevent CLI→webhook→Matrix→Letta loop)
-            if content.get("m.bridge_originated"):
-                logger.debug(f"Ignoring bridge-originated message from {event.sender}")
-                return
-        
-        # Only process messages in rooms that have a dedicated agent mapping
-        # This prevents auto-forwarding content in relay/bridge rooms
-        from src.core.mapping_service import get_mapping_by_room_id, get_mapping_by_matrix_user, get_all_mappings, get_mapping_by_agent_id, get_portal_link_by_room_id
-        room_agent_user_id = None
-        room_has_agent = False
-        room_agent_id = None
-        room_agent_name = None
-        room_agent_mapping = None
-        
-        # Find the agent that owns this room
-        room_agent_mapping = get_mapping_by_room_id(room.room_id)
-        is_portal_room = False
-        if not room_agent_mapping:
-            # Check portal links — bridged rooms (WhatsApp, FB, Telegram, etc.)
-            portal_link = get_portal_link_by_room_id(room.room_id)
-            if portal_link:
-                room_agent_mapping = get_mapping_by_agent_id(portal_link['agent_id'])
-                is_portal_room = True
-                if room_agent_mapping:
-                    logger.info(f"Portal link match: room {room.room_id} → agent {portal_link['agent_id']}")
-        if room_agent_mapping:
-            room_agent_user_id = room_agent_mapping.get("matrix_user_id")
-            room_has_agent = True
-            room_agent_id = room_agent_mapping.get("agent_id")
-            room_agent_name = room_agent_mapping.get("agent_name", "Unknown")
+    router = _MessageCallbackRouter(room=room, config=config, logger=logger, client=client)
+    if router._should_skip_message(event, room.room_id):
+        return
 
-        disabled_agent_ids = [a.strip() for a in os.getenv("DISABLED_AGENT_IDS", "").split(",") if a.strip()]
-        if room_agent_id and room_agent_id in disabled_agent_ids:
-            logger.debug(f"Skipping disabled agent {room_agent_id} ({room_agent_name})")
-            return
+    resolved_agent = await router._resolve_agent_for_room(room.room_id, event)
+    if not resolved_agent:
+        return
+    room_agent_id, room_agent_name, room_agent_user_id = resolved_agent
 
-        # Check if sender is an agent (for @mention routing)
-        sender_mapping = get_mapping_by_matrix_user(event.sender)
-        
-        # Handle @mention-based routing for ALL agent messages (including own agent)
-        # This allows agents to forward messages to other agents via @mentions
-        if sender_mapping and sender_mapping.get("agent_id"):
-            from src.matrix.mention_routing import handle_agent_mention_routing
-            await handle_agent_mention_routing(
-                room=room,
-                event=event,
-                sender_mxid=event.sender,
-                sender_agent_id=sender_mapping["agent_id"],
-                sender_agent_name=sender_mapping.get("agent_name", "Unknown"),
-                config=config,
-                logger=logger,
-                admin_client=client,
-            )
-
-        # Only ignore messages from THIS room's own agent (prevent self-loops)
-        # This comes AFTER @mention routing so agents can still forward via mentions
-        if room_agent_user_id and event.sender == room_agent_user_id:
-            logger.debug(f"Ignoring message from room's own agent {event.sender}")
-            return
-
-        # Log inter-agent communication
-        if sender_mapping and event.sender != room_agent_user_id:
-            logger.info(f"Received inter-agent message from {event.sender} in {room.display_name}")
-        
-        # Skip processing for rooms without a dedicated agent (relay/bridge rooms)
-        # Letta can still write to these rooms via MCP tools, but won't auto-respond
-        if not room_has_agent:
-            logger.debug(f"No agent mapping for room {room.room_id}, skipping message processing (relay room)")
-            return
-
-        if await handle_letta_code_command(room, event, config, logger, room_agent_mapping, room_agent_id, room_agent_name):
-            return
-
-        fs_state = get_letta_code_room_state(room.room_id)
-        fs_enabled = fs_state.get("enabled")
-        is_huly_agent = room_agent_name and (room_agent_name.startswith("Huly - ") or room_agent_name == "Huly-PM-Control")
-        # FS_MODE_AGENTS: comma-separated agent names that auto-enable fs-task mode (routes to Letta Code CLI)
-        fs_mode_agents = [a.strip() for a in os.getenv("FS_MODE_AGENTS", "Meridian").split(",") if a.strip()]
-        is_fs_mode_agent = room_agent_name and room_agent_name in fs_mode_agents
-        use_fs_mode = fs_enabled is True or (fs_enabled is None and (is_huly_agent or is_fs_mode_agent))
-        
-        if use_fs_mode:
-            agent_id = room_agent_id
-            agent_name = room_agent_name or "Filesystem Agent"
-            if not agent_id or not agent_name:
-                from src.models.agent_mapping import AgentMappingDB
-                db = AgentMappingDB()
-                mapping = db.get_by_room_id(room.room_id)
-                if mapping:
-                    agent_id = str(mapping.agent_id)
-                    agent_name = str(mapping.agent_name)
-            if not agent_id:
-                await send_as_agent(room.room_id, "No agent configured for filesystem mode.", config, logger)
-                return
-            project_dir = fs_state.get("projectDir")
-            if not project_dir:
-                project_dir = await resolve_letta_project_dir(room.room_id, agent_id, config, logger)
-            
-            if not project_dir and is_huly_agent and agent_name:
-                try:
-                    projects_response = await call_letta_code_api(config, 'GET', '/api/projects')
-                    projects = projects_response.get('projects', [])
-                    search_name = agent_name[7:] if agent_name.startswith("Huly - ") else agent_name
-                    for proj in projects:
-                        if proj.get('name', '').lower() == search_name.lower():
-                            project_dir = proj.get('filesystem_path')
-                            if project_dir:
-                                update_letta_code_room_state(room.room_id, {"projectDir": project_dir})
-                                logger.info(f"[HULY-FS] Auto-linked {agent_name} to {project_dir}")
-                            break
-                except Exception as e:
-                    logger.warning(f"[HULY-FS] Auto-link failed for {agent_name}: {e}")
-            
-            if not project_dir:
-                await send_as_agent(room.room_id, "Filesystem mode enabled but no project linked. Run /fs-link.", config, logger)
-                return
-            
-            # Add Matrix context or OpenCode metaprompt
-            fs_prompt = event.body
-            fs_event_timestamp = getattr(event, 'server_timestamp', None)
-            if fs_event_timestamp is None and hasattr(event, 'source') and isinstance(event.source, dict):
-                fs_event_timestamp = event.source.get('origin_server_ts')
-            if fs_event_timestamp is None:
-                fs_event_timestamp = int(time.time() * 1000)
-            if event.sender.startswith("@oc_"):
-                opencode_mxid = event.sender
-                fs_prompt = matrix_formatter.format_opencode_envelope(
-                    opencode_mxid=opencode_mxid,
-                    text=event.body,
-                    chat_id=room.room_id,
-                    message_id=getattr(event, 'event_id', None),
-                    timestamp=fs_event_timestamp,
-                )
-                logger.info(f"[OPENCODE-FS] Detected message from OpenCode identity: {opencode_mxid}")
-            else:
-                room_display = room.display_name or room.room_id
-                fs_prompt = matrix_formatter.format_message_envelope(
-                    channel="Matrix",
-                    chat_id=room.room_id,
-                    message_id=getattr(event, 'event_id', None),
-                    sender=event.sender,
-                    sender_name=event.sender,
-                    timestamp=fs_event_timestamp,
-                    text=event.body,
-                    is_group=True,
-                    group_name=room_display,
-                    is_mentioned=False,
-                )
-                logger.debug(f"[MATRIX-FS] Added context for sender {event.sender}")
-            
-            if config.letta_code_enabled:
-                try:
-                    await run_letta_code_task(
-                        room_id=room.room_id,
-                        agent_id=agent_id,
-                        agent_name=agent_name,
-                        project_dir=project_dir,
-                        prompt=fs_prompt,
-                        config=config,
-                        logger=logger,
-                        wrap_response=False,
-                    )
-                    return
-                except Exception as fs_err:
-                    logger.warning(f"[FS-FALLBACK] letta-code task failed ({fs_err}), falling back to streaming Letta API")
-                    # Fall through to the normal streaming path below
-            else:
-                logger.info(f"[FS-SKIP] letta_code_enabled=false, using streaming Letta API for fs-mode room")
-                # Fall through to the normal streaming path below
- 
-        logger.info("Received message from user", extra={
-            "sender": event.sender,
-            "room_name": room.display_name,
-            "room_id": room.room_id,
-            "message_preview": event.body[:100] + "..." if len(event.body) > 100 else event.body
-        })
-
-        # /stop command — cancel active task + abort gateway session
-        if event.body.strip().lower() == '/stop':
-            existing = _active_letta_tasks.get((room.room_id, room_agent_id or 'unknown'))
-            stopped = False
-            if existing and not existing.done():
-                existing.cancel()
-                _active_letta_tasks.pop((room.room_id, room_agent_id or 'unknown'), None)
-                stopped = True
-                logger.info(f'[STOP] Cancelled active task for {room_agent_name} in {room.room_id}')
-            # Also abort the WS gateway session
-            if room_agent_id:
-                try:
-                    from src.letta.ws_gateway_client import get_gateway_client
-                    gw = await get_gateway_client(
-                        gateway_url=config.letta_gateway_url,
-                        api_key=config.letta_gateway_api_key,
-                    )
-                    aborted = await gw.abort(room_agent_id)
-                    if aborted:
-                        stopped = True
-                        logger.info(f'[STOP] Sent gateway abort for agent {room_agent_id}')
-                except Exception as e:
-                    logger.warning(f'[STOP] Gateway abort failed: {e}')
-            msg = '\u23f9 Stopped.' if stopped else 'Nothing running to stop.'
-            await send_as_agent(room.room_id, msg, config, logger)
-            return
-
-        task_key = (room.room_id, room_agent_id or "unknown")
-        existing_task = _active_letta_tasks.get(task_key)
-        if existing_task and not existing_task.done():
-            logger.warning(f"[BG-TASK] Agent still processing previous message for {task_key}, sending notice")
-            try:
-                await send_as_agent(
-                    room.room_id, "⏳ Still processing previous message...", config, logger
-                )
-            except Exception:
-                pass
-            return
-
-        event_source = None
-        if hasattr(event, 'source') and isinstance(event.source, dict):
-            event_source = event.source
-
-        task = asyncio.create_task(
-            _process_letta_message(
-                event_body=event.body,
-                event_sender=event.sender,
-                event_source=event_source,
-                original_event_id=getattr(event, 'event_id', None),
-                room_id=room.room_id,
-                room_display_name=room.display_name or room.room_id,
-                room_agent_id=room_agent_id,
-                config=config,
-                logger=logger,
-                client=client,
-            )
+    # Portal rooms: check for @agent mention to activate, otherwise passive observation
+    if router.portal_link:
+        message_text, _ = router._extract_message_content(event)
+        # Admin can always invoke; contacts need mention_enabled
+        is_admin = event.sender == os.getenv("MATRIX_ADMIN_USERNAME", "@admin:matrix.oculair.ca")
+        mention_allowed = is_admin or router.portal_link.get("mention_enabled", False)
+        # If the user @mentions the agent by name AND mention is enabled,
+        # treat as active request — let it fall through to normal processing
+        # Also check the formatted_body for Matrix pills (HTML mentions)
+        formatted_body = (
+            event.source.get("content", {}).get("formatted_body", "")
+            if getattr(event, "source", None) else ""
         )
-        task.add_done_callback(lambda t: _on_letta_task_done(task_key, t))
-        _active_letta_tasks[task_key] = task
-        logger.info(f"[BG-TASK] Dispatched background Letta task for {task_key}")
+        agent_mentioned = mention_allowed and room_agent_name and (
+            f"@{room_agent_name.lower()}" in message_text.lower()
+            or room_agent_name.lower() in message_text.lower()
+            or room_agent_name.lower() in formatted_body.lower()
+        )
+        if not agent_mentioned:
+            await _handle_passive_portal_message(
+                room, event, config, logger, room_agent_id, room_agent_name, message_text
+            )
+            return
+        # Agent was @mentioned and mention_enabled — continue to normal dispatch below
+        logger.info(
+            f"[PORTAL-ACTIVE] @{room_agent_name} mentioned in portal room "
+            f"{room.display_name or room.room_id}, processing as active request"
+        )
+
+    message_text, _ = router._extract_message_content(event)
+    _ = router._is_silent_message(event.sender, [router.sender_mapping])
+    filtered, gating_result = router._apply_group_gating(event, room_agent_user_id, message_text)
+    if filtered:
+        return
+
+    if await handle_letta_code_command(
+        room,
+        event,
+        config,
+        logger,
+        send_fn=send_as_agent,
+        agent_mapping=router.room_agent_mapping,
+        agent_id_hint=room_agent_id,
+        agent_name_hint=room_agent_name,
+    ):
+        return
+
+    if await _maybe_handle_fs_mode(room, event, config, logger, room_agent_id, room_agent_name):
+        return
+
+    logger.info("Received message from user", extra={
+        "sender": event.sender,
+        "room_name": room.display_name,
+        "room_id": room.room_id,
+        "message_preview": message_text[:100] + "..." if len(message_text) > 100 else message_text,
+    })
+
+    if await _handle_stop_command(room, config, logger, room_agent_id, room_agent_name, message_text):
+        return
+
+    await _dispatch_letta_task(room, event, config, logger, client, room_agent_id, gating_result, message_text)
 
 async def create_room_if_needed(client_instance, logger: logging.Logger, room_name="Letta Bot Room"):
     """Create a new room and return its ID"""

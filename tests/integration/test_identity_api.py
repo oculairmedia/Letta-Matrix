@@ -345,6 +345,28 @@ class TestSendAsIdentityEndpoints:
         assert data["success"] is True
         assert data["event_id"] == "$event456"
 
+    def test_edit_as_agent_success(self, client, sample_letta_identity):
+        client.post("/api/v1/identities", json=sample_letta_identity)
+
+        with patch('src.api.routes.identity.get_identity_client_pool') as mock_pool:
+            mock_pool_instance = AsyncMock()
+            mock_pool_instance.edit_as_agent = AsyncMock(return_value="$event789")
+            mock_pool.return_value = mock_pool_instance
+
+            request = {
+                "agent_id": "agent-12345",
+                "room_id": "!room:matrix.test",
+                "event_id": "$original",
+                "message": "Updated status",
+                "msgtype": "m.notice",
+            }
+            response = client.post("/api/v1/messages/edit-as-agent", json=request)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["event_id"] == "$event789"
+
 
 class TestDMRoomEndpoints:
     

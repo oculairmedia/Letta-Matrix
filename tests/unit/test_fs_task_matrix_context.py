@@ -39,7 +39,7 @@ class TestFsTaskMatrixContext:
     @pytest.mark.asyncio
     async def test_matrix_context_added_to_prompt(self, mock_config, mock_room, mock_event):
         """Matrix context prefix should be added when sending to Letta Code."""
-        from src.matrix.client import get_letta_code_room_state
+        from src.matrix.letta_code_service import get_letta_code_room_state
         
         captured_prompt = None
         
@@ -49,23 +49,24 @@ class TestFsTaskMatrixContext:
                 captured_prompt = payload.get('prompt')
             return {'success': True, 'result': 'Agent response'}
         
-        with patch('src.matrix.client.call_letta_code_api', side_effect=mock_call_api):
-            with patch('src.matrix.client.send_as_agent', new_callable=AsyncMock):
-                with patch('src.matrix.client.get_letta_code_room_state', return_value={'enabled': True, 'projectDir': '/test'}):
-                    from src.matrix.client import run_letta_code_task
-                    
-                    fs_prompt = f"[Matrix: {mock_event.sender} in {mock_room.display_name}]\n\n{mock_event.body}"
-                    
-                    await run_letta_code_task(
-                        room_id=mock_room.room_id,
-                        agent_id="agent-test",
-                        agent_name="Test Agent",
-                        project_dir="/test",
-                        prompt=fs_prompt,
-                        config=mock_config,
-                        logger=MagicMock(),
-                        wrap_response=False,
-                    )
+        with patch('src.matrix.letta_code_service.call_letta_code_api', side_effect=mock_call_api):
+            with patch('src.matrix.letta_code_service.get_letta_code_room_state', return_value={'enabled': True, 'projectDir': '/test'}):
+                from src.matrix.letta_code_service import run_letta_code_task
+                
+                fs_prompt = f"[Matrix: {mock_event.sender} in {mock_room.display_name}]\n\n{mock_event.body}"
+                mock_send = AsyncMock()
+                
+                await run_letta_code_task(
+                    room_id=mock_room.room_id,
+                    agent_id="agent-test",
+                    agent_name="Test Agent",
+                    project_dir="/test",
+                    prompt=fs_prompt,
+                    config=mock_config,
+                    logger=MagicMock(),
+                    send_fn=mock_send,
+                    wrap_response=False,
+                )
         
         assert captured_prompt is not None
         assert "[Matrix:" in captured_prompt
@@ -83,22 +84,23 @@ class TestFsTaskMatrixContext:
         async def mock_call_api(config, method, path, payload=None, timeout=None):
             return {'success': True, 'result': 'Agent response here'}
         
-        with patch('src.matrix.client.call_letta_code_api', side_effect=mock_call_api):
-            with patch('src.matrix.client.send_as_agent', side_effect=mock_send):
-                from src.matrix.client import run_letta_code_task
-                
-                fs_prompt = f"[Matrix: {mock_event.sender} in {mock_room.display_name}]\n\n{mock_event.body}"
-                
-                await run_letta_code_task(
-                    room_id=mock_room.room_id,
-                    agent_id="agent-test",
-                    agent_name="Test Agent",
-                    project_dir="/test",
-                    prompt=fs_prompt,
-                    config=mock_config,
-                    logger=MagicMock(),
-                    wrap_response=False,
-                )
+        with patch('src.matrix.letta_code_service.call_letta_code_api', side_effect=mock_call_api):
+            from src.matrix.letta_code_service import run_letta_code_task
+            
+            fs_prompt = f"[Matrix: {mock_event.sender} in {mock_room.display_name}]\n\n{mock_event.body}"
+            mock_send_fn = AsyncMock(side_effect=mock_send)
+            
+            await run_letta_code_task(
+                room_id=mock_room.room_id,
+                agent_id="agent-test",
+                agent_name="Test Agent",
+                project_dir="/test",
+                prompt=fs_prompt,
+                config=mock_config,
+                logger=MagicMock(),
+                send_fn=mock_send_fn,
+                wrap_response=False,
+            )
         
         assert len(posted_messages) == 1, f"Expected 1 message (agent response only), got {len(posted_messages)}"
         
@@ -133,7 +135,7 @@ class TestFsTaskMatrixContext:
     @pytest.mark.asyncio
     async def test_fs_mode_can_be_disabled_for_huly(self):
         """Huly agents should be able to opt-out of fs-mode with explicit disable."""
-        from src.matrix.client import get_letta_code_room_state, update_letta_code_room_state
+        from src.matrix.letta_code_service import get_letta_code_room_state, update_letta_code_room_state
         
         room_id = "!huly-test:matrix.oculair.ca"
         agent_name = "Huly - Test Project"
@@ -141,9 +143,9 @@ class TestFsTaskMatrixContext:
         is_huly = agent_name.startswith("Huly - ")
         assert is_huly
         
-        with patch('src.matrix.client._letta_code_state', {}):
-            with patch('src.matrix.client._load_letta_code_state'):
-                with patch('src.matrix.client._save_letta_code_state'):
+        with patch('src.matrix.letta_code_service._letta_code_state', {}):
+            with patch('src.matrix.letta_code_service._load_letta_code_state'):
+                with patch('src.matrix.letta_code_service._save_letta_code_state'):
                     fs_state = {'enabled': None}
                     fs_enabled = fs_state.get("enabled")
                     use_fs_mode = fs_enabled is True or (fs_enabled is None and is_huly)

@@ -133,6 +133,62 @@ class IdentityClientPool:
     ) -> Optional[str]:
         identity_id = f"letta_{agent_id}"
         return await self.send_message(identity_id, room_id, message, msgtype)
+
+    async def edit_message(
+        self,
+        identity_id: str,
+        room_id: str,
+        event_id: str,
+        message: str,
+        msgtype: str = "m.notice",
+    ) -> Optional[str]:
+        client = await self.get_client(identity_id)
+        if not client:
+            logger.error(f"Cannot edit message: no client for {identity_id}")
+            return None
+
+        try:
+            content = {
+                "msgtype": msgtype,
+                "body": f"* {message}",
+                "m.new_content": {
+                    "msgtype": msgtype,
+                    "body": message,
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": event_id,
+                },
+            }
+
+            response = await client.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content=content,
+            )
+
+            if isinstance(response, RoomSendResponse):
+                logger.info(f"Message edited by {identity_id} in {room_id}: {response.event_id}")
+                return response.event_id
+            if isinstance(response, RoomSendError):
+                logger.error(f"Failed to edit message: {response.message}")
+                return None
+            logger.error(f"Unexpected response type: {type(response)}")
+            return None
+        except Exception as e:
+            logger.error(f"Error editing message from {identity_id}: {e}")
+            return None
+
+    async def edit_as_agent(
+        self,
+        agent_id: str,
+        room_id: str,
+        event_id: str,
+        message: str,
+        msgtype: str = "m.notice",
+    ) -> Optional[str]:
+        identity_id = f"letta_{agent_id}"
+        return await self.edit_message(identity_id, room_id, event_id, message, msgtype)
     
     async def close_client(self, identity_id: str) -> None:
         async with self._lock:

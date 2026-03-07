@@ -5,6 +5,7 @@ from src.matrix.formatter import (
     format_message_envelope,
     format_inter_agent_envelope,
     format_opencode_envelope,
+    format_reaction_route_envelope,
     wrap_opencode_routing,
     is_no_reply,
     _extract_localpart,
@@ -258,6 +259,44 @@ class TestEnvelopeSectionOrder:
         reply_pos = result.index("## Reply Context")
         oc_pos = result.index("## OpenCode Context")
         assert meta_pos < ctx_pos < reply_pos < oc_pos
+
+
+class TestFormatReactionRouteEnvelope:
+    def test_basic_structure(self):
+        result = format_reaction_route_envelope(
+            reactor_mxid="@alice:matrix.org",
+            emoji="✅",
+            target_agent_name="Meridian",
+            target_agent_id="agent-123",
+            chat_id="!room:d",
+            reaction_event_id="$reaction",
+            reacted_event_id="$original",
+            timestamp=FIXED_TS,
+            original_sender="@bob:matrix.org",
+            original_body="Please summarize this thread.",
+        )
+        assert "<system-reminder>" in result
+        assert "## Reaction Routing Context" in result
+        assert "Target Agent" in result
+        assert "Original message:" in result
+        assert "Please summarize this thread." in result
+
+    def test_truncates_long_original_message(self):
+        long_text = "x" * 600
+        result = format_reaction_route_envelope(
+            reactor_mxid="@alice:matrix.org",
+            emoji="✅",
+            target_agent_name="Meridian",
+            target_agent_id="agent-123",
+            chat_id="!room:d",
+            reaction_event_id="$reaction",
+            reacted_event_id="$original",
+            timestamp=FIXED_TS,
+            original_sender="@bob:matrix.org",
+            original_body=long_text,
+        )
+        assert "x" * 500 in result
+        assert "..." in result
 
 
 class TestIsNoReply:

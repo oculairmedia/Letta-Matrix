@@ -7,7 +7,7 @@ import logging
 from typing import Optional, List, Tuple
 from sqlalchemy.exc import IntegrityError
 
-from letta_client import Letta, APIError, NotFoundError
+from letta_client import Letta, NotFoundError, APIError
 
 from src.models.conversation import (
     RoomConversationDB,
@@ -81,7 +81,7 @@ class ConversationService:
             Letta conversation ID
             
         Raises:
-            APIError: If Letta API call fails
+            ApiError: If Letta API call fails
         """
         logger.info(f"Creating Letta conversation for agent {agent_id}")
         
