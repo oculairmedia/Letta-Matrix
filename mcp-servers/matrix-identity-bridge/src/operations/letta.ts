@@ -84,13 +84,9 @@ export const letta_list: OperationHandler = async (args, ctx) => {
     throw new McpError(ErrorCode.InvalidParams, 'Invalid limit: must be a positive integer');
   }
 
-  if (args.offset !== undefined && (!Number.isInteger(args.offset) || args.offset < 0)) {
-    throw new McpError(ErrorCode.InvalidParams, 'Invalid offset: must be a non-negative integer');
-  }
 
   const agents = await letta.listAgents({
-    limit: args.limit,
-    offset: args.offset
+    limit: args.limit
   });
 
   const agentsWithIdentities = await Promise.all(
