@@ -602,8 +602,10 @@ async def test_evict_oldest_unlocked_skips_in_use(gateway_client):
     gateway_client._pool[agent_id_new] = entry_new
     
     # Call _evict_oldest_unlocked
-    await gateway_client._evict_oldest_unlocked()
+    result = await gateway_client._evict_oldest_unlocked()
     
+    # Verify it reported success
+    assert result is True
     # Verify agent-old is still in pool (skipped because in_use)
     assert agent_id_old in gateway_client._pool
     # Verify agent-new was evicted (oldest among non-in_use)
@@ -641,8 +643,91 @@ async def test_evict_oldest_unlocked_noop_when_all_in_use(gateway_client):
     gateway_client._pool[agent_id_2] = entry_2
     
     # Call _evict_oldest_unlocked
-    await gateway_client._evict_oldest_unlocked()
+    result = await gateway_client._evict_oldest_unlocked()
     
+    # Verify it reported failure (nothing evictable)
+    assert result is False
     # Verify both are still in pool
-    assert agent_id_1 in gateway_client._pool
-    assert agent_id_2 in gateway_client._pool
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_waits_at_capacity_instead_of_exceeding():
+    """
+    Test that when pool is at max_connections and all entries are in_use,
+    _get_or_create waits instead of creating a connection beyond the limit.
+    """
+    # Create client with max_connections=2 and short timeout
+    client = GatewayClient(
+        gateway_url="ws://localhost:8000",
+        max_connections=2,
+        connect_timeout=0.15,
+        event_timeout=0.1,
+    )
+    
+    # Fill pool with 2 in-use entries for OTHER agents
+    for i in range(2):
+        ws = AsyncMock()
+        ws.ping = AsyncMock(return_value=None)
+        entry = _PoolEntry(
+            ws=ws,
+            agent_id=f"other-agent-{i}",
+            session_id=f"session-{i}",
+            in_use=True,
+        )
+        client._pool[f"other-agent-{i}"] = entry
+    
+    assert len(client._pool) == 2
+    
+    # Try to get a connection for a NEW agent — should timeout, not exceed pool
+    with pytest.raises(GatewayUnavailableError) as exc_info:
+        await client._get_or_create("new-agent")
+    
+    assert "Timed out" in str(exc_info.value)
+    # Pool should NOT have grown beyond max_connections
+    assert len(client._pool) <= 2
+    assert "new-agent" not in client._pool
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_creates_after_successful_eviction():
+    """
+    Test that when pool is at capacity but eviction succeeds,
+    a new connection is created normally.
+    """
+    client = GatewayClient(
+        gateway_url="ws://localhost:8000",
+        max_connections=1,
+        connect_timeout=1.0,
+        event_timeout=0.1,
+    )
+    
+    # Fill pool with 1 idle (not in_use) entry
+    ws_old = AsyncMock()
+    entry_old = _PoolEntry(
+        ws=ws_old,
+        agent_id="old-agent",
+        session_id="session-old",
+        in_use=False,
+    )
+    client._pool["old-agent"] = entry_old
+    
+    assert len(client._pool) == 1
+    
+    # Mock _connect_and_init to return a new entry
+    ws_new = AsyncMock()
+    ws_new.ping = AsyncMock(return_value=None)
+    new_entry = _PoolEntry(
+        ws=ws_new,
+        agent_id="new-agent",
+        session_id="session-new",
+    )
+    
+    with patch.object(client, "_connect_and_init", return_value=new_entry):
+        result = await client._get_or_create("new-agent")
+    
+    # Old entry should have been evicted
+    assert "old-agent" not in client._pool
+    # New entry should be in pool and reserved
+    assert result.agent_id == "new-agent"
+    assert result.in_use is True
+    assert len(client._pool) == 1

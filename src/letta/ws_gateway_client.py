@@ -280,9 +280,17 @@ class GatewayClient:
                             del self._pool[agent_id]
 
                 if len(self._pool) >= self._max_connections:
-                    await self._evict_oldest_unlocked()
-
-            if entry and entry.healthy and entry.in_use:
+                    evicted = await self._evict_oldest_unlocked()
+                    if not evicted:
+                        # All connections busy and at capacity — wait for one to free up
+                        pass  # Falls through to sleep/continue or deadline check below
+            # Wait if entry is busy OR pool is at capacity with no room
+            at_capacity = len(self._pool) >= self._max_connections
+            if (entry and entry.healthy and entry.in_use) or (at_capacity and agent_id not in self._pool):
+                if time.monotonic() >= wait_deadline:
+                    raise GatewayUnavailableError(
+                        f"Timed out waiting for available session for agent {agent_id}"
+                    )
                 await asyncio.sleep(0.01)
                 continue
 
@@ -292,6 +300,7 @@ class GatewayClient:
                 current = self._pool.get(agent_id)
                 if current and current.healthy:
                     if current.in_use:
+                        # Race: another caller reserved entry while we were connecting
                         await self._close_entry(new_entry)
                     else:
                         await self._close_entry(new_entry)
@@ -386,19 +395,22 @@ class GatewayClient:
             if entry:
                 await self._close_entry(entry)
 
-    async def _evict_oldest_unlocked(self) -> None:
-        """Evict the oldest idle (not in_use) connection to make room."""
+    async def _evict_oldest_unlocked(self) -> bool:
+        """Evict the oldest idle (not in_use) connection to make room.
+
+        Returns True if a connection was evicted, False otherwise.
+        """
         if not self._pool:
-            return
+            return False
         # Only consider entries that are not actively streaming
         candidates = {k: v for k, v in self._pool.items() if not v.in_use}
         if not candidates:
-            return  # All connections are in use, can't evict any
+            return False  # All connections are in use, can't evict any
         oldest_key = min(candidates, key=lambda k: candidates[k].last_used)
         entry = self._pool.pop(oldest_key)
         logger.info(f"[WS-GATEWAY] Evicting idle connection for agent {oldest_key}")
         await self._close_entry(entry)
-
+        return True
     async def _close_entry(self, entry: _PoolEntry) -> None:
         entry.healthy = False
         try:
