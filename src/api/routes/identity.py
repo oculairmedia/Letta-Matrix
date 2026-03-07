@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from typing import List, Optional
 from urllib.parse import unquote
 import logging
+import os
 
 from src.api.schemas.identity import (
     IdentityCreate,
@@ -320,18 +321,9 @@ async def delete_dm_room(mxid1: str, mxid2: str):
     return None
 
 
-import os
-from fastapi import Header
-
-INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "matrix-identity-internal-key")
+from src.api.auth import verify_internal_key
 
 internal_router = APIRouter(prefix="/api/v1/internal", tags=["internal"])
-
-
-def verify_internal_key(x_internal_key: str = Header(...)):
-    if x_internal_key != INTERNAL_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid internal API key")
-
 
 @internal_router.get("/identities/{identity_id}", response_model=FullIdentityResponse)
 async def get_full_identity(identity_id: str, x_internal_key: str = Header(...)):
