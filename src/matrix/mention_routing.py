@@ -315,6 +315,13 @@ async def handle_agent_mention_routing(
 
     oc_mentions = extract_opencode_mentions(body)
     for oc_mxid in oc_mentions:
+        # Skip if OpenCode identity is already a member of this room —
+        # they receive the agent's response directly (e.g. talk_to_agent flow).
+        # Forwarding would cause duplicate delivery.
+        if hasattr(room, 'users') and oc_mxid in room.users:
+            logger.debug(f"Skipping OpenCode relay for {oc_mxid} — already a member of {room.room_id}")
+            continue
+
         resolved = await resolve_opencode_room(oc_mxid)
         if not resolved:
             logger.debug(f"No active OpenCode instance for {oc_mxid}")
