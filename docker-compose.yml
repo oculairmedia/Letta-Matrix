@@ -198,7 +198,6 @@ services:
     volumes:
       - ./matrix_client_data:/app/data
       - ./opencode-bridge/dist:/app/dist:ro
-      - ./opencode-bridge/node_modules:/app/node_modules:ro
     depends_on:
       tuwunel:
         condition: service_healthy
