@@ -21,6 +21,7 @@ from src.core.agent_user_manager import (
     AgentUserMapping,
     get_global_session
 )
+from src.core.user_manager import AdminAuthError
 
 
 # ============================================================================
@@ -274,9 +275,8 @@ class TestAdminToken:
 
         # Patch aiohttp.ClientSession in user_manager since get_admin_token uses it directly
         with patch('src.core.user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
-            token = await manager.get_admin_token()
-
-        assert token is None
+            with pytest.raises(AdminAuthError):
+                await manager.get_admin_token()
 
 
 # ============================================================================

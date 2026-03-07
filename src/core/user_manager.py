@@ -16,6 +16,9 @@ logger = logging.getLogger("matrix_client.user_manager")
 # Default timeout for all requests
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
+class AdminAuthError(Exception):
+    """Raised when an admin token cannot be obtained (login failed and no fallback)."""
+    pass
 
 class MatrixUserManager:
     """Manages Matrix user accounts - creation, authentication, and profile management"""
@@ -82,8 +85,9 @@ class MatrixUserManager:
             self.admin_token = fallback_token
             return self.admin_token
 
-        logger.error("No admin token available: password login failed and no MATRIX_ADMIN_TOKEN env var")
-        return None
+        raise AdminAuthError(
+            "No admin token available: password login failed and no MATRIX_ADMIN_TOKEN env var"
+        )
 
     async def check_user_exists(self, username: str) -> Literal["exists_healthy", "exists_auth_failed", "not_found"]:
         """Check Matrix user state (Tuwunel compatible)

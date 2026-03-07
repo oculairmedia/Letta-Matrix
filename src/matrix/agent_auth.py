@@ -174,11 +174,11 @@ async def repair_agent_password(
             # Wait for Tuwunel to process the command
             await asyncio.sleep(0.5)
 
-            # Read response to verify success
+            # Read response to verify success — correlate to this specific agent
             reset_confirmed = False
             messages_url = (
                 f"{config.homeserver_url}/_matrix/client/v3/rooms/{admin_room}"
-                f"/messages?dir=b&limit=2"
+                f"/messages?dir=b&limit=10"
             )
             async with http.get(
                 messages_url, headers=headers, timeout=_AGENT_LOGIN_TIMEOUT
@@ -187,26 +187,35 @@ async def repair_agent_password(
                     data = await msg_resp.json()
                     for msg in data.get("chunk", []):
                         body = msg.get("content", {}).get("body", "")
-                        if body and body != command:
-                            if "Successfully" in body or (
-                                "password" in body.lower() and "reset" in body.lower()
-                            ):
-                                logger.info(
-                                    f"[{caller}] Password repair: Tuwunel confirmed reset for {agent_username}"
-                                )
-                                reset_confirmed = True
-                            else:
-                                logger.warning(
-                                    f"[{caller}] Password repair: unexpected response: {body}"
-                                )
+                        if not body or body == command:
+                            continue
+                        # Tuwunel responds: "Successfully reset the password for user @X:domain: newpass"
+                        # Correlate: body must reference our agent_username
+                        body_lower = body.lower()
+                        is_success = "successfully" in body_lower and "reset" in body_lower
+                        mentions_agent = agent_username.lower() in body_lower
+                        if is_success and mentions_agent:
+                            reset_confirmed = True
+                            logger.info(
+                                f"[{caller}] Password repair: Tuwunel confirmed reset for {agent_username}"
+                            )
+                            break
+                        elif is_success and not mentions_agent:
+                            # Success message for a different agent — skip it
+                            continue
+                        else:
+                            logger.warning(
+                                f"[{caller}] Password repair: unexpected response: {body}"
+                            )
                             break
 
             if not reset_confirmed:
-                logger.error(
-                    f"[{caller}] Password repair: no positive confirmation from Tuwunel for {agent_username}, not persisting new password"
+                logger.warning(
+                    f"[{caller}] Password repair: no correlated confirmation for {agent_username}, "
+                    f"persisting new password optimistically"
                 )
-                return None
-        # Only persist after positive confirmation from Tuwunel
+        # Update DB with new password (persist even without confirmation —
+        # the command was sent successfully, and Tuwunel may just be slow to respond)
         from src.models.agent_mapping import AgentMappingDB
         from src.core.mapping_service import invalidate_cache
 

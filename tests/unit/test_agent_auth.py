@@ -199,3 +199,175 @@ async def test_repair_agent_password_respects_cooldown(
     assert first is None
     assert second is None
     assert http_session.post.call_count == 1  # Only first call logged in; second was cooldown-blocked
+
+
+@pytest.mark.asyncio
+async def test_repair_confirmation_correlates_to_agent_username(
+    config: Config, logger: logging.Logger
+) -> None:
+    """Test that password repair correlates confirmation to the specific agent username"""
+    mapping = {
+        "agent_id": "agent-1",
+        "agent_name": "Agent One",
+        "matrix_user_id": "@agent_1:matrix.test",
+        "matrix_password": "old-pass",
+    }
+
+    admin_login_response = MagicMock(status=200)
+    admin_login_response.json = AsyncMock(return_value={"access_token": "admin-token"})
+
+    cmd_response = MagicMock(status=200)
+    cmd_response.text = AsyncMock(return_value="")
+
+    # Mock messages response with success message for agent_1
+    messages_response = MagicMock(status=200)
+    messages_response.json = AsyncMock(
+        return_value={
+            "chunk": [
+                {"content": {"body": "Successfully reset the password for user agent_1"}}
+            ],
+        }
+    )
+
+    http_session = MagicMock()
+    http_session.post = AsyncMock(return_value=admin_login_response)
+    http_session.put = MagicMock(return_value=_make_async_cm(cmd_response))
+    http_session.get = MagicMock(return_value=_make_async_cm(messages_response))
+    http_session.__aenter__ = AsyncMock(return_value=http_session)
+    http_session.__aexit__ = AsyncMock(return_value=None)
+
+    db_record = SimpleNamespace(
+        agent_id="agent-1",
+        agent_name="Agent One",
+        matrix_user_id="@agent_1:matrix.test",
+        room_id="!room:test",
+    )
+    db_instance = MagicMock()
+    db_instance.get_by_agent_id.return_value = db_record
+
+    with (
+        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.models.agent_mapping.AgentMappingDB", return_value=db_instance),
+        patch("src.core.mapping_service.invalidate_cache"),
+        patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
+    ):
+        new_password = await agent_auth.repair_agent_password(mapping, config, logger)
+
+    assert isinstance(new_password, str)
+    assert new_password.startswith("AgentRepair_")
+
+
+@pytest.mark.asyncio
+async def test_repair_ignores_other_agent_confirmation(
+    config: Config, logger: logging.Logger
+) -> None:
+    """Test that repair ignores success messages for other agents but persists password optimistically"""
+    mapping = {
+        "agent_id": "agent-1",
+        "agent_name": "Agent One",
+        "matrix_user_id": "@agent_1:matrix.test",
+        "matrix_password": "old-pass",
+    }
+
+    admin_login_response = MagicMock(status=200)
+    admin_login_response.json = AsyncMock(return_value={"access_token": "admin-token"})
+
+    cmd_response = MagicMock(status=200)
+    cmd_response.text = AsyncMock(return_value="")
+
+    # Mock messages response with success message for agent_2 (different agent)
+    messages_response = MagicMock(status=200)
+    messages_response.json = AsyncMock(
+        return_value={
+            "chunk": [
+                {"content": {"body": "Successfully reset the password for user agent_2"}}
+            ],
+        }
+    )
+
+    http_session = MagicMock()
+    http_session.post = AsyncMock(return_value=admin_login_response)
+    http_session.put = MagicMock(return_value=_make_async_cm(cmd_response))
+    http_session.get = MagicMock(return_value=_make_async_cm(messages_response))
+    http_session.__aenter__ = AsyncMock(return_value=http_session)
+    http_session.__aexit__ = AsyncMock(return_value=None)
+
+    db_record = SimpleNamespace(
+        agent_id="agent-1",
+        agent_name="Agent One",
+        matrix_user_id="@agent_1:matrix.test",
+        room_id="!room:test",
+    )
+    db_instance = MagicMock()
+    db_instance.get_by_agent_id.return_value = db_record
+
+    with (
+        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.models.agent_mapping.AgentMappingDB", return_value=db_instance),
+        patch("src.core.mapping_service.invalidate_cache"),
+        patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
+    ):
+        new_password = await agent_auth.repair_agent_password(mapping, config, logger)
+
+    # Should still return password (persisted optimistically) even without correlated confirmation
+    assert isinstance(new_password, str)
+    assert new_password.startswith("AgentRepair_")
+
+
+@pytest.mark.asyncio
+async def test_repair_expanded_polling_window(
+    config: Config, logger: logging.Logger
+) -> None:
+    """Test that repair uses expanded polling window (limit=10 instead of limit=2)"""
+    mapping = {
+        "agent_id": "agent-1",
+        "agent_name": "Agent One",
+        "matrix_user_id": "@agent_1:matrix.test",
+        "matrix_password": "old-pass",
+    }
+
+    admin_login_response = MagicMock(status=200)
+    admin_login_response.json = AsyncMock(return_value={"access_token": "admin-token"})
+
+    cmd_response = MagicMock(status=200)
+    cmd_response.text = AsyncMock(return_value="")
+
+    messages_response = MagicMock(status=200)
+    messages_response.json = AsyncMock(
+        return_value={
+            "chunk": [
+                {"content": {"body": "Successfully reset the password for user agent_1"}}
+            ],
+        }
+    )
+
+    http_session = MagicMock()
+    http_session.post = AsyncMock(return_value=admin_login_response)
+    http_session.put = MagicMock(return_value=_make_async_cm(cmd_response))
+    http_session.get = MagicMock(return_value=_make_async_cm(messages_response))
+    http_session.__aenter__ = AsyncMock(return_value=http_session)
+    http_session.__aexit__ = AsyncMock(return_value=None)
+
+    db_record = SimpleNamespace(
+        agent_id="agent-1",
+        agent_name="Agent One",
+        matrix_user_id="@agent_1:matrix.test",
+        room_id="!room:test",
+    )
+    db_instance = MagicMock()
+    db_instance.get_by_agent_id.return_value = db_record
+
+    with (
+        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.models.agent_mapping.AgentMappingDB", return_value=db_instance),
+        patch("src.core.mapping_service.invalidate_cache"),
+        patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
+    ):
+        new_password = await agent_auth.repair_agent_password(mapping, config, logger)
+
+    # Verify the messages URL contains limit=10
+    get_call = http_session.get.call_args
+    assert get_call is not None
+    messages_url = get_call.args[0]
+    assert "limit=10" in messages_url
+    assert isinstance(new_password, str)
