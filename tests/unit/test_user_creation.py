@@ -241,7 +241,8 @@ class TestUserCreation:
 
     @pytest.mark.asyncio
     async def test_get_admin_token_failure(self, user_manager, monkeypatch):
-        """Test failed admin token retrieval"""
+        """Test failed admin token retrieval raises AdminAuthError"""
+        from src.core.user_manager import AdminAuthError
         # Remove env vars so fallback doesn't return a token
         monkeypatch.delenv('MATRIX_ADMIN_TOKEN', raising=False)
         monkeypatch.delenv('MATRIX_ACCESS_TOKEN', raising=False)
@@ -252,8 +253,8 @@ class TestUserCreation:
         with patch('aiohttp.ClientSession') as mock_session:
             mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
             
-            token = await user_manager.get_admin_token()
-            assert token is None
+            with pytest.raises(AdminAuthError):
+                await user_manager.get_admin_token()
 
     def test_generate_username(self, user_manager):
         """Test username generation from agent ID"""
@@ -757,3 +758,10 @@ class TestUserCreationIntegration:
                 
                 # User should only be created once
                 assert mock_create.call_count == 1
+
+
+def test_admin_auth_error_is_importable():
+    """Test that AdminAuthError can be imported and is an Exception subclass"""
+    from src.core.user_manager import AdminAuthError
+    
+    assert issubclass(AdminAuthError, Exception)
