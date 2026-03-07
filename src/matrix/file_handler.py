@@ -138,7 +138,6 @@ class LettaFileHandler:
             logger,
         )
         self._source_cache = self._source_manager._source_cache
-        self._folder_cache = self._source_manager._source_cache
         
         # Log token status at init
         logger.info(f"LettaFileHandler initialized - matrix_access_token present: {bool(self.matrix_access_token)}, length: {len(self.matrix_access_token) if self.matrix_access_token else 0}")

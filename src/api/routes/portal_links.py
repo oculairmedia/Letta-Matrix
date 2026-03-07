@@ -33,7 +33,7 @@ async def list_all_portal_links(x_internal_key: str = Header(...)):
         return {"success": True, "links": links, "count": len(links)}
     except Exception as e:
         logger.error(f"Error listing portal links: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/agents/{agent_id}/portal-links")
@@ -46,7 +46,7 @@ async def get_agent_portal_links(agent_id: str, x_internal_key: str = Header(...
         return {"success": True, "agent_id": agent_id, "links": links, "count": len(links)}
     except Exception as e:
         logger.error(f"Error getting portal links for {agent_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/agents/{agent_id}/portal-links")
@@ -66,7 +66,7 @@ async def create_agent_portal_link(agent_id: str, request: PortalLinkRequest, x_
         raise
     except Exception as e:
         logger.error(f"Error creating portal link: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/agents/{agent_id}/portal-links/{room_id:path}")
@@ -83,7 +83,7 @@ async def delete_agent_portal_link(agent_id: str, room_id: str, x_internal_key: 
         raise
     except Exception as e:
         logger.error(f"Error deleting portal link: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/agents/{agent_id}/portal-links/{room_id:path}")
@@ -103,4 +103,4 @@ async def update_agent_portal_link(agent_id: str, room_id: str, request: PortalL
         raise
     except Exception as e:
         logger.error(f"Error updating portal link: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
