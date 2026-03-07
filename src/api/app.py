@@ -7,9 +7,11 @@ from typing import Optional
 
 import aiohttp
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 import uvicorn
 from pydantic import BaseModel
+
+from src.api.auth import verify_internal_key
 
 from src.api.routes.agent_sync import (
     NewAgentNotification,
@@ -231,7 +233,8 @@ async def root():
 
 
 @app.post("/rooms/auto-join")
-async def auto_join_rooms(request: AutoJoinRequest):
+async def auto_join_rooms(request: AutoJoinRequest, x_internal_key: str = Header(...)):
+    verify_internal_key(x_internal_key)
     user_id = request.user_id
     access_token = request.access_token
     homeserver = request.homeserver
