@@ -1028,11 +1028,8 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
           throw new Error('Invalid limit: must be a positive integer for letta_list. Example: {operation: "letta_list", limit: 50}');
         }
-        if (input.offset !== undefined && (!Number.isInteger(input.offset) || input.offset < 0)) {
-          throw new Error('Invalid offset: must be a non-negative integer for letta_list. Example: {operation: "letta_list", offset: 50, limit: 50}');
-        }
 
-        const agents = await letta.listAgents({ limit: input.limit, offset: input.offset });
+        const agents = await letta.listAgents({ limit: input.limit });
         const agentsWithIdentities = await Promise.all(
           agents.map(async agent => {
             const identityId = IdentityManager.generateLettaId(agent.id);
