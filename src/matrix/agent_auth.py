@@ -173,6 +173,7 @@ async def repair_agent_password(
             await asyncio.sleep(0.5)
 
             # Read response to verify success
+            reset_confirmed = False
             messages_url = (
                 f"{config.homeserver_url}/_matrix/client/v3/rooms/{admin_room}"
                 f"/messages?dir=b&limit=2"
@@ -191,13 +192,19 @@ async def repair_agent_password(
                                 logger.info(
                                     f"[{caller}] Password repair: Tuwunel confirmed reset for {agent_username}"
                                 )
+                                reset_confirmed = True
                             else:
                                 logger.warning(
                                     f"[{caller}] Password repair: unexpected response: {body}"
                                 )
                             break
 
-        # Update DB with new password
+            if not reset_confirmed:
+                logger.error(
+                    f"[{caller}] Password repair: no positive confirmation from Tuwunel for {agent_username}, not persisting new password"
+                )
+                return None
+        # Only persist after positive confirmation from Tuwunel
         from src.models.agent_mapping import AgentMappingDB
         from src.core.mapping_service import invalidate_cache
 

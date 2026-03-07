@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel
 
 
@@ -115,14 +115,14 @@ async def get_messages(request: GetMessagesRequest, raw_request: Request):
 
 
 @router.get("/rooms/list")
-async def list_rooms(homeserver: str, access_token: str, raw_request: Request):
+async def list_rooms(homeserver: str, raw_request: Request, access_token: str = Header(..., alias="X-Access-Token")):
     matrix_client = get_matrix_client(raw_request)
     result = await matrix_client.list_rooms(homeserver, access_token)
     return result
 
 
 @router.get("/messages/recent")
-async def get_recent_messages(homeserver: str, access_token: str, raw_request: Request, limit: int = 10):
+async def get_recent_messages(homeserver: str, raw_request: Request, limit: int = 10, access_token: str = Header(..., alias="X-Access-Token")):
     try:
         matrix_client = get_matrix_client(raw_request)
         rooms_result = await matrix_client.list_rooms(homeserver, access_token)
