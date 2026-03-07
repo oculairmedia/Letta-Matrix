@@ -1,4 +1,5 @@
 import json
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -46,7 +47,8 @@ class _MockAsyncClient:
 class _MockGatewayWS:
     def __init__(self):
         self.sent = []
-        self._events = [
+        self._recv_queue = [
+            json.dumps({"type": "session_init", "session_id": "ses-1"}),
             json.dumps({"type": "result", "success": True}),
         ]
 
@@ -54,15 +56,9 @@ class _MockGatewayWS:
         self.sent.append(payload)
 
     async def recv(self):
-        return json.dumps({"type": "session_init", "session_id": "ses-1"})
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self._events:
-            return self._events.pop(0)
-        raise StopAsyncIteration
+        if not self._recv_queue:
+            raise AssertionError("No more queued websocket events")
+        return self._recv_queue.pop(0)
 
     async def close(self):
         return None
@@ -232,15 +228,6 @@ def test_should_remove_persistent_on_cancel():
 async def test_notify_letta_agent_fire_and_forget_skips_result_wait(monkeypatch):
     """Fire-and-forget mode sends message but does NOT wait for result events."""
     ws = _MockGatewayWS()
-    iteration_entered = False
-    original_anext = ws.__anext__
-
-    async def _tracked_anext():
-        nonlocal iteration_entered
-        iteration_entered = True
-        return await original_anext()
-
-    ws.__anext__ = _tracked_anext
 
     async def _connect(*args, **kwargs):
         return ws
@@ -258,9 +245,7 @@ async def test_notify_letta_agent_fire_and_forget_skips_result_wait(monkeypatch)
 
     assert result.success is True
     assert result.response_text is None
-    # Should NOT have iterated the WS events (no waiting for result)
-    assert not iteration_entered, "fire-and-forget should not consume WS events"
-    # Should still have sent session_start + message
+    assert len(ws._recv_queue) == 1
     assert len(ws.sent) == 2
 
 
@@ -269,7 +254,8 @@ async def test_notify_letta_agent_wait_for_result_default_collects_response(monk
     """Default mode (wait_for_result=True) collects the full agent response."""
     ws = _MockGatewayWS()
     # Add a stream event before the result
-    ws._events = [
+    ws._recv_queue = [
+        json.dumps({"type": "session_init", "session_id": "ses-1"}),
         json.dumps({"type": "stream", "event": "assistant", "content": "Hello "}),
         json.dumps({"type": "stream", "event": "assistant", "content": "world"}),
         json.dumps({"type": "result", "success": True}),
@@ -291,3 +277,34 @@ async def test_notify_letta_agent_wait_for_result_default_collects_response(monk
     assert result.success is True
     assert result.response_text == "Hello world"
     assert result.duration_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_notify_letta_agent_raises_on_receive_timeout(monkeypatch):
+    ws = _MockGatewayWS()
+    ws._recv_queue = [json.dumps({"type": "session_init", "session_id": "ses-1"})]
+
+    async def _connect(*args, **kwargs):
+        return ws
+
+    monkeypatch.setattr(activities.websockets, "connect", _connect)
+
+    real_wait_for = asyncio.wait_for
+    wait_calls = {"count": 0}
+
+    async def _fake_wait_for(awaitable, timeout):
+        if wait_calls["count"] == 0:
+            wait_calls["count"] += 1
+            return await real_wait_for(awaitable, timeout)
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr("temporal_workflows.activities.notify.asyncio.wait_for", _fake_wait_for)
+
+    with pytest.raises(activities.NotifyError, match="Receive timeout"):
+        await notify_letta_agent(
+            NotifyAgentInput(
+                agent_id="agent-123",
+                message="hello",
+                room_id="!room:matrix.test",
+            )
+        )

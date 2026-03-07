@@ -97,6 +97,28 @@ class TestGetOrCreateSource:
         assert result == "folder-existing-789"
         mgr.letta_client.folders.create.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_concurrent_calls_same_room_create_folder_once(self):
+        mgr = _make_manager()
+        mgr.letta_client.folders.list.return_value = []
+        mock_folder = MagicMock()
+        mock_folder.id = "folder-once-123"
+        mgr.letta_client.folders.create.return_value = mock_folder
+
+        async def fake_run_sync(func, *args, **kwargs):
+            await asyncio.sleep(0.01)
+            return func(*args, **kwargs)
+
+        mgr._run_sync = fake_run_sync  # type: ignore[assignment]
+
+        results = await asyncio.gather(
+            mgr.get_or_create_source("!race:test"),
+            mgr.get_or_create_source("!race:test"),
+        )
+
+        assert results == ["folder-once-123", "folder-once-123"]
+        mgr.letta_client.folders.create.assert_called_once()
+
 
 class TestAttachSourceToAgent:
     @pytest.mark.asyncio
@@ -171,5 +193,5 @@ class TestPollFileStatus:
         mock_file.processing_status = "completed"
         mgr.letta_client.folders.files.list.return_value = [mock_file]
 
-        result = await mgr.poll_file_status("folder-1", "file-123", timeout=5, interval=0.01)
+        result = await mgr.poll_file_status("folder-1", "file-123", timeout=5, interval=1)
         assert result is True

@@ -17,7 +17,7 @@ def _make_async_cm(response: MagicMock) -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def _reset_repair_attempts() -> None:
-    agent_auth._repair_attempted.clear()
+    agent_auth._repair_last_attempt.clear()
 
 
 @pytest.fixture
@@ -164,3 +164,38 @@ async def test_repair_agent_password_sends_admin_room_command(
     put_call = http_session.put.call_args
     assert "rooms/!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca/send/m.room.message/" in put_call.args[0]
     assert put_call.kwargs["json"]["body"].startswith("!admin users reset-password agent_1 ")
+
+
+@pytest.mark.asyncio
+async def test_repair_agent_password_respects_cooldown(
+    config: Config, logger: logging.Logger
+) -> None:
+    mapping = {
+        "agent_id": "agent-1",
+        "agent_name": "Agent One",
+        "matrix_user_id": "@agent_1:matrix.test",
+        "matrix_password": "old-pass",
+    }
+
+    admin_login_response = MagicMock(status=200)
+    admin_login_response.json = AsyncMock(return_value={"access_token": "admin-token"})
+    cmd_response = MagicMock(status=500)
+    cmd_response.text = AsyncMock(return_value="error")
+
+    http_session = MagicMock()
+    http_session.post = AsyncMock(return_value=admin_login_response)
+    http_session.put = MagicMock(return_value=_make_async_cm(cmd_response))
+    http_session.get = MagicMock(return_value=_make_async_cm(MagicMock(status=500)))
+    http_session.__aenter__ = AsyncMock(return_value=http_session)
+    http_session.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.matrix.agent_auth.time.monotonic", side_effect=[1000.0, 1000.0, 1100.0]),
+    ):
+        first = await agent_auth.repair_agent_password(mapping, config, logger)
+        second = await agent_auth.repair_agent_password(mapping, config, logger)
+
+    assert first is None
+    assert second is None
+    assert http_session.post.call_count == 1

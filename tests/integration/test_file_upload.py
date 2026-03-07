@@ -225,7 +225,7 @@ class TestFileHandler:
         expected_folder_id = "source-123"
         
         # Pre-populate cache
-        file_handler._folder_cache[room_id] = expected_folder_id
+        file_handler._source_cache[room_id] = expected_folder_id
         
         folder_id = await file_handler._get_or_create_folder(room_id)
         
@@ -247,7 +247,7 @@ class TestFileHandler:
         folder_id = await file_handler._get_or_create_folder(room_id)
         
         assert folder_id == "source-new-123"
-        assert file_handler._folder_cache[room_id] == "source-new-123"
+        assert file_handler._source_cache[room_id] == "source-new-123"
     
     @pytest.mark.asyncio
     async def test_get_or_create_folder_with_agent(self, file_handler):
