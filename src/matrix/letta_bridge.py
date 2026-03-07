@@ -431,8 +431,8 @@ async def send_to_letta_api(
         room_id or "", config, logger, tag="API"
     )
 
-    logger.warning(f"[DEBUG] AGENT ROUTING: Room {room_id} -> Agent {agent_id_to_use}")
-    logger.warning(f"[DEBUG] Agent Name: {agent_name_found}")
+    logger.debug(f"AGENT ROUTING: Room {room_id} -> Agent {agent_id_to_use}")
+    logger.debug(f"Agent Name: {agent_name_found}")
 
     if isinstance(message_body, str):
         message_preview = (

@@ -1,10 +1,7 @@
 import asyncio
 import os
 import logging
-import json
 import time
-import uuid
-import aiohttp
 from typing import Optional, Dict, Any, Tuple, Union
 from nio import AsyncClient, RoomMessageText, LoginError, RoomPreset, RoomMessageMedia, RoomMessageAudio, UnknownEvent
 from nio.responses import JoinError

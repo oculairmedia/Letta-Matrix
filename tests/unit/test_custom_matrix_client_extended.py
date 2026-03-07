@@ -413,7 +413,7 @@ class TestSendAsAgent:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+        with patch('src.matrix.agent_actions.aiohttp.ClientSession', return_value=mock_session):
             with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=mock_mapping):
                 result = await send_as_agent(
                     room_id="!agentroom:test.com",
@@ -478,7 +478,7 @@ class TestSendAsAgent:
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
         with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=mock_mapping):
-            with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+            with patch('src.matrix.agent_actions.aiohttp.ClientSession', return_value=mock_session):
                 result = await send_as_agent(
                     room_id="!agentroom:test.com",
                     message="Test",
@@ -513,7 +513,7 @@ class TestSendAsAgent:
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
         with patch('src.core.mapping_service.get_mapping_by_room_id', return_value=mock_mapping):
-            with patch('src.matrix.client.aiohttp.ClientSession', return_value=mock_session):
+            with patch('src.matrix.agent_actions.aiohttp.ClientSession', return_value=mock_session):
                 result = await send_as_agent(
                     room_id="!agentroom:test.com",
                     message="Test",

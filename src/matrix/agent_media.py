@@ -1,4 +1,3 @@
-import importlib
 import logging
 import uuid
 from typing import Any, Dict, Optional
@@ -6,12 +5,7 @@ from typing import Any, Dict, Optional
 import aiohttp
 
 from src.matrix.config import Config
-
-try:
-    _agent_auth = importlib.import_module("src.matrix.agent_auth")
-    _get_agent_token = getattr(_agent_auth, "_get_agent_token")
-except (ImportError, AttributeError):
-    from src.matrix.agent_actions import _get_agent_token
+from src.matrix.agent_auth import get_agent_token as _get_agent_token
 
 
 _AGENT_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=30)
