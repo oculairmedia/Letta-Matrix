@@ -626,14 +626,17 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
     # Portal rooms: check for @agent mention to activate, otherwise passive observation
     if router.portal_link:
         message_text, _ = router._extract_message_content(event)
-        # If the user @mentions the agent by name, treat as active request —
-        # let it fall through to normal processing so the agent responds in-room
+        # Admin can always invoke; contacts need mention_enabled
+        is_admin = event.sender == os.getenv("MATRIX_ADMIN_USERNAME", "@admin:matrix.oculair.ca")
+        mention_allowed = is_admin or router.portal_link.get("mention_enabled", False)
+        # If the user @mentions the agent by name AND mention is enabled,
+        # treat as active request — let it fall through to normal processing
         # Also check the formatted_body for Matrix pills (HTML mentions)
         formatted_body = (
             event.source.get("content", {}).get("formatted_body", "")
             if getattr(event, "source", None) else ""
         )
-        agent_mentioned = room_agent_name and (
+        agent_mentioned = mention_allowed and room_agent_name and (
             f"@{room_agent_name.lower()}" in message_text.lower()
             or room_agent_name.lower() in message_text.lower()
             or room_agent_name.lower() in formatted_body.lower()
@@ -643,7 +646,7 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
                 room, event, config, logger, room_agent_id, room_agent_name, message_text
             )
             return
-        # Agent was @mentioned — continue to normal dispatch below
+        # Agent was @mentioned and mention_enabled — continue to normal dispatch below
         logger.info(
             f"[PORTAL-ACTIVE] @{room_agent_name} mentioned in portal room "
             f"{room.display_name or room.room_id}, processing as active request"

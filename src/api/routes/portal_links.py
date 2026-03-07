@@ -1,8 +1,8 @@
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-
 
 router = APIRouter(prefix="", tags=["portal-links"])
 logger = logging.getLogger(__name__)
@@ -12,6 +12,13 @@ class PortalLinkRequest(BaseModel):
     room_id: str
     enabled: bool = True
     relay_mode: bool = True
+    mention_enabled: bool = False
+
+
+class PortalLinkUpdateRequest(BaseModel):
+    enabled: Optional[bool] = None
+    relay_mode: Optional[bool] = None
+    mention_enabled: Optional[bool] = None
 
 
 @router.get("/agents/portal-links")
@@ -46,7 +53,7 @@ async def create_agent_portal_link(agent_id: str, request: PortalLinkRequest):
         mapping = get_mapping_by_agent_id(agent_id)
         if not mapping:
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
-        link = create_portal_link(agent_id, request.room_id, request.enabled, request.relay_mode)
+        link = create_portal_link(agent_id, request.room_id, request.enabled, request.relay_mode, request.mention_enabled)
         if not link:
             raise HTTPException(status_code=500, detail="Failed to create portal link")
         return {"success": True, "link": link}
@@ -70,4 +77,23 @@ async def delete_agent_portal_link(agent_id: str, room_id: str):
         raise
     except Exception as e:
         logger.error(f"Error deleting portal link: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/agents/{agent_id}/portal-links/{room_id:path}")
+async def update_agent_portal_link(agent_id: str, room_id: str, request: PortalLinkUpdateRequest):
+    try:
+        from src.core.mapping_service import update_portal_link
+
+        updates = {k: v for k, v in request.model_dump().items() if v is not None}
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        result = update_portal_link(agent_id, room_id, **updates)
+        if not result:
+            raise HTTPException(status_code=404, detail="Portal link not found")
+        return {"success": True, "link": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating portal link: {e}")
         raise HTTPException(status_code=500, detail=str(e))

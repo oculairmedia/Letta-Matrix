@@ -326,6 +326,7 @@ def create_portal_link(
     room_id: str,
     enabled: bool = True,
     relay_mode: bool = True,
+    mention_enabled: bool = False,
 ) -> Optional[dict]:
     """
     Create a portal link between an agent and a bridged room.
@@ -340,7 +341,7 @@ def create_portal_link(
     """
     try:
         db = _get_db()
-        result = db.create_portal_link(agent_id, room_id, enabled, relay_mode)
+        result = db.create_portal_link(agent_id, room_id, enabled, relay_mode, mention_enabled)
         invalidate_cache()
         return result
     except Exception as e:
@@ -368,6 +369,19 @@ def delete_portal_link(agent_id: str, room_id: str) -> bool:
     except Exception as e:
         logger.error(f"Error deleting portal link for agent {agent_id} room {room_id}: {e}")
         return False
+
+
+def update_portal_link(agent_id: str, room_id: str, **kwargs) -> Optional[dict]:
+    """Update fields on a portal link (e.g. mention_enabled, relay_mode)."""
+    try:
+        db = _get_db()
+        result = db.update_portal_link(agent_id, room_id, **kwargs)
+        if result:
+            invalidate_cache()
+        return result
+    except Exception as e:
+        logger.error(f"Error updating portal link for agent {agent_id} room {room_id}: {e}")
+        return None
 
 
 def get_all_portal_links() -> List[dict]:
