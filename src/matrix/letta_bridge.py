@@ -86,7 +86,7 @@ async def _get_gateway_client(config: Config, logger: logging.Logger):
         logger.info("[GATEWAY] Connected")
         return gw_client
     except Exception as e:
-        raise LettaApiError(f"Gateway unavailable — cannot process message: {e}")
+        raise LettaApiError(f"Gateway unavailable — cannot process message: {e}") from e
 
 
 # ── Streaming Send ───────────────────────────────────────────────────
@@ -397,7 +397,7 @@ async def send_to_letta_api_streaming(
             f"[STREAMING] Exception during streaming: {e}", exc_info=True
         )
         await handler.cleanup()
-        raise LettaApiError(f"Streaming error: {e}")
+        raise LettaApiError(f"Streaming error: {e}") from e
     finally:
         if typing_manager:
             await typing_manager.stop()
@@ -491,7 +491,7 @@ async def send_to_letta_api(
         )
         raise LettaApiError(
             f"Letta API returned error {e.status}", e.status, str(e.message)[:200]
-        )
+        ) from e
     except Exception as e:
         error_str = str(e)
         if "Error code:" in error_str:
@@ -507,7 +507,7 @@ async def send_to_letta_api(
                 f"Letta API returned error {status_code}",
                 status_code,
                 error_str[:200],
-            )
+            ) from e
         else:
             logger.error(
                 "Unexpected error in Letta API call",
@@ -516,7 +516,7 @@ async def send_to_letta_api(
             )
             raise LettaApiError(
                 f"An unexpected error occurred with the Letta SDK: {e}"
-            )
+            ) from e
     finally:
         if typing_manager:
             await typing_manager.stop()
