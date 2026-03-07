@@ -112,7 +112,7 @@ async def resolve_letta_project_dir(
 ) -> Optional[str]:
     """Resolve the filesystem project directory for a room/agent pair."""
     if override_path:
-        update_letta_code_room_state(room_id, {"projectDir": override_path})
+        # One-shot override: don't persist to room state (bd-lc4b)
         return override_path
     state = get_letta_code_room_state(room_id)
     project_dir = state.get("projectDir")

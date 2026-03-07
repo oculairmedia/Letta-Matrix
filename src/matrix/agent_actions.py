@@ -11,6 +11,7 @@ Extracted from client.py as a standalone module.
 Re-exported by client.py for backward compatibility.
 """
 import asyncio
+import html
 import logging
 import uuid
 from typing import Any, Dict, Optional
@@ -134,8 +135,8 @@ async def send_as_agent_with_event_id(
                     mx_reply_html = (
                         f'<mx-reply><blockquote>'
                         f'<a href="https://matrix.to/#/{room_id}/{reply_to_event_id}">In reply to</a> '
-                        f'<a href="https://matrix.to/#/{quoted_sender}">{quoted_sender}</a><br/>'
-                        f"{quoted_body}"
+                        f'<a href="https://matrix.to/#/{html.escape(quoted_sender)}">{html.escape(quoted_sender)}</a><br/>'
+                        f"{html.escape(quoted_body)}"
                         f"</blockquote></mx-reply>"
                     )
                     existing_html = message_data.get("formatted_body", message)
@@ -586,6 +587,9 @@ class TypingIndicatorManager:
                 )
 
     async def start(self):
+        # Idempotent: stop existing task before starting a new one (bd-vw6c)
+        if self._typing_task is not None:
+            await self.stop()
         self._stop_event.clear()
         self._ctx = await _get_agent_typing_context(
             self.room_id, self.config, self.logger

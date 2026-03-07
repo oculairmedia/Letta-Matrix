@@ -125,7 +125,7 @@ def extract_and_convert_pills(
 
     mentions = _resolve_mentions(plain_text)
     if not mentions:
-        return (html_body or plain_text, [])
+        return (html_body or html.escape(plain_text), [])
 
     # Build working HTML — use provided html_body or create from plain text
     working_html = html_body if html_body else html.escape(plain_text)
