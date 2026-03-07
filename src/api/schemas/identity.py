@@ -156,7 +156,7 @@ class EditAsAgentRequest(BaseModel):
     room_id: str = Field(..., description="Target Matrix room ID")
     event_id: str = Field(..., description="Event ID to edit")
     message: str = Field(..., description="Replacement message content")
-    msgtype: str = Field("m.notice", description="Message type")
+    msgtype: str = Field("m.text", description="Message type")
 
 
 class SendAsIdentityResponse(BaseModel):

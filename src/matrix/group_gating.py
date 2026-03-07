@@ -96,12 +96,6 @@ def apply_group_gating(
             reason="mention-only: mentioned, respond",
         )
 
-    # fallback (should not happen with Literal type)
-    logger.warning(f"[GROUP_GATING] Unknown mode '{cfg.mode}' for {room_id}")
-    return GatingResult(
-        was_mentioned=mention.was_mentioned,
-        mode=cfg.mode,
-        method=mention.method,
-        silent=False,
-        reason="unknown mode, default open",
-    )
+    # fail closed on unknown mode
+    logger.warning(f"[GROUP_GATING] Unknown mode '{cfg.mode}' for {room_id}, denying")
+    return None
