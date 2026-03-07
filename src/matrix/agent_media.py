@@ -6,6 +6,7 @@ import aiohttp
 
 from src.matrix.config import Config
 from src.matrix.agent_auth import get_agent_token as _get_agent_token
+from src.utils.ssrf_protection import SSRFError, validate_url
 
 
 _AGENT_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=30)
@@ -110,6 +111,11 @@ async def fetch_and_send_image(
     logger: logging.Logger,
 ) -> Optional[str]:
     try:
+        try:
+            validate_url(image_url)
+        except SSRFError as e:
+            logger.warning("[IMAGE] SSRF blocked: %s — %s", image_url, e)
+            return None
         fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
         async with aiohttp.ClientSession() as session:
             try:
@@ -298,6 +304,11 @@ async def fetch_and_send_file(
     logger: logging.Logger,
 ) -> Optional[str]:
     try:
+        try:
+            validate_url(file_url)
+        except SSRFError as e:
+            logger.warning("[FILE] SSRF blocked: %s — %s", file_url, e)
+            return None
         fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
         async with aiohttp.ClientSession() as session:
             try:
@@ -409,6 +420,11 @@ async def fetch_and_send_video(
     logger: logging.Logger,
 ) -> Optional[str]:
     try:
+        try:
+            validate_url(video_url)
+        except SSRFError as e:
+            logger.warning("[VIDEO] SSRF blocked: %s — %s", video_url, e)
+            return None
         fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
         async with aiohttp.ClientSession() as session:
             try:
