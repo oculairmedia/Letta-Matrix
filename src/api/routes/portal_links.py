@@ -1,8 +1,10 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
+
+from src.api.auth import verify_internal_key
 
 router = APIRouter(prefix="", tags=["portal-links"])
 logger = logging.getLogger(__name__)
@@ -22,7 +24,8 @@ class PortalLinkUpdateRequest(BaseModel):
 
 
 @router.get("/agents/portal-links")
-async def list_all_portal_links():
+async def list_all_portal_links(x_internal_key: str = Header(...)):
+    verify_internal_key(x_internal_key)
     try:
         from src.core.mapping_service import get_all_portal_links
 
@@ -34,7 +37,8 @@ async def list_all_portal_links():
 
 
 @router.get("/agents/{agent_id}/portal-links")
-async def get_agent_portal_links(agent_id: str):
+async def get_agent_portal_links(agent_id: str, x_internal_key: str = Header(...)):
+    verify_internal_key(x_internal_key)
     try:
         from src.core.mapping_service import get_portal_links_by_agent
 
@@ -46,7 +50,8 @@ async def get_agent_portal_links(agent_id: str):
 
 
 @router.post("/agents/{agent_id}/portal-links")
-async def create_agent_portal_link(agent_id: str, request: PortalLinkRequest):
+async def create_agent_portal_link(agent_id: str, request: PortalLinkRequest, x_internal_key: str = Header(...)):
+    verify_internal_key(x_internal_key)
     try:
         from src.core.mapping_service import create_portal_link, get_mapping_by_agent_id
 
@@ -65,7 +70,8 @@ async def create_agent_portal_link(agent_id: str, request: PortalLinkRequest):
 
 
 @router.delete("/agents/{agent_id}/portal-links/{room_id:path}")
-async def delete_agent_portal_link(agent_id: str, room_id: str):
+async def delete_agent_portal_link(agent_id: str, room_id: str, x_internal_key: str = Header(...)):
+    verify_internal_key(x_internal_key)
     try:
         from src.core.mapping_service import delete_portal_link
 
@@ -81,7 +87,8 @@ async def delete_agent_portal_link(agent_id: str, room_id: str):
 
 
 @router.patch("/agents/{agent_id}/portal-links/{room_id:path}")
-async def update_agent_portal_link(agent_id: str, room_id: str, request: PortalLinkUpdateRequest):
+async def update_agent_portal_link(agent_id: str, room_id: str, request: PortalLinkUpdateRequest, x_internal_key: str = Header(...)):
+    verify_internal_key(x_internal_key)
     try:
         from src.core.mapping_service import update_portal_link
 
