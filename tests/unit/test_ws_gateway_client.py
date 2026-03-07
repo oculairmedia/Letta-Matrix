@@ -60,6 +60,7 @@ async def test_send_message_streaming_timeout_evicts_connection(gateway_client, 
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # First call to _get_or_create returns entry, second call (after evict) raises
@@ -91,6 +92,7 @@ async def test_in_use_flag_set_during_streaming(gateway_client, mock_ws):
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # Track in_use state during recv
@@ -126,6 +128,7 @@ async def test_in_use_flag_cleared_on_success(gateway_client, mock_ws):
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # Return result event
@@ -153,6 +156,7 @@ async def test_in_use_flag_cleared_on_timeout(gateway_client, mock_ws):
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # Make recv hang (will timeout)
@@ -184,6 +188,7 @@ async def test_in_use_flag_cleared_on_exception(gateway_client, mock_ws):
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # Make recv raise an exception
@@ -215,6 +220,7 @@ async def test_timeout_sends_abort_frame(gateway_client, mock_ws):
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # Simulate timeout by raising asyncio.TimeoutError
@@ -250,6 +256,7 @@ async def test_successful_streaming_yields_events(gateway_client, mock_ws):
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # Return stream events then result
@@ -289,6 +296,7 @@ async def test_session_init_event_yielded(gateway_client, mock_ws):
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # Return session_init then result
@@ -323,6 +331,7 @@ async def test_error_event_raises_gateway_session_error(gateway_client, mock_ws)
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # Return error event
@@ -355,6 +364,7 @@ async def test_non_json_frame_skipped(gateway_client, mock_ws):
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
     # Return non-JSON, then valid events
@@ -392,17 +402,21 @@ async def test_connection_closed_triggers_retry(gateway_client, mock_ws):
         ws=mock_ws,
         agent_id=agent_id,
         session_id="session-123",
+        in_use=True,
     )
     
+    entry2_ws = AsyncMock()
+    entry2_ws.recv = AsyncMock(return_value=json.dumps({"type": "result", "content": "done"}))
     entry2 = _PoolEntry(
-        ws=AsyncMock(),
+        ws=entry2_ws,
         agent_id=agent_id,
         session_id="session-456",
+        in_use=True,
     )
     
     # First connection closes, second succeeds
     mock_ws.recv.side_effect = websockets.ConnectionClosed(None, None)
-    entry2.ws.recv.return_value = json.dumps({"type": "result", "content": "done"})
+    entry2_ws.recv = AsyncMock(return_value=json.dumps({"type": "result", "content": "done"}))
     
     with patch.object(gateway_client, "_get_or_create", side_effect=[entry1, entry2]):
         with patch.object(gateway_client, "_evict", new_callable=AsyncMock):
@@ -426,21 +440,23 @@ async def test_pool_entry_in_use_state_isolation(gateway_client, mock_ws):
     agent_id_1 = "agent-1"
     agent_id_2 = "agent-2"
     
+    entry1_ws = AsyncMock()
+    entry1_ws.recv = AsyncMock(return_value=json.dumps({"type": "result", "content": "done1"}))
     entry1 = _PoolEntry(
-        ws=AsyncMock(),
+        ws=entry1_ws,
         agent_id=agent_id_1,
         session_id="session-1",
+        in_use=True,
     )
     
+    entry2_ws = AsyncMock()
+    entry2_ws.recv = AsyncMock(return_value=json.dumps({"type": "result", "content": "done2"}))
     entry2 = _PoolEntry(
-        ws=AsyncMock(),
+        ws=entry2_ws,
         agent_id=agent_id_2,
         session_id="session-2",
+        in_use=True,
     )
-    
-    # Both return result events
-    entry1.ws.recv.return_value = json.dumps({"type": "result", "content": "done1"})
-    entry2.ws.recv.return_value = json.dumps({"type": "result", "content": "done2"})
     
     with patch.object(gateway_client, "_get_or_create", side_effect=[entry1, entry2]):
         # Stream from first agent
@@ -460,3 +476,173 @@ async def test_pool_entry_in_use_state_isolation(gateway_client, mock_ws):
     # Both should have in_use cleared
     assert entry1.in_use is False
     assert entry2.in_use is False
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_returns_entry_with_in_use_set(gateway_client):
+    """
+    Test that _get_or_create returns entries with in_use=True.
+    """
+    agent_id = "test-agent-get-or-create"
+    
+    # Create a healthy entry with in_use=False
+    mock_ws = AsyncMock()
+    mock_ws.ping = AsyncMock(return_value=None)
+    entry = _PoolEntry(
+        ws=mock_ws,
+        agent_id=agent_id,
+        session_id="session-123",
+        in_use=False,
+    )
+    
+    # Manually add to pool
+    gateway_client._pool[agent_id] = entry
+    
+    # Call _get_or_create
+    result = await gateway_client._get_or_create(agent_id)
+    
+    # Verify returned entry has in_use=True
+    assert result is entry
+    assert result.in_use is True
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_waits_for_busy_entry(gateway_client):
+    """
+    Test that when an entry is in_use=True, _get_or_create waits until it becomes available.
+    """
+    agent_id = "test-agent-busy"
+    
+    # Create a healthy entry with in_use=True
+    mock_ws = AsyncMock()
+    mock_ws.ping = AsyncMock(return_value=None)
+    entry = _PoolEntry(
+        ws=mock_ws,
+        agent_id=agent_id,
+        session_id="session-123",
+        in_use=True,
+    )
+    
+    # Manually add to pool
+    gateway_client._pool[agent_id] = entry
+    
+    # Start _get_or_create as a task
+    task = asyncio.create_task(gateway_client._get_or_create(agent_id))
+    
+    # Give it time to start waiting
+    await asyncio.sleep(0.05)
+    
+    # Set in_use to False to unblock
+    entry.in_use = False
+    
+    # Task should complete and return the same entry (now reserved with in_use=True)
+    result = await asyncio.wait_for(task, timeout=1.0)
+    assert result is entry
+    assert result.in_use is True
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_timeout_on_permanently_busy_entry(gateway_client):
+    """
+    Test that when entry stays in_use=True beyond connect_timeout, GatewayUnavailableError is raised.
+    """
+    agent_id = "test-agent-timeout"
+    
+    # Create a healthy entry with in_use=True
+    mock_ws = AsyncMock()
+    mock_ws.ping = AsyncMock(return_value=None)
+    entry = _PoolEntry(
+        ws=mock_ws,
+        agent_id=agent_id,
+        session_id="session-123",
+        in_use=True,
+    )
+    
+    # Manually add to pool
+    gateway_client._pool[agent_id] = entry
+    gateway_client._connect_timeout = 0.1
+    
+    # Call _get_or_create with short timeout
+    with pytest.raises(GatewayUnavailableError) as exc_info:
+        await gateway_client._get_or_create(agent_id)
+    
+    assert "Timed out" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_evict_oldest_unlocked_skips_in_use(gateway_client):
+    """
+    Test that _evict_oldest_unlocked skips entries that are in_use.
+    """
+    agent_id_old = "agent-old"
+    agent_id_new = "agent-new"
+    
+    # Create two entries
+    mock_ws_old = AsyncMock()
+    mock_ws_new = AsyncMock()
+    
+    entry_old = _PoolEntry(
+        ws=mock_ws_old,
+        agent_id=agent_id_old,
+        session_id="session-old",
+        in_use=True,
+        last_used=0,  # Very old
+    )
+    
+    entry_new = _PoolEntry(
+        ws=mock_ws_new,
+        agent_id=agent_id_new,
+        session_id="session-new",
+        in_use=False,
+        last_used=100,  # Recent
+    )
+    
+    # Add to pool
+    gateway_client._pool[agent_id_old] = entry_old
+    gateway_client._pool[agent_id_new] = entry_new
+    
+    # Call _evict_oldest_unlocked
+    await gateway_client._evict_oldest_unlocked()
+    
+    # Verify agent-old is still in pool (skipped because in_use)
+    assert agent_id_old in gateway_client._pool
+    # Verify agent-new was evicted (oldest among non-in_use)
+    assert agent_id_new not in gateway_client._pool
+
+
+@pytest.mark.asyncio
+async def test_evict_oldest_unlocked_noop_when_all_in_use(gateway_client):
+    """
+    Test that _evict_oldest_unlocked does nothing when all entries are in_use.
+    """
+    agent_id_1 = "agent-1"
+    agent_id_2 = "agent-2"
+    
+    # Create two entries, both in_use
+    mock_ws_1 = AsyncMock()
+    mock_ws_2 = AsyncMock()
+    
+    entry_1 = _PoolEntry(
+        ws=mock_ws_1,
+        agent_id=agent_id_1,
+        session_id="session-1",
+        in_use=True,
+    )
+    
+    entry_2 = _PoolEntry(
+        ws=mock_ws_2,
+        agent_id=agent_id_2,
+        session_id="session-2",
+        in_use=True,
+    )
+    
+    # Add to pool
+    gateway_client._pool[agent_id_1] = entry_1
+    gateway_client._pool[agent_id_2] = entry_2
+    
+    # Call _evict_oldest_unlocked
+    await gateway_client._evict_oldest_unlocked()
+    
+    # Verify both are still in pool
+    assert agent_id_1 in gateway_client._pool
+    assert agent_id_2 in gateway_client._pool

@@ -105,19 +105,18 @@ class GatewayClient:
             request_id = str(uuid.uuid4())
 
             try:
-                payload: Dict[str, Any] = {
-                    "type": "message",
-                    "content": message,
-                    "request_id": request_id,
-                }
-                if source:
-                    payload["source"] = source
-                msg_payload = json.dumps(payload)
-                await entry.ws.send(msg_payload)
-                entry.last_used = time.monotonic()
-                entry.in_use = True
-
                 try:
+                    payload: Dict[str, Any] = {
+                        "type": "message",
+                        "content": message,
+                        "request_id": request_id,
+                    }
+                    if source:
+                        payload["source"] = source
+                    msg_payload = json.dumps(payload)
+                    await entry.ws.send(msg_payload)
+                    entry.last_used = time.monotonic()
+
                     while True:
                         try:
                             raw = await asyncio.wait_for(
@@ -258,30 +257,61 @@ class GatewayClient:
     async def _get_or_create(
         self, agent_id: str, conversation_id: Optional[str] = None
     ) -> _PoolEntry:
-        async with self._pool_lock:
-            entry = self._pool.get(agent_id)
-            if entry and entry.healthy:
-                try:
-                    await entry.ws.ping()
-                    entry.last_used = time.monotonic()
-                    return entry
-                except Exception:
-                    logger.info(f"[WS-GATEWAY] Stale connection for {agent_id}, reconnecting")
-                    await self._close_entry(entry)
-                    del self._pool[agent_id]
+        wait_deadline = time.monotonic() + self._connect_timeout
 
-            if len(self._pool) >= self._max_connections:
-                await self._evict_oldest_unlocked()
+        while True:
+            async with self._pool_lock:
+                entry = self._pool.get(agent_id)
+                if entry and entry.healthy:
+                    if entry.in_use:
+                        if time.monotonic() >= wait_deadline:
+                            raise GatewayUnavailableError(
+                                f"Timed out waiting for available session for agent {agent_id}"
+                            )
+                    else:
+                        try:
+                            await entry.ws.ping()
+                            entry.last_used = time.monotonic()
+                            entry.in_use = True
+                            return entry
+                        except Exception:
+                            logger.info(f"[WS-GATEWAY] Stale connection for {agent_id}, reconnecting")
+                            await self._close_entry(entry)
+                            del self._pool[agent_id]
 
-        new_entry = await self._connect_and_init(agent_id, conversation_id)
+                if len(self._pool) >= self._max_connections:
+                    await self._evict_oldest_unlocked()
 
-        async with self._pool_lock:
-            old = self._pool.get(agent_id)
-            if old:
-                await self._close_entry(old)
-            self._pool[agent_id] = new_entry
+            if entry and entry.healthy and entry.in_use:
+                await asyncio.sleep(0.01)
+                continue
 
-        return new_entry
+            new_entry = await self._connect_and_init(agent_id, conversation_id)
+
+            async with self._pool_lock:
+                current = self._pool.get(agent_id)
+                if current and current.healthy:
+                    if current.in_use:
+                        await self._close_entry(new_entry)
+                    else:
+                        await self._close_entry(new_entry)
+                        current.last_used = time.monotonic()
+                        current.in_use = True
+                        return current
+                else:
+                    old = self._pool.get(agent_id)
+                    if old:
+                        await self._close_entry(old)
+                    new_entry.last_used = time.monotonic()
+                    new_entry.in_use = True
+                    self._pool[agent_id] = new_entry
+                    return new_entry
+
+            if time.monotonic() >= wait_deadline:
+                raise GatewayUnavailableError(
+                    f"Timed out waiting for available session for agent {agent_id}"
+                )
+            await asyncio.sleep(0.01)
 
     async def _connect_and_init(
         self, agent_id: str, conversation_id: Optional[str] = None
@@ -357,9 +387,14 @@ class GatewayClient:
                 await self._close_entry(entry)
 
     async def _evict_oldest_unlocked(self) -> None:
+        """Evict the oldest idle (not in_use) connection to make room."""
         if not self._pool:
             return
-        oldest_key = min(self._pool, key=lambda k: self._pool[k].last_used)
+        # Only consider entries that are not actively streaming
+        candidates = {k: v for k, v in self._pool.items() if not v.in_use}
+        if not candidates:
+            return  # All connections are in use, can't evict any
+        oldest_key = min(candidates, key=lambda k: candidates[k].last_used)
         entry = self._pool.pop(oldest_key)
         logger.info(f"[WS-GATEWAY] Evicting idle connection for agent {oldest_key}")
         await self._close_entry(entry)
