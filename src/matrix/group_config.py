@@ -60,7 +60,11 @@ class GroupConfig:
 GroupsConfig = Dict[str, GroupConfig]
 
 
-def _parse_mode(value: str) -> GroupMode:
+def _parse_mode(value: object) -> GroupMode:
+    if not isinstance(value, str):
+        raise ValueError(
+            f"Group mode must be a string, got {type(value).__name__}: {value!r}"
+        )
     normalised = value.strip().lower()
     if normalised in _VALID_MODES:
         return normalised  # type: ignore[return-value]

@@ -237,9 +237,9 @@ class TestResolveLettaProjectDir:
             
             assert result == "/opt/override"
             
-            # Verify state was updated
+            # Verify state was NOT updated (bd-lc4b: --path is one-shot override)
             state = get_letta_code_room_state("!room:test.com")
-            assert state["projectDir"] == "/opt/override"
+            assert state.get("projectDir") is None
 
     @pytest.mark.asyncio
     async def test_resolve_from_room_state(self, mock_config, mock_logger, tmp_path):
