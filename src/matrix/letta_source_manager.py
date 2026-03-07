@@ -38,6 +38,7 @@ class LettaSourceManager:
 
         self._source_cache: Dict[str, str] = {}
         self._cache_lock = asyncio.Lock()
+        self._room_locks: Dict[str, asyncio.Lock] = {}
 
     async def _run_sync(self, func, *args, **kwargs):
         loop = asyncio.get_event_loop()
@@ -79,68 +80,74 @@ class LettaSourceManager:
         return config
 
     async def get_or_create_source(self, room_id: str, agent_id: Optional[str] = None) -> str:
+        # Per-room lock prevents duplicate folder creation for the same room
         async with self._cache_lock:
+            if room_id not in self._room_locks:
+                self._room_locks[room_id] = asyncio.Lock()
+            room_lock = self._room_locks[room_id]
+
+        async with room_lock:
+            # Re-check cache under room lock
             if room_id in self._source_cache:
                 return self._source_cache[room_id]
 
-        safe_room_id = room_id.replace("!", "").replace(":", "-")
-        folder_name = f"matrix-{safe_room_id}"
+            safe_room_id = room_id.replace("!", "").replace(":", "-")
+            folder_name = f"matrix-{safe_room_id}"
 
-        async def _do_get_or_create() -> str:
-            try:
-                folders_page = await self._run_sync(
-                    self.letta_client.folders.list,
-                    name=folder_name,
-                )
-                folders = folders_page.items if hasattr(folders_page, "items") else folders_page
-                if folders and len(folders) > 0:
-                    folder_id = folders[0].id
-                    self.logger.info(f"Found existing folder by name: {folder_id}")
-                    return folder_id
-            except Exception as e:
-                self.logger.debug(f"Folder not found by name: {e}")
+            async def _do_get_or_create() -> str:
+                try:
+                    folders_page = await self._run_sync(
+                        self.letta_client.folders.list,
+                        name=folder_name,
+                    )
+                    folders = folders_page.items if hasattr(folders_page, "items") else folders_page
+                    if folders and len(folders) > 0:
+                        folder_id = folders[0].id
+                        self.logger.info(f"Found existing folder by name: {folder_id}")
+                        return folder_id
+                except Exception as e:
+                    self.logger.debug(f"Folder not found by name: {e}")
 
-            self.logger.info(f"Creating new folder: {folder_name}")
-            embedding_config = await self._run_sync(self.get_embedding_config, agent_id)
+                self.logger.info(f"Creating new folder: {folder_name}")
+                embedding_config = await self._run_sync(self.get_embedding_config, agent_id)
 
-            try:
-                folder = await self._run_sync(
-                    self.letta_client.folders.create,
-                    name=folder_name,
-                    description=f"Documents from Matrix room {room_id}",
-                )
-                self.logger.info(f"Created new folder {folder_name}: {folder.id}")
-                return folder.id
-            except Exception as e:
-                error_str = str(e)
-                if "409" in error_str or "already exists" in error_str.lower() or "unique" in error_str.lower():
-                    self.logger.info(f"Folder {folder_name} already exists (conflict), fetching...")
-                    try:
-                        folders_page = await self._run_sync(
-                            self.letta_client.folders.list,
-                            name=folder_name,
-                        )
-                        folders = folders_page.items if hasattr(folders_page, "items") else folders_page
-                        if folders and len(folders) > 0:
-                            folder_id = folders[0].id
-                            self.logger.info(f"Found folder after conflict: {folder_id}")
-                            return folder_id
-                    except Exception as e2:
-                        self.logger.error(f"Failed to get folder after 409: {e2}")
-                raise FileUploadError(f"Failed to create folder: {e}")
+                try:
+                    folder = await self._run_sync(
+                        self.letta_client.folders.create,
+                        name=folder_name,
+                        description=f"Documents from Matrix room {room_id}",
+                    )
+                    self.logger.info(f"Created new folder {folder_name}: {folder.id}")
+                    return folder.id
+                except Exception as e:
+                    error_str = str(e)
+                    if "409" in error_str or "already exists" in error_str.lower() or "unique" in error_str.lower():
+                        self.logger.info(f"Folder {folder_name} already exists (conflict), fetching...")
+                        try:
+                            folders_page = await self._run_sync(
+                                self.letta_client.folders.list,
+                                name=folder_name,
+                            )
+                            folders = folders_page.items if hasattr(folders_page, "items") else folders_page
+                            if folders and len(folders) > 0:
+                                folder_id = folders[0].id
+                                self.logger.info(f"Found folder after conflict: {folder_id}")
+                                return folder_id
+                        except Exception as e2:
+                            self.logger.error(f"Failed to get folder after 409: {e2}")
+                    raise FileUploadError(f"Failed to create folder: {e}")
 
-        folder_id = await retry_async(
-            _do_get_or_create,
-            operation_name="Get/create Letta folder",
-            max_attempts=self.max_retries,
-            base_delay=self.retry_delay,
-            logger=self.logger,
-        )
+            folder_id = await retry_async(
+                _do_get_or_create,
+                operation_name="Get/create Letta folder",
+                max_attempts=self.max_retries,
+                base_delay=self.retry_delay,
+                logger=self.logger,
+            )
 
-        async with self._cache_lock:
             self._source_cache[room_id] = folder_id
 
-        return folder_id
+            return folder_id
 
     async def attach_source_to_agent(self, source_id: str, agent_id: str) -> None:
         try:
