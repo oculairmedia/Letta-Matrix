@@ -111,7 +111,7 @@ async def test_get_agent_token_returns_token_on_successful_login(
 
 @pytest.mark.asyncio
 async def test_repair_agent_password_sends_admin_room_command(
-    config: Config, logger: logging.Logger
+    config: Config, logger: logging.Logger, caplog: pytest.LogCaptureFixture
 ) -> None:
     mapping = {
         "agent_id": "agent-1",
@@ -154,10 +154,13 @@ async def test_repair_agent_password_sends_admin_room_command(
         patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
         patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
+        caplog.at_level(logging.DEBUG),
     ):
         new_password = await agent_auth.repair_agent_password(mapping, config, logger)
 
-    assert isinstance(new_password, str)
+    assert isinstance(new_password, str), (
+        f"Expected str, got None. caplog: {caplog.text}"
+    )
     assert new_password.startswith("AgentRepair_")
     assert http_session.put.call_count == 1
 
