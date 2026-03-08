@@ -5,7 +5,7 @@ Agent authentication and token management helpers.
 import asyncio
 import logging
 import time
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 import aiohttp
 
@@ -22,9 +22,6 @@ _REPAIR_COOLDOWN_SECONDS = 300  # 5 minutes
 _repair_last_attempt: Dict[str, float] = {}
 
 
-def _create_http_session() -> aiohttp.ClientSession:
-    """Create an aiohttp session. Extracted for clean test patching."""
-    return aiohttp.ClientSession()
 
 
 async def get_agent_token(
@@ -111,6 +108,7 @@ async def repair_agent_password(
     config: Config,
     logger: logging.Logger,
     caller: str = "",
+    _session_factory: Callable[[], aiohttp.ClientSession] = aiohttp.ClientSession,
 ) -> Optional[str]:
     """
     Self-healing: reset agent Matrix user password via Tuwunel admin room command.
@@ -140,7 +138,7 @@ async def repair_agent_password(
         admin_pass = os.getenv("MATRIX_ADMIN_PASSWORD", os.getenv("MATRIX_PASSWORD", ""))
         admin_room = "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca"
 
-        async with _create_http_session() as http:
+        async with _session_factory() as http:
             # Login as admin to get token
             admin_username_short = admin_user.split(":")[0].replace("@", "")
             login_resp = await http.post(

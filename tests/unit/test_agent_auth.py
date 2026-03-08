@@ -111,7 +111,7 @@ async def test_get_agent_token_returns_token_on_successful_login(
 
 @pytest.mark.asyncio
 async def test_repair_agent_password_sends_admin_room_command(
-    config: Config, logger: logging.Logger, caplog: pytest.LogCaptureFixture
+    config: Config, logger: logging.Logger
 ) -> None:
     mapping = {
         "agent_id": "agent-1",
@@ -150,17 +150,15 @@ async def test_repair_agent_password_sends_admin_room_command(
     db_instance.get_by_agent_id.return_value = db_record
 
     with (
-        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
         patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
-        caplog.at_level(logging.DEBUG),
     ):
-        new_password = await agent_auth.repair_agent_password(mapping, config, logger)
+        new_password = await agent_auth.repair_agent_password(
+            mapping, config, logger, _session_factory=lambda: http_session,
+        )
 
-    assert isinstance(new_password, str), (
-        f"Expected str, got None. caplog: {caplog.text}"
-    )
+    assert isinstance(new_password, str)
     assert new_password.startswith("AgentRepair_")
     assert http_session.put.call_count == 1
 
@@ -193,11 +191,14 @@ async def test_repair_agent_password_respects_cooldown(
     http_session.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.time.monotonic", side_effect=[1000.0, 1000.0, 1100.0]),
     ):
-        first = await agent_auth.repair_agent_password(mapping, config, logger)
-        second = await agent_auth.repair_agent_password(mapping, config, logger)
+        first = await agent_auth.repair_agent_password(
+            mapping, config, logger, _session_factory=lambda: http_session,
+        )
+        second = await agent_auth.repair_agent_password(
+            mapping, config, logger, _session_factory=lambda: http_session,
+        )
 
     assert first is None
     assert second is None
@@ -249,12 +250,13 @@ async def test_repair_confirmation_correlates_to_agent_username(
     db_instance.get_by_agent_id.return_value = db_record
 
     with (
-        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
         patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
     ):
-        new_password = await agent_auth.repair_agent_password(mapping, config, logger)
+        new_password = await agent_auth.repair_agent_password(
+            mapping, config, logger, _session_factory=lambda: http_session,
+        )
 
     assert isinstance(new_password, str)
     assert new_password.startswith("AgentRepair_")
@@ -305,12 +307,13 @@ async def test_repair_ignores_other_agent_confirmation(
     db_instance.get_by_agent_id.return_value = db_record
 
     with (
-        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
         patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
     ):
-        new_password = await agent_auth.repair_agent_password(mapping, config, logger)
+        new_password = await agent_auth.repair_agent_password(
+            mapping, config, logger, _session_factory=lambda: http_session,
+        )
 
     # Should still return password (persisted optimistically) even without correlated confirmation
     assert isinstance(new_password, str)
@@ -361,12 +364,13 @@ async def test_repair_expanded_polling_window(
     db_instance.get_by_agent_id.return_value = db_record
 
     with (
-        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
         patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
     ):
-        new_password = await agent_auth.repair_agent_password(mapping, config, logger)
+        new_password = await agent_auth.repair_agent_password(
+            mapping, config, logger, _session_factory=lambda: http_session,
+        )
 
     # Verify the messages URL contains limit=10
     get_call = http_session.get.call_args
