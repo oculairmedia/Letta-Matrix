@@ -192,6 +192,7 @@ def _parse_stream_event(
         return None
 
     if mapped_type == StreamEventType.REASONING and not include_reasoning:
+        logger.debug("[GW-STREAM] Filtered reasoning event (include_reasoning=False)")
         return None
 
     metadata: Dict[str, Any] = {}

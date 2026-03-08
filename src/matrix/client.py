@@ -497,7 +497,7 @@ async def _handle_stop_command(room, config, logger, room_agent_id, room_agent_n
             aborted = await gw.abort(room_agent_id)
             if aborted:
                 stopped = True
-                logger.info(f"[STOP] Sent gateway abort for agent {room_agent_id}")
+                logger.info(f"[STOP] Sent gateway abort + evicted WS connection for agent {room_agent_id}")
         except Exception as e:
             logger.warning(f"[STOP] Gateway abort failed: {e}")
 
