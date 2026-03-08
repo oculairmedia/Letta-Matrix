@@ -238,7 +238,14 @@ class GatewayClient:
 
     async def abort(self, agent_id: str) -> bool:
         """
-        Send an abort frame to the gateway for the given agent.
+        Send an abort frame to the gateway for the given agent,
+        then evict the connection from the pool.
+
+        After abort, the WS recv() buffer may still contain buffered
+        reasoning events from the cancelled stream.  Reusing the same
+        connection would leak those stale events into the next request.
+        Evicting forces a fresh connection on the next message.
+
         Returns True if the abort was sent, False if no active connection.
         """
         async with self._pool_lock:
@@ -247,11 +254,13 @@ class GatewayClient:
                 return False
             try:
                 await entry.ws.send(json.dumps({"type": "abort"}))
-                logger.info(f"[WS-GATEWAY] Sent abort for agent {agent_id} (keeping connection alive)")
-                return True
+                logger.info(f"[WS-GATEWAY] Sent abort for agent {agent_id}, evicting connection")
             except Exception as exc:
                 logger.warning(f"[WS-GATEWAY] Failed to send abort for {agent_id}: {exc}")
-                return False
+            # Always evict after abort — stale events may be buffered
+            self._pool.pop(agent_id, None)
+            await self._close_entry(entry)
+            return True
     # ── pool internals ────────────────────────────────────────────
 
     async def _get_or_create(
