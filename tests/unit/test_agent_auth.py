@@ -150,7 +150,7 @@ async def test_repair_agent_password_sends_admin_room_command(
     db_instance.get_by_agent_id.return_value = db_record
 
     with (
-        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
         patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
@@ -190,7 +190,7 @@ async def test_repair_agent_password_respects_cooldown(
     http_session.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.time.monotonic", side_effect=[1000.0, 1000.0, 1100.0]),
     ):
         first = await agent_auth.repair_agent_password(mapping, config, logger)
@@ -246,7 +246,7 @@ async def test_repair_confirmation_correlates_to_agent_username(
     db_instance.get_by_agent_id.return_value = db_record
 
     with (
-        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
         patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
@@ -302,7 +302,7 @@ async def test_repair_ignores_other_agent_confirmation(
     db_instance.get_by_agent_id.return_value = db_record
 
     with (
-        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
         patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
@@ -358,7 +358,7 @@ async def test_repair_expanded_polling_window(
     db_instance.get_by_agent_id.return_value = db_record
 
     with (
-        patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
+        patch("src.matrix.agent_auth._create_http_session", return_value=http_session),
         patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
         patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),

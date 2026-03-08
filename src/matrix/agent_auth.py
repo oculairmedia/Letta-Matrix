@@ -22,6 +22,11 @@ _REPAIR_COOLDOWN_SECONDS = 300  # 5 minutes
 _repair_last_attempt: Dict[str, float] = {}
 
 
+def _create_http_session() -> aiohttp.ClientSession:
+    """Create an aiohttp session. Extracted for clean test patching."""
+    return aiohttp.ClientSession()
+
+
 async def get_agent_token(
     room_id: str,
     config: Config,
@@ -135,7 +140,7 @@ async def repair_agent_password(
         admin_pass = os.getenv("MATRIX_ADMIN_PASSWORD", os.getenv("MATRIX_PASSWORD", ""))
         admin_room = "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca"
 
-        async with aiohttp.ClientSession() as http:
+        async with _create_http_session() as http:
             # Login as admin to get token
             admin_username_short = admin_user.split(":")[0].replace("@", "")
             login_resp = await http.post(
