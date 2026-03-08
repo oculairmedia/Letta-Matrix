@@ -120,6 +120,7 @@ async def repair_agent_password(
     agent_id = agent_mapping.get("agent_id", "")
     last_attempt = _repair_last_attempt.get(agent_id, 0)
     if time.monotonic() - last_attempt < _REPAIR_COOLDOWN_SECONDS:
+        print(f"DEBUG_REPAIR: cooldown hit for {agent_id}")  # CI diagnosis
         return None  # Still in cooldown, don't retry yet
     _repair_last_attempt[agent_id] = time.monotonic()
 
@@ -149,10 +150,12 @@ async def repair_agent_password(
                 timeout=_AGENT_LOGIN_TIMEOUT,
             )
             if login_resp.status != 200:
+                print(f"DEBUG_REPAIR: admin login failed status={login_resp.status}")  # CI diagnosis
                 logger.error(f"[{caller}] Password repair: admin login failed ({login_resp.status})")
                 return None
             admin_token = (await login_resp.json()).get("access_token")
             if not admin_token:
+                print(f"DEBUG_REPAIR: no admin token")  # CI diagnosis
                 return None
 
             # Reset password via Tuwunel admin room command
@@ -241,8 +244,10 @@ async def repair_agent_password(
             )
             return new_password
 
+        print(f"DEBUG_REPAIR: mapping not found for {agent_id}")  # CI diagnosis
         logger.error(f"[{caller}] Password repair: mapping not found for {agent_id}")
         return None
     except Exception as e:
+        import traceback; traceback.print_exc()  # DEBUG: CI diagnosis
         logger.error(f"[{caller}] Password repair failed for {agent_username}: {e}", exc_info=True)
         return None
