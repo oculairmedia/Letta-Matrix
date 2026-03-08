@@ -156,6 +156,7 @@ async def test_repair_agent_password_sends_admin_room_command(
             mapping, config, logger, _session_factory=lambda: http_session,
             _db_factory=lambda: db_instance,
             _invalidate_fn=lambda: None,
+            _cooldown_override=0,
         )
 
     assert isinstance(new_password, str)
@@ -254,6 +255,7 @@ async def test_repair_confirmation_correlates_to_agent_username(
             mapping, config, logger, _session_factory=lambda: http_session,
             _db_factory=lambda: db_instance,
             _invalidate_fn=lambda: None,
+            _cooldown_override=0,
         )
 
     assert isinstance(new_password, str)
@@ -309,6 +311,7 @@ async def test_repair_ignores_other_agent_confirmation(
             mapping, config, logger, _session_factory=lambda: http_session,
             _db_factory=lambda: db_instance,
             _invalidate_fn=lambda: None,
+            _cooldown_override=0,
         )
 
     # Should still return password (persisted optimistically) even without correlated confirmation
@@ -364,6 +367,7 @@ async def test_repair_expanded_polling_window(
             mapping, config, logger, _session_factory=lambda: http_session,
             _db_factory=lambda: db_instance,
             _invalidate_fn=lambda: None,
+            _cooldown_override=0,
         )
 
     # Verify the messages URL contains limit=10

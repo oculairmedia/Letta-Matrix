@@ -111,6 +111,7 @@ async def repair_agent_password(
     _session_factory: Callable[[], aiohttp.ClientSession] = aiohttp.ClientSession,
     _db_factory: Callable[[], AgentMappingDB] = AgentMappingDB,
     _invalidate_fn: Callable[[], None] = invalidate_cache,
+    _cooldown_override: Optional[int] = None,
 ) -> Optional[str]:
     """
     Self-healing: reset agent Matrix user password via Tuwunel admin room command.
@@ -118,9 +119,9 @@ async def repair_agent_password(
     Returns the new password on success, None on failure.
     """
     agent_id = agent_mapping.get("agent_id", "")
+    cooldown = _cooldown_override if _cooldown_override is not None else _REPAIR_COOLDOWN_SECONDS
     last_attempt = _repair_last_attempt.get(agent_id, 0)
-    if time.monotonic() - last_attempt < _REPAIR_COOLDOWN_SECONDS:
-        print(f"DEBUG: cooldown for {agent_id}", flush=True)
+    if time.monotonic() - last_attempt < cooldown:
         return None  # Still in cooldown, don't retry yet
     _repair_last_attempt[agent_id] = time.monotonic()
 
@@ -150,12 +151,10 @@ async def repair_agent_password(
                 timeout=_AGENT_LOGIN_TIMEOUT,
             )
             if login_resp.status != 200:
-                print(f"DEBUG: login fail {login_resp.status}", flush=True)
                 logger.error(f"[{caller}] Password repair: admin login failed ({login_resp.status})")
                 return None
             admin_token = (await login_resp.json()).get("access_token")
             if not admin_token:
-                print("DEBUG: no token", flush=True)
                 return None
 
             # Reset password via Tuwunel admin room command
@@ -244,11 +243,8 @@ async def repair_agent_password(
             )
             return new_password
 
-        print(f"DEBUG: no mapping for {agent_id}", flush=True)
         logger.error(f"[{caller}] Password repair: mapping not found for {agent_id}")
         return None
     except Exception as e:
-        import traceback; traceback.print_exc()
-        print(f"DEBUG: exception {e}", flush=True)
         logger.error(f"[{caller}] Password repair failed for {agent_username}: {e}", exc_info=True)
         return None
