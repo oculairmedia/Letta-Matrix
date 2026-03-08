@@ -18,6 +18,8 @@ def _make_async_cm(response: MagicMock) -> MagicMock:
 @pytest.fixture(autouse=True)
 def _reset_repair_attempts() -> None:
     agent_auth._repair_last_attempt.clear()
+    yield
+    agent_auth._repair_last_attempt.clear()
 
 
 @pytest.fixture
@@ -114,9 +116,9 @@ async def test_repair_agent_password_sends_admin_room_command(
     config: Config, logger: logging.Logger
 ) -> None:
     mapping = {
-        "agent_id": "agent-1",
-        "agent_name": "Agent One",
-        "matrix_user_id": "@agent_1:matrix.test",
+        "agent_id": "agent-cmd",
+        "agent_name": "Agent Cmd",
+        "matrix_user_id": "@agent_cmd:matrix.test",
         "matrix_password": "old-pass",
     }
 
@@ -141,9 +143,9 @@ async def test_repair_agent_password_sends_admin_room_command(
     http_session.__aexit__ = AsyncMock(return_value=None)
 
     db_record = SimpleNamespace(
-        agent_id="agent-1",
-        agent_name="Agent One",
-        matrix_user_id="@agent_1:matrix.test",
+        agent_id="agent-cmd",
+        agent_name="Agent Cmd",
+        matrix_user_id="@agent_cmd:matrix.test",
         room_id="!room:test",
     )
     db_instance = MagicMock()
@@ -162,7 +164,7 @@ async def test_repair_agent_password_sends_admin_room_command(
 
     put_call = http_session.put.call_args
     assert "rooms/!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca/send/m.room.message/" in put_call.args[0]
-    assert put_call.kwargs["json"]["body"].startswith("!admin users reset-password agent_1 ")
+    assert put_call.kwargs["json"]["body"].startswith("!admin users reset-password agent_cmd ")
 
 
 @pytest.mark.asyncio
@@ -170,9 +172,9 @@ async def test_repair_agent_password_respects_cooldown(
     config: Config, logger: logging.Logger
 ) -> None:
     mapping = {
-        "agent_id": "agent-1",
-        "agent_name": "Agent One",
-        "matrix_user_id": "@agent_1:matrix.test",
+        "agent_id": "agent-cooldown",
+        "agent_name": "Agent Cooldown",
+        "matrix_user_id": "@agent_cooldown:matrix.test",
         "matrix_password": "old-pass",
     }
 
@@ -209,9 +211,9 @@ async def test_repair_confirmation_correlates_to_agent_username(
 ) -> None:
     """Test that password repair correlates confirmation to the specific agent username"""
     mapping = {
-        "agent_id": "agent-1",
-        "agent_name": "Agent One",
-        "matrix_user_id": "@agent_1:matrix.test",
+        "agent_id": "agent-correlate",
+        "agent_name": "Agent Correlate",
+        "matrix_user_id": "@agent_correlate:matrix.test",
         "matrix_password": "old-pass",
     }
 
@@ -226,7 +228,7 @@ async def test_repair_confirmation_correlates_to_agent_username(
     messages_response.json = AsyncMock(
         return_value={
             "chunk": [
-                {"content": {"body": "Successfully reset the password for user agent_1"}}
+                {"content": {"body": "Successfully reset the password for user agent_correlate"}}
             ],
         }
     )
@@ -239,9 +241,9 @@ async def test_repair_confirmation_correlates_to_agent_username(
     http_session.__aexit__ = AsyncMock(return_value=None)
 
     db_record = SimpleNamespace(
-        agent_id="agent-1",
-        agent_name="Agent One",
-        matrix_user_id="@agent_1:matrix.test",
+        agent_id="agent-correlate",
+        agent_name="Agent Correlate",
+        matrix_user_id="@agent_correlate:matrix.test",
         room_id="!room:test",
     )
     db_instance = MagicMock()
@@ -264,9 +266,9 @@ async def test_repair_ignores_other_agent_confirmation(
 ) -> None:
     """Test that repair ignores success messages for other agents but persists password optimistically"""
     mapping = {
-        "agent_id": "agent-1",
-        "agent_name": "Agent One",
-        "matrix_user_id": "@agent_1:matrix.test",
+        "agent_id": "agent-ignore",
+        "agent_name": "Agent Ignore",
+        "matrix_user_id": "@agent_ignore:matrix.test",
         "matrix_password": "old-pass",
     }
 
@@ -294,9 +296,9 @@ async def test_repair_ignores_other_agent_confirmation(
     http_session.__aexit__ = AsyncMock(return_value=None)
 
     db_record = SimpleNamespace(
-        agent_id="agent-1",
-        agent_name="Agent One",
-        matrix_user_id="@agent_1:matrix.test",
+        agent_id="agent-ignore",
+        agent_name="Agent Ignore",
+        matrix_user_id="@agent_ignore:matrix.test",
         room_id="!room:test",
     )
     db_instance = MagicMock()
@@ -320,9 +322,9 @@ async def test_repair_expanded_polling_window(
 ) -> None:
     """Test that repair uses expanded polling window (limit=10 instead of limit=2)"""
     mapping = {
-        "agent_id": "agent-1",
-        "agent_name": "Agent One",
-        "matrix_user_id": "@agent_1:matrix.test",
+        "agent_id": "agent-poll",
+        "agent_name": "Agent Poll",
+        "matrix_user_id": "@agent_poll:matrix.test",
         "matrix_password": "old-pass",
     }
 
@@ -336,7 +338,7 @@ async def test_repair_expanded_polling_window(
     messages_response.json = AsyncMock(
         return_value={
             "chunk": [
-                {"content": {"body": "Successfully reset the password for user agent_1"}}
+                {"content": {"body": "Successfully reset the password for user agent_poll"}}
             ],
         }
     )
@@ -349,9 +351,9 @@ async def test_repair_expanded_polling_window(
     http_session.__aexit__ = AsyncMock(return_value=None)
 
     db_record = SimpleNamespace(
-        agent_id="agent-1",
-        agent_name="Agent One",
-        matrix_user_id="@agent_1:matrix.test",
+        agent_id="agent-poll",
+        agent_name="Agent Poll",
+        matrix_user_id="@agent_poll:matrix.test",
         room_id="!room:test",
     )
     db_instance = MagicMock()
