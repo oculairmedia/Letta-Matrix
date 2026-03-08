@@ -10,6 +10,8 @@ from typing import Dict, Optional
 import aiohttp
 
 from src.matrix.config import Config
+from src.models.agent_mapping import AgentMappingDB
+from src.core.mapping_service import invalidate_cache
 
 
 _AGENT_LOGIN_TIMEOUT = aiohttp.ClientTimeout(total=10)
@@ -216,8 +218,6 @@ async def repair_agent_password(
                 )
         # Update DB with new password (persist even without confirmation —
         # the command was sent successfully, and Tuwunel may just be slow to respond)
-        from src.models.agent_mapping import AgentMappingDB
-        from src.core.mapping_service import invalidate_cache
 
         db = AgentMappingDB()
         mapping = db.get_by_agent_id(agent_id)

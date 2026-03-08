@@ -240,6 +240,13 @@ async def send_to_letta_api_streaming(
         async for event in event_source:
             logger.debug(f"[STREAMING] Event: {event.type.value}")
 
+            # Defensive filter: skip reasoning events even if they leak
+            # through the stream reader (e.g. stale buffer after /stop abort)
+            if event.type == StreamEventType.REASONING:
+                logger.debug(f"[STREAMING] Filtered reasoning event (defensive)")
+                continue
+
+
             if event.type == StreamEventType.ASSISTANT and event.content:
                 parse_result = parse_directives(event.content)
                 voice_logger.debug(

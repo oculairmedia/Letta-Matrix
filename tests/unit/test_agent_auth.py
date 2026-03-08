@@ -151,8 +151,8 @@ async def test_repair_agent_password_sends_admin_room_command(
 
     with (
         patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
-        patch("src.models.agent_mapping.AgentMappingDB", return_value=db_instance),
-        patch("src.core.mapping_service.invalidate_cache"),
+        patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
+        patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
     ):
         new_password = await agent_auth.repair_agent_password(mapping, config, logger)
@@ -247,8 +247,8 @@ async def test_repair_confirmation_correlates_to_agent_username(
 
     with (
         patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
-        patch("src.models.agent_mapping.AgentMappingDB", return_value=db_instance),
-        patch("src.core.mapping_service.invalidate_cache"),
+        patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
+        patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
     ):
         new_password = await agent_auth.repair_agent_password(mapping, config, logger)
@@ -303,8 +303,8 @@ async def test_repair_ignores_other_agent_confirmation(
 
     with (
         patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
-        patch("src.models.agent_mapping.AgentMappingDB", return_value=db_instance),
-        patch("src.core.mapping_service.invalidate_cache"),
+        patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
+        patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
     ):
         new_password = await agent_auth.repair_agent_password(mapping, config, logger)
@@ -359,8 +359,8 @@ async def test_repair_expanded_polling_window(
 
     with (
         patch("src.matrix.agent_auth.aiohttp.ClientSession", return_value=http_session),
-        patch("src.models.agent_mapping.AgentMappingDB", return_value=db_instance),
-        patch("src.core.mapping_service.invalidate_cache"),
+        patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
+        patch("src.matrix.agent_auth.invalidate_cache"),
         patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
     ):
         new_password = await agent_auth.repair_agent_password(mapping, config, logger)
