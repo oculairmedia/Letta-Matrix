@@ -149,13 +149,11 @@ async def test_repair_agent_password_sends_admin_room_command(
     db_instance = MagicMock()
     db_instance.get_by_agent_id.return_value = db_record
 
-    with (
-        patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
-        patch("src.matrix.agent_auth.invalidate_cache"),
-        patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
-    ):
+    with patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)):
         new_password = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
+            _db_factory=lambda: db_instance,
+            _invalidate_fn=lambda: None,
         )
 
     assert isinstance(new_password, str)
@@ -249,13 +247,11 @@ async def test_repair_confirmation_correlates_to_agent_username(
     db_instance = MagicMock()
     db_instance.get_by_agent_id.return_value = db_record
 
-    with (
-        patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
-        patch("src.matrix.agent_auth.invalidate_cache"),
-        patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
-    ):
+    with patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)):
         new_password = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
+            _db_factory=lambda: db_instance,
+            _invalidate_fn=lambda: None,
         )
 
     assert isinstance(new_password, str)
@@ -306,13 +302,11 @@ async def test_repair_ignores_other_agent_confirmation(
     db_instance = MagicMock()
     db_instance.get_by_agent_id.return_value = db_record
 
-    with (
-        patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
-        patch("src.matrix.agent_auth.invalidate_cache"),
-        patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
-    ):
+    with patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)):
         new_password = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
+            _db_factory=lambda: db_instance,
+            _invalidate_fn=lambda: None,
         )
 
     # Should still return password (persisted optimistically) even without correlated confirmation
@@ -363,13 +357,11 @@ async def test_repair_expanded_polling_window(
     db_instance = MagicMock()
     db_instance.get_by_agent_id.return_value = db_record
 
-    with (
-        patch("src.matrix.agent_auth.AgentMappingDB", return_value=db_instance),
-        patch("src.matrix.agent_auth.invalidate_cache"),
-        patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)),
-    ):
+    with patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)):
         new_password = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
+            _db_factory=lambda: db_instance,
+            _invalidate_fn=lambda: None,
         )
 
     # Verify the messages URL contains limit=10

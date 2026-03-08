@@ -109,6 +109,8 @@ async def repair_agent_password(
     logger: logging.Logger,
     caller: str = "",
     _session_factory: Callable[[], aiohttp.ClientSession] = aiohttp.ClientSession,
+    _db_factory: Callable[[], AgentMappingDB] = AgentMappingDB,
+    _invalidate_fn: Callable[[], None] = invalidate_cache,
 ) -> Optional[str]:
     """
     Self-healing: reset agent Matrix user password via Tuwunel admin room command.
@@ -222,7 +224,7 @@ async def repair_agent_password(
         # Update DB with new password (persist even without confirmation —
         # the command was sent successfully, and Tuwunel may just be slow to respond)
 
-        db = AgentMappingDB()
+        db = _db_factory()
         mapping = db.get_by_agent_id(agent_id)
         if mapping:
             room_id = str(mapping.room_id) if mapping.room_id is not None else None
@@ -233,7 +235,7 @@ async def repair_agent_password(
                 new_password,
                 room_id=room_id,
             )
-            invalidate_cache()
+            _invalidate_fn()
             logger.info(
                 f"[{caller}] Password repair: reset password and updated DB for {agent_name} ({agent_username})"
             )
