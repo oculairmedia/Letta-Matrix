@@ -42,6 +42,7 @@ class MessageContext:
 
     event_body: str
     event_sender: str
+    event_sender_display_name: Optional[str]
     event_source: Optional[Dict]
     original_event_id: Optional[str]
     room_id: str
@@ -62,6 +63,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
     # Unpack context for local use
     event_body = ctx.event_body
     event_sender = ctx.event_sender
+    event_sender_display_name = ctx.event_sender_display_name
     event_source = ctx.event_source
     original_event_id = ctx.original_event_id
     room_id = ctx.room_id
@@ -194,7 +196,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
                 chat_id=room_id,
                 message_id=original_event_id,
                 sender=event_sender,
-                sender_name=event_sender,
+                sender_name=event_sender_display_name or event_sender,
                 timestamp=event_timestamp,
                 text=event_body,
                 is_group=True,

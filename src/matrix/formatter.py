@@ -44,7 +44,8 @@ def format_message_envelope(
     reply_to_event_id: Optional[str] = None,
     reply_to_sender: Optional[str] = None,
 ) -> str:
-    sender_value = _extract_localpart(sender) if sender else (sender_name or "")
+    # Prefer display name over raw MXID localpart
+    sender_value = sender_name if (sender_name and sender_name != sender) else (_extract_localpart(sender) if sender else "")
     context_lines = [f"- **Type**: {'Group chat' if is_group else 'Direct message'}"]
     if is_group and group_name:
         context_lines.append(f"- **Group**: {group_name}")
@@ -234,13 +235,14 @@ def format_portal_contact_envelope(
     message_id: Optional[str],
     timestamp: int | float | None,
     text: str,
+    contact_display_name: Optional[str] = None,
 ) -> str:
     """Format a passive observation envelope for bridged portal room messages.
 
     These are messages from contacts (WhatsApp, Telegram, etc.) that should
     be observed by the agent but NOT replied to in the portal room.
     """
-    sender_value = _extract_localpart(contact_sender) if contact_sender else "unknown"
+    sender_value = contact_display_name if contact_display_name else (_extract_localpart(contact_sender) if contact_sender else "unknown")
     metadata_lines = [
         "- **Channel**: Portal (bridged messaging)",
         f"- **Chat ID**: {chat_id}",

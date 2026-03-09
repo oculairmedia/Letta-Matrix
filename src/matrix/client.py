@@ -438,12 +438,13 @@ async def _maybe_handle_fs_mode(room, event, config, logger, room_agent_id, room
         logger.info(f"[OPENCODE-FS] Detected message from OpenCode identity: {opencode_mxid}")
     else:
         room_display = room.display_name or room.room_id
+        fs_sender_display = room.user_name(event.sender) if hasattr(room, 'user_name') else None
         fs_prompt = matrix_formatter.format_message_envelope(
             channel="Matrix",
             chat_id=room.room_id,
             message_id=getattr(event, "event_id", None),
             sender=event.sender,
-            sender_name=event.sender,
+            sender_name=fs_sender_display or event.sender,
             timestamp=fs_event_timestamp,
             text=event.body,
             is_group=True,
@@ -532,6 +533,9 @@ async def _handle_passive_portal_message(
     if event_timestamp is None:
         event_timestamp = int(_time.time() * 1000)
 
+    # Resolve display name for the contact sender
+    contact_display_name = room.user_name(event.sender) if hasattr(room, 'user_name') else None
+
     # Format with portal contact envelope — clearly marks sender as contact, not user
     envelope = matrix_formatter.format_portal_contact_envelope(
         contact_sender=event.sender,
@@ -540,6 +544,7 @@ async def _handle_passive_portal_message(
         message_id=getattr(event, "event_id", None),
         timestamp=event_timestamp,
         text=message_text,
+        contact_display_name=contact_display_name,
     )
 
     logger.info(
@@ -585,9 +590,12 @@ async def _dispatch_letta_task(room, event, config, logger, client, room_agent_i
     event_source = getattr(event, "source", None)
     event_source = event_source if isinstance(event_source, dict) else None
     silent_mode = bool(gating_result and gating_result.silent) if gating_result else False
+    # Resolve sender display name from room membership
+    sender_display_name = room.user_name(event.sender) if hasattr(room, 'user_name') else None
     msg_ctx = MessageContext(
         event_body=message_text,
         event_sender=event.sender,
+        event_sender_display_name=sender_display_name,
         event_source=event_source,
         original_event_id=getattr(event, "event_id", None),
         room_id=room.room_id,
