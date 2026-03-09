@@ -144,7 +144,7 @@ function findNearestMessageWithFields(messageDir: string): StoredMessage | null 
 
 function injectMessage(sessionID: string, text: string, cwd?: string): boolean {
   if (!text || text.trim().length === 0) {
-    console.log("[MatrixPlugin] Attempted to inject empty message, skipping");
+    debugLog("[MatrixPlugin] Attempted to inject empty message, skipping");
     return false;
   }
 
@@ -186,7 +186,7 @@ function injectMessage(sessionID: string, text: string, cwd?: string): boolean {
     }
     writeFileSync(path.join(partDir, `${partID}.json`), JSON.stringify(textPart, null, 2));
 
-    console.log(`[MatrixPlugin] Injected message ${messageID} into session ${sessionID}`);
+    debugLog(`[MatrixPlugin] Injected message ${messageID} into session ${sessionID}`);
     return true;
   } catch (err) {
     console.error(`[MatrixPlugin] Failed to inject message:`, err);
@@ -391,6 +391,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     receivedAt: number;
   }> = [];
   const processedEventIds = new Set<string>();
+  const injectedContentHashes = new Set<string>();
   let injectTimeout: NodeJS.Timeout | null = null;
   
   // Shared function: inject all queued Matrix messages into the active session
@@ -406,7 +407,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     // Combine all pending messages into one injection
     const combinedMessages = pendingMatrixMessages
       .filter(msg => !processedEventIds.has(msg.eventId))
-      .map(msg => `[Matrix from ${msg.sender} in ${msg.roomId}]\n${msg.body}`)
+      .map(msg => msg.body)
       .join("\n\n---\n\n");
     
     if (!combinedMessages.trim()) {
@@ -417,6 +418,14 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     // Mark all as processed
     pendingMatrixMessages.forEach(msg => processedEventIds.add(msg.eventId));
     pendingMatrixMessages.length = 0;
+    
+    // Track injected content hashes for echo prevention
+    const hash = combinedMessages.trim().substring(0, 150);
+    injectedContentHashes.add(hash);
+    if (injectedContentHashes.size > 100) {
+      const oldest = Array.from(injectedContentHashes).slice(0, 50);
+      oldest.forEach(h => injectedContentHashes.delete(h));
+    }
     
     // Limit processed set size
     if (processedEventIds.size > 200) {
@@ -676,13 +685,18 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       
       if (!content || !content.trim()) return;
       
-      if (content.includes("[Matrix from ")) return;
+      // Skip messages that were injected from Matrix (echo prevention)
+      const contentHash = content.trim().substring(0, 150);
+      if (injectedContentHashes.has(contentHash)) {
+        injectedContentHashes.delete(contentHash);
+        return;
+      }
       
       const messageId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       sendOutboundMessage("user", content, messageId);
       
-      const contentHash = content.trim().substring(0, 100);
-      sentUserMessages.add(contentHash);
+      const outboundHash = content.trim().substring(0, 100);
+      sentUserMessages.add(outboundHash);
       
       if (sentUserMessages.size > 50) {
         const oldest = Array.from(sentUserMessages).slice(0, 25);
@@ -734,7 +748,6 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
           
           const fullContent = Array.from(parts.values()).join("\n");
           
-          if (fullContent.includes("[Matrix from ")) continue;
           
           if (fullContent.trim() && fullContent.length > 20) {
             sendOutboundMessage("assistant", fullContent, messageID);
