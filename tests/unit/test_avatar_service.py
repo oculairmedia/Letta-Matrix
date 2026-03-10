@@ -90,3 +90,71 @@ async def test_set_default_avatar_for_agent_calls_upload_api(avatar_service):
         "mxc://matrix.test/avatar",
         "agent-token",
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_set_default_avatar_for_agent_caches_existing_avatar(avatar_service):
+    check_response = AsyncMock()
+    check_response.status = 200
+    check_response.json = AsyncMock(return_value={"avatar_url": "mxc://matrix.test/existing"})
+    check_response.__aenter__ = AsyncMock(return_value=check_response)
+    check_response.__aexit__ = AsyncMock(return_value=None)
+
+    session = AsyncMock()
+    session.get = Mock(return_value=check_response)
+    session.post = Mock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("src.core.avatar_service.aiohttp.ClientSession", return_value=session):
+        first_success = await avatar_service.set_default_avatar_for_agent(
+            "Agent One", "@agent_1:matrix.test"
+        )
+        second_success = await avatar_service.set_default_avatar_for_agent(
+            "Agent One", "@agent_1:matrix.test"
+        )
+
+    assert first_success is True
+    assert second_success is True
+    assert session.get.call_count == 1
+    session.post.assert_not_called()
+    avatar_service.user_manager.upload_avatar.assert_not_awaited()
+    avatar_service.user_manager.set_user_avatar.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_set_default_avatar_for_agent_caches_successful_upload(avatar_service):
+    check_response = AsyncMock()
+    check_response.status = 200
+    check_response.json = AsyncMock(return_value={})
+    check_response.__aenter__ = AsyncMock(return_value=check_response)
+    check_response.__aexit__ = AsyncMock(return_value=None)
+
+    login_response = AsyncMock()
+    login_response.status = 200
+    login_response.json = AsyncMock(return_value={"access_token": "agent-token"})
+    login_response.__aenter__ = AsyncMock(return_value=login_response)
+    login_response.__aexit__ = AsyncMock(return_value=None)
+
+    session = AsyncMock()
+    session.get = Mock(return_value=check_response)
+    session.post = Mock(return_value=login_response)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("src.core.avatar_service.aiohttp.ClientSession", return_value=session):
+        first_success = await avatar_service.set_default_avatar_for_agent(
+            "Agent One", "@agent_1:matrix.test"
+        )
+        second_success = await avatar_service.set_default_avatar_for_agent(
+            "Agent One", "@agent_1:matrix.test"
+        )
+
+    assert first_success is True
+    assert second_success is True
+    assert session.get.call_count == 1
+    assert session.post.call_count == 1
+    avatar_service.user_manager.upload_avatar.assert_awaited_once()
+    avatar_service.user_manager.set_user_avatar.assert_awaited_once()

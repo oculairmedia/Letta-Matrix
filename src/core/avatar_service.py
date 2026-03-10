@@ -4,7 +4,7 @@
 import hashlib
 import io
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 import aiohttp
 
@@ -30,6 +30,8 @@ class AvatarService:
         self.homeserver_url = config.homeserver_url
         self.user_manager: Optional[Any] = None
         self.mappings: Dict[str, Any] = {}
+        self._avatar_resolved_users: Set[str] = set()
+        self._avatar_sync_in_flight: Set[str] = set()
 
     async def set_default_avatar_for_agent(
         self,
@@ -39,19 +41,30 @@ class AvatarService:
     ) -> bool:
         _ = admin_token
 
-        if not HAS_PIL:
-            self.logger.warning(
-                f"Pillow not installed, skipping avatar generation for {agent_name}"
-            )
-            return False
+        if matrix_user_id in self._avatar_resolved_users:
+            return True
 
-        if self.user_manager is None:
-            self.logger.warning(
-                f"User manager unavailable, cannot set avatar for {agent_name}"
+        if matrix_user_id in self._avatar_sync_in_flight:
+            self.logger.debug(
+                f"Avatar sync already in flight for {agent_name}, skipping duplicate check"
             )
-            return False
+            return True
+
+        self._avatar_sync_in_flight.add(matrix_user_id)
 
         try:
+            if not HAS_PIL:
+                self.logger.warning(
+                    f"Pillow not installed, skipping avatar generation for {agent_name}"
+                )
+                return False
+
+            if self.user_manager is None:
+                self.logger.warning(
+                    f"User manager unavailable, cannot set avatar for {agent_name}"
+                )
+                return False
+
             try:
                 check_url = (
                     f"{self.homeserver_url}/_matrix/client/v3/profile/{matrix_user_id}/avatar_url"
@@ -61,6 +74,7 @@ class AvatarService:
                         if response.status == 200:
                             data = await response.json()
                             if data.get("avatar_url"):
+                                self._avatar_resolved_users.add(matrix_user_id)
                                 self.logger.debug(
                                     f"Agent {agent_name} already has avatar, skipping"
                                 )
@@ -132,6 +146,7 @@ class AvatarService:
             )
 
             if success:
+                self._avatar_resolved_users.add(matrix_user_id)
                 self.logger.info(f"Successfully set avatar for agent {agent_name}")
             else:
                 self.logger.warning(f"Failed to set avatar for agent {agent_name}")
@@ -144,6 +159,8 @@ class AvatarService:
                 exc_info=True,
             )
             return False
+        finally:
+            self._avatar_sync_in_flight.discard(matrix_user_id)
 
     def _generate_avatar_image(self, agent_name: str, size: int = 256) -> Optional[bytes]:
         if not HAS_PIL or Image is None or ImageDraw is None or ImageFont is None:
