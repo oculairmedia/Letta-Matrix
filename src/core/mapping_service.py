@@ -327,6 +327,7 @@ def create_portal_link(
     enabled: bool = True,
     relay_mode: bool = True,
     mention_enabled: bool = False,
+    triage_agent_id: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Create a portal link between an agent and a bridged room.
@@ -335,13 +336,14 @@ def create_portal_link(
         agent_id: The Letta agent ID
         room_id: The Matrix room ID of the bridge portal room
         enabled: Whether the link is active
+        triage_agent_id: Optional Letta agent ID to receive passive messages instead of agent_id
         
     Returns:
         Created portal link dict or None on error
     """
     try:
         db = _get_db()
-        result = db.create_portal_link(agent_id, room_id, enabled, relay_mode, mention_enabled)
+        result = db.create_portal_link(agent_id, room_id, enabled, relay_mode, mention_enabled, triage_agent_id)
         invalidate_cache()
         return result
     except Exception as e:

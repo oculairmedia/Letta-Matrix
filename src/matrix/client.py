@@ -511,12 +511,17 @@ async def _handle_stop_command(room, config, logger, room_agent_id, room_agent_n
 async def _handle_passive_portal_message(
     room, event, config: Config, logger: logging.Logger,
     room_agent_id: str, room_agent_name: str, message_text: str,
+    triage_agent_id: Optional[str] = None,
 ) -> None:
     """Handle portal room messages in passive observation mode.
 
     Sends the contact message to Letta for processing (memory updates,
     actionable item detection) but does NOT send any response to the
     Matrix room. The agent observes silently.
+
+    When triage_agent_id is set, passive messages are routed to the triage
+    agent instead of the primary agent. The triage agent can then filter
+    and escalate actionable items.
 
     Follows the same pattern as LettaBot's heartbeat: wrap the message in
     a system envelope, send through the gateway, discard the response.
@@ -526,6 +531,8 @@ async def _handle_passive_portal_message(
     from src.matrix.letta_bridge import _get_gateway_client
     from src.matrix import formatter as matrix_formatter
 
+    target_agent_id = triage_agent_id or room_agent_id
+
     event_source = getattr(event, "source", None)
     event_timestamp = None
     if isinstance(event_source, dict):
@@ -533,10 +540,8 @@ async def _handle_passive_portal_message(
     if event_timestamp is None:
         event_timestamp = int(_time.time() * 1000)
 
-    # Resolve display name for the contact sender
     contact_display_name = room.user_name(event.sender) if hasattr(room, 'user_name') else None
 
-    # Format with portal contact envelope — clearly marks sender as contact, not user
     envelope = matrix_formatter.format_portal_contact_envelope(
         contact_sender=event.sender,
         room_name=room.display_name or room.room_id,
@@ -547,10 +552,17 @@ async def _handle_passive_portal_message(
         contact_display_name=contact_display_name,
     )
 
-    logger.info(
-        f"[PORTAL-PASSIVE] Ingesting contact message from {event.sender} "
-        f"in {room.display_name or room.room_id} for agent {room_agent_name}"
-    )
+    if triage_agent_id:
+        logger.info(
+            f"[PORTAL-TRIAGE] Routing contact message from {event.sender} "
+            f"in {room.display_name or room.room_id} to triage agent {triage_agent_id} "
+            f"(primary agent: {room_agent_name})"
+        )
+    else:
+        logger.info(
+            f"[PORTAL-PASSIVE] Ingesting contact message from {event.sender} "
+            f"in {room.display_name or room.room_id} for agent {room_agent_name}"
+        )
 
     async def _send_to_letta():
         try:
@@ -559,13 +571,14 @@ async def _handle_passive_portal_message(
 
             result = await collect_via_gateway(
                 client=gateway_client,
-                agent_id=room_agent_id,
+                agent_id=target_agent_id,
                 message=envelope,
                 source={"channel": "portal", "chatId": room.room_id},
             )
             resp_len = len(result) if result else 0
+            log_prefix = "[PORTAL-TRIAGE]" if triage_agent_id else "[PORTAL-PASSIVE]"
             logger.info(
-                f"[PORTAL-PASSIVE] Agent processed contact message "
+                f"{log_prefix} Agent processed contact message "
                 f"({resp_len} chars response discarded)"
             )
         except LettaApiError as e:
@@ -573,7 +586,6 @@ async def _handle_passive_portal_message(
         except Exception as e:
             logger.warning(f"[PORTAL-PASSIVE] Failed to send to Letta (non-critical): {e}")
 
-    # Fire-and-forget: agent processes in background, response is discarded
     asyncio.create_task(_send_to_letta())
 
 async def _dispatch_letta_task(room, event, config, logger, client, room_agent_id, gating_result, message_text) -> bool:
@@ -647,8 +659,10 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             or room_agent_name.lower() in formatted_body.lower()
         )
         if not agent_mentioned:
+            triage_id = router.portal_link.get("triage_agent_id")
             await _handle_passive_portal_message(
-                room, event, config, logger, room_agent_id, room_agent_name, message_text
+                room, event, config, logger, room_agent_id, room_agent_name, message_text,
+                triage_agent_id=triage_id,
             )
             return
         # Agent was @mentioned and mention_enabled — continue to normal dispatch below

@@ -81,6 +81,7 @@ class PortalAgentLink(Base):
     enabled = Column(Boolean, default=True, nullable=False)
     relay_mode = Column(Boolean, default=True, nullable=False)
     mention_enabled = Column(Boolean, default=False, nullable=False)
+    triage_agent_id = Column(String, nullable=True, default=None)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Indexes for common queries
@@ -96,6 +97,7 @@ class PortalAgentLink(Base):
             "enabled": self.enabled,
             "relay_mode": self.relay_mode,
             "mention_enabled": self.mention_enabled,
+            "triage_agent_id": self.triage_agent_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -180,6 +182,9 @@ def init_database():
                     conn.execute(text("ALTER TABLE portal_agent_links ADD COLUMN mention_enabled BOOLEAN NOT NULL DEFAULT 0"))
                 else:
                     conn.execute(text("ALTER TABLE portal_agent_links ADD COLUMN mention_enabled BOOLEAN NOT NULL DEFAULT FALSE"))
+        if 'triage_agent_id' not in portal_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE portal_agent_links ADD COLUMN triage_agent_id TEXT DEFAULT NULL"))
 
 
 # Database operations helper class
@@ -469,7 +474,7 @@ class AgentMappingDB:
         finally:
             session.close()
 
-    def create_portal_link(self, agent_id: str, room_id: str, enabled: bool = True, relay_mode: bool = True, mention_enabled: bool = False) -> Dict:
+    def create_portal_link(self, agent_id: str, room_id: str, enabled: bool = True, relay_mode: bool = True, mention_enabled: bool = False, triage_agent_id: Optional[str] = None) -> Dict:
         """Create a portal link between an agent and a room."""
         session = self.Session()
         try:
@@ -477,9 +482,10 @@ class AgentMappingDB:
                 agent_id=agent_id, room_id=room_id
             ).first()
             if existing:
+                update_fields = {"enabled": enabled, "relay_mode": relay_mode, "mention_enabled": mention_enabled, "triage_agent_id": triage_agent_id}
                 session.query(PortalAgentLink).filter_by(
                     agent_id=agent_id, room_id=room_id
-                ).update({"enabled": enabled, "relay_mode": relay_mode, "mention_enabled": mention_enabled})
+                ).update(update_fields)
                 session.commit()
                 refreshed = session.query(PortalAgentLink).filter_by(
                     agent_id=agent_id, room_id=room_id
@@ -496,6 +502,7 @@ class AgentMappingDB:
             setattr(link, "enabled", enabled)
             setattr(link, "relay_mode", relay_mode)
             setattr(link, "mention_enabled", mention_enabled)
+            setattr(link, "triage_agent_id", triage_agent_id)
             session.add(link)
             session.commit()
             session.refresh(link)

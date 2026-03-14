@@ -69,7 +69,10 @@ def _make_event(
     return event
 
 
-def _make_portal_link(mention_enabled=False, agent_id=AGENT_ID):
+TRIAGE_AGENT_ID = "agent-triage-0000-0000-000000000001"
+
+
+def _make_portal_link(mention_enabled=False, agent_id=AGENT_ID, triage_agent_id=None):
     """Create a portal link dict matching the DB schema."""
     return {
         "agent_id": agent_id,
@@ -77,6 +80,7 @@ def _make_portal_link(mention_enabled=False, agent_id=AGENT_ID):
         "enabled": True,
         "relay_mode": True,
         "mention_enabled": mention_enabled,
+        "triage_agent_id": triage_agent_id,
     }
 
 
@@ -725,3 +729,160 @@ class TestPortalRoutingDecisionMatrix:
             f"has_mention={has_mention} → expected_active={expected_active}, "
             f"got agent_mentioned={agent_mentioned}"
         )
+
+
+# =============================================================================
+# Test: Triage agent routing
+# =============================================================================
+
+
+class TestTriageAgentRouting:
+
+    @pytest.mark.asyncio
+    async def test_triage_agent_receives_passive_message(self):
+        """When triage_agent_id is set, passive messages go to triage agent."""
+        from src.matrix.client import _handle_passive_portal_message
+
+        room = _make_room()
+        event = _make_event()
+        config = MockConfig()
+        logger = Mock()
+        logger.info = Mock()
+        logger.warning = Mock()
+
+        mock_gateway = AsyncMock()
+        collected_kwargs = []
+
+        async def capture(**kwargs):
+            collected_kwargs.append(kwargs)
+            return None
+
+        with patch("src.matrix.letta_bridge._get_gateway_client", new_callable=AsyncMock, return_value=mock_gateway), \
+             patch("src.letta.gateway_stream_reader.collect_via_gateway", AsyncMock(side_effect=capture)):
+
+            await _handle_passive_portal_message(
+                room, event, config, logger,
+                room_agent_id=AGENT_ID,
+                room_agent_name=AGENT_NAME,
+                message_text="Hey, are you free?",
+                triage_agent_id=TRIAGE_AGENT_ID,
+            )
+
+            await asyncio.sleep(0.1)
+
+            assert len(collected_kwargs) == 1
+            assert collected_kwargs[0]["agent_id"] == TRIAGE_AGENT_ID
+
+    @pytest.mark.asyncio
+    async def test_no_triage_routes_to_primary_agent(self):
+        """When triage_agent_id is None, passive messages go to primary agent."""
+        from src.matrix.client import _handle_passive_portal_message
+
+        room = _make_room()
+        event = _make_event()
+        config = MockConfig()
+        logger = Mock()
+        logger.info = Mock()
+        logger.warning = Mock()
+
+        mock_gateway = AsyncMock()
+        collected_kwargs = []
+
+        async def capture(**kwargs):
+            collected_kwargs.append(kwargs)
+            return None
+
+        with patch("src.matrix.letta_bridge._get_gateway_client", new_callable=AsyncMock, return_value=mock_gateway), \
+             patch("src.letta.gateway_stream_reader.collect_via_gateway", AsyncMock(side_effect=capture)):
+
+            await _handle_passive_portal_message(
+                room, event, config, logger,
+                room_agent_id=AGENT_ID,
+                room_agent_name=AGENT_NAME,
+                message_text="Regular message",
+                triage_agent_id=None,
+            )
+
+            await asyncio.sleep(0.1)
+
+            assert len(collected_kwargs) == 1
+            assert collected_kwargs[0]["agent_id"] == AGENT_ID
+
+    @pytest.mark.asyncio
+    async def test_triage_logs_portal_triage_prefix(self):
+        """When triage routing, logs should use [PORTAL-TRIAGE] prefix."""
+        from src.matrix.client import _handle_passive_portal_message
+
+        room = _make_room()
+        event = _make_event()
+        config = MockConfig()
+        logger = Mock()
+        logger.info = Mock()
+        logger.warning = Mock()
+
+        mock_gateway = AsyncMock()
+        mock_collect = AsyncMock(return_value="response")
+
+        with patch("src.matrix.letta_bridge._get_gateway_client", new_callable=AsyncMock, return_value=mock_gateway), \
+             patch("src.letta.gateway_stream_reader.collect_via_gateway", mock_collect):
+
+            await _handle_passive_portal_message(
+                room, event, config, logger,
+                room_agent_id=AGENT_ID,
+                room_agent_name=AGENT_NAME,
+                message_text="Test message",
+                triage_agent_id=TRIAGE_AGENT_ID,
+            )
+
+            await asyncio.sleep(0.1)
+
+            info_calls = [str(c) for c in logger.info.call_args_list]
+            assert any("[PORTAL-TRIAGE]" in c for c in info_calls), \
+                f"Expected [PORTAL-TRIAGE] in log calls: {info_calls}"
+
+    @pytest.mark.asyncio
+    async def test_triage_envelope_still_contains_contact_message(self):
+        """Triage routing should send the same envelope format."""
+        from src.matrix.client import _handle_passive_portal_message
+
+        room = _make_room()
+        event = _make_event(body="Meeting at 3pm")
+        config = MockConfig()
+        logger = Mock()
+        logger.info = Mock()
+        logger.warning = Mock()
+
+        mock_gateway = AsyncMock()
+        captured_messages = []
+
+        async def capture_collect(**kwargs):
+            captured_messages.append(kwargs.get("message", ""))
+            return "discarded"
+
+        with patch("src.matrix.letta_bridge._get_gateway_client", new_callable=AsyncMock, return_value=mock_gateway), \
+             patch("src.letta.gateway_stream_reader.collect_via_gateway", AsyncMock(side_effect=capture_collect)):
+
+            await _handle_passive_portal_message(
+                room, event, config, logger,
+                room_agent_id=AGENT_ID,
+                room_agent_name=AGENT_NAME,
+                message_text="Meeting at 3pm",
+                triage_agent_id=TRIAGE_AGENT_ID,
+            )
+
+            await asyncio.sleep(0.1)
+
+            assert len(captured_messages) == 1
+            envelope = captured_messages[0]
+            assert "<system-reminder>" in envelope
+            assert "Meeting at 3pm" in envelope
+
+    def test_portal_link_triage_field_default_none(self):
+        """Portal link without triage_agent_id should default to None."""
+        link = _make_portal_link()
+        assert link["triage_agent_id"] is None
+
+    def test_portal_link_triage_field_set(self):
+        """Portal link with triage_agent_id should carry the value."""
+        link = _make_portal_link(triage_agent_id=TRIAGE_AGENT_ID)
+        assert link["triage_agent_id"] == TRIAGE_AGENT_ID

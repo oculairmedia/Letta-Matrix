@@ -15,12 +15,14 @@ class PortalLinkRequest(BaseModel):
     enabled: bool = True
     relay_mode: bool = True
     mention_enabled: bool = False
+    triage_agent_id: Optional[str] = None
 
 
 class PortalLinkUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
     relay_mode: Optional[bool] = None
     mention_enabled: Optional[bool] = None
+    triage_agent_id: Optional[str] = None
 
 
 @router.get("/agents/portal-links")
@@ -58,7 +60,7 @@ async def create_agent_portal_link(agent_id: str, request: PortalLinkRequest, x_
         mapping = get_mapping_by_agent_id(agent_id)
         if not mapping:
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
-        link = create_portal_link(agent_id, request.room_id, request.enabled, request.relay_mode, request.mention_enabled)
+        link = create_portal_link(agent_id, request.room_id, request.enabled, request.relay_mode, request.mention_enabled, request.triage_agent_id)
         if not link:
             raise HTTPException(status_code=500, detail="Failed to create portal link")
         return {"success": True, "link": link}
@@ -92,7 +94,7 @@ async def update_agent_portal_link(agent_id: str, room_id: str, request: PortalL
     try:
         from src.core.mapping_service import update_portal_link
 
-        updates = {k: v for k, v in request.model_dump().items() if v is not None}
+        updates = request.model_dump(exclude_unset=True)
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
         result = update_portal_link(agent_id, room_id, **updates)
