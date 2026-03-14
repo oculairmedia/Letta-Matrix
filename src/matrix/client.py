@@ -659,7 +659,7 @@ async def message_callback(room, event, config: Config, logger: logging.Logger, 
             or room_agent_name.lower() in formatted_body.lower()
         )
         if not agent_mentioned:
-            triage_id = router.portal_link.get("triage_agent_id")
+            triage_id = router.portal_link.get("triage_agent_id") or None
             await _handle_passive_portal_message(
                 room, event, config, logger, room_agent_id, room_agent_name, message_text,
                 triage_agent_id=triage_id,

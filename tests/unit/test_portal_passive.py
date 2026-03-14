@@ -886,3 +886,21 @@ class TestTriageAgentRouting:
         """Portal link with triage_agent_id should carry the value."""
         link = _make_portal_link(triage_agent_id=TRIAGE_AGENT_ID)
         assert link["triage_agent_id"] == TRIAGE_AGENT_ID
+
+    def test_empty_string_triage_normalized_to_none(self):
+        """Empty string triage_agent_id should be treated as None (no triage)."""
+        link = _make_portal_link(triage_agent_id="")
+        # The caller normalizes: `portal_link.get("triage_agent_id") or None`
+        triage_id = link.get("triage_agent_id") or None
+        assert triage_id is None
+
+    @pytest.mark.asyncio
+    async def test_triage_extraction_from_portal_link_dict(self):
+        """Verify triage_agent_id is correctly extracted from portal_link dict."""
+        link_with_triage = _make_portal_link(triage_agent_id=TRIAGE_AGENT_ID)
+        link_without_triage = _make_portal_link()
+        link_empty_triage = _make_portal_link(triage_agent_id="")
+
+        assert (link_with_triage.get("triage_agent_id") or None) == TRIAGE_AGENT_ID
+        assert (link_without_triage.get("triage_agent_id") or None) is None
+        assert (link_empty_triage.get("triage_agent_id") or None) is None

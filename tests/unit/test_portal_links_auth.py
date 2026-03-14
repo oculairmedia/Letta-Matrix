@@ -328,3 +328,85 @@ class TestPortalLinksAuth:
         # Should succeed because FastAPI normalizes header names
         assert response.status_code == 200
         assert response.json()["success"] is True
+
+    # ========================================================================
+    # Triage Agent ID Tests
+    # ========================================================================
+
+    def test_create_with_triage_agent_id(self, client, correct_headers):
+        """POST with triage_agent_id passes it through to create_portal_link"""
+        agent_id = "agent-1"
+        triage_id = "agent-triage-999"
+        request_body = {
+            "room_id": "!room:test",
+            "triage_agent_id": triage_id,
+        }
+        mock_link = {
+            "agent_id": agent_id,
+            "room_id": "!room:test",
+            "enabled": True,
+            "relay_mode": True,
+            "mention_enabled": False,
+            "triage_agent_id": triage_id,
+        }
+
+        with patch("src.core.mapping_service.get_mapping_by_agent_id", return_value={"agent_id": agent_id}):
+            with patch("src.core.mapping_service.create_portal_link", return_value=mock_link) as mock_create:
+                response = client.post(f"/agents/{agent_id}/portal-links", json=request_body, headers=correct_headers)
+
+        assert response.status_code == 200
+        assert response.json()["link"]["triage_agent_id"] == triage_id
+        mock_create.assert_called_once_with(agent_id, "!room:test", True, True, False, triage_id)
+
+    def test_patch_set_triage_agent_id(self, client, correct_headers):
+        """PATCH with triage_agent_id sets it on the portal link"""
+        agent_id = "agent-1"
+        room_id = "!room:test"
+        encoded_room_id = quote(room_id, safe="")
+        triage_id = "agent-triage-999"
+        request_body = {"triage_agent_id": triage_id}
+        mock_link = {
+            "agent_id": agent_id,
+            "room_id": room_id,
+            "triage_agent_id": triage_id,
+        }
+
+        with patch("src.core.mapping_service.update_portal_link", return_value=mock_link) as mock_update:
+            response = client.patch(f"/agents/{agent_id}/portal-links/{encoded_room_id}", json=request_body, headers=correct_headers)
+
+        assert response.status_code == 200
+        assert response.json()["link"]["triage_agent_id"] == triage_id
+        mock_update.assert_called_once_with(agent_id, room_id, triage_agent_id=triage_id)
+
+    def test_patch_clear_triage_agent_id_to_null(self, client, correct_headers):
+        """PATCH with triage_agent_id=null clears it (exclude_unset=True behavior)"""
+        agent_id = "agent-1"
+        room_id = "!room:test"
+        encoded_room_id = quote(room_id, safe="")
+        request_body = {"triage_agent_id": None}
+        mock_link = {
+            "agent_id": agent_id,
+            "room_id": room_id,
+            "triage_agent_id": None,
+        }
+
+        with patch("src.core.mapping_service.update_portal_link", return_value=mock_link) as mock_update:
+            response = client.patch(f"/agents/{agent_id}/portal-links/{encoded_room_id}", json=request_body, headers=correct_headers)
+
+        assert response.status_code == 200
+        assert response.json()["link"]["triage_agent_id"] is None
+        mock_update.assert_called_once_with(agent_id, room_id, triage_agent_id=None)
+
+    def test_patch_without_triage_does_not_send_it(self, client, correct_headers):
+        """PATCH without triage_agent_id should not include it in kwargs"""
+        agent_id = "agent-1"
+        room_id = "!room:test"
+        encoded_room_id = quote(room_id, safe="")
+        request_body = {"enabled": False}
+        mock_link = {"agent_id": agent_id, "room_id": room_id, "enabled": False}
+
+        with patch("src.core.mapping_service.update_portal_link", return_value=mock_link) as mock_update:
+            response = client.patch(f"/agents/{agent_id}/portal-links/{encoded_room_id}", json=request_body, headers=correct_headers)
+
+        assert response.status_code == 200
+        mock_update.assert_called_once_with(agent_id, room_id, enabled=False)
