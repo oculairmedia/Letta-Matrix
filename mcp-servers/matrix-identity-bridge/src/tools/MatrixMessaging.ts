@@ -30,7 +30,7 @@ const markAsMember = (roomId: string, mxid: string): void => {
 
 // All supported operations
 const operations = [
-  'send', 'read', 'react', 'edit', 'typing', 'subscribe', 'unsubscribe',
+  'send', 'read', 'react', 'edit', 'redact', 'typing', 'subscribe', 'unsubscribe',
   'room_join', 'room_leave', 'room_info', 'room_list', 'room_create', 'room_invite', 'room_search',
   'room_find', 'room_members',
   'identity_create', 'identity_get', 'identity_list', 'identity_derive',
@@ -154,7 +154,7 @@ export const metadata: ToolMetadata = {
 REQUIRED: Always include caller_directory to identify yourself.
 
 Primary: talk_to_agent (agent name + message + caller_directory)
-Also: letta_chat, letta_list, send, read, react, edit, room_list, room_create, identity_list, opencode_list, talk_to_opencode`,
+Also: letta_chat, letta_list, send, read, react, edit, redact, room_list, room_create, identity_list, opencode_list, talk_to_opencode`,
 };
 
 const getHeaders = () => {
@@ -366,6 +366,38 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           'm.relates_to': { rel_type: 'm.replace', event_id }
         });
         return result({ edit_event_id: editEventId, room_id, original_event_id: event_id });
+      }
+
+      case 'redact': {
+        let identity;
+        const agentId = input.agent_id || input.__injected_agent_id || getInjectedAgentId();
+        if (input.identity_id) {
+          identity = await requireIdentity(input.identity_id);
+        } else if (agentId && ctx.lettaService) {
+          const identityId = await ctx.lettaService.getOrCreateAgentIdentity(agentId);
+          identity = await ctx.storage.getIdentityAsync(identityId);
+          if (!identity) {
+            return result({ error: `Failed to resolve identity for agent ${agentId}` });
+          }
+        } else {
+          return result({ error: 'Either identity_id or agent_id is required for redact' });
+        }
+        const room_id = requireParam(input.room_id, 'room_id');
+        const event_id = requireParam(input.event_id, 'event_id');
+        const client = await ctx.clientPool.getClient(identity);
+        const txnId = `redact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const redactResult = await client.doRequest(
+          'PUT',
+          `/_matrix/client/v3/rooms/${encodeURIComponent(room_id)}/redact/${encodeURIComponent(event_id)}/${encodeURIComponent(txnId)}`,
+          {},
+          { reason: input.message || 'Message deleted' }
+        ) as { event_id?: string };
+        return result({
+          redact_event_id: redactResult?.event_id || txnId,
+          room_id,
+          redacted_event_id: event_id,
+          reason: input.message || 'Message deleted',
+        });
       }
 
       case 'typing': {

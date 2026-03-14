@@ -38,6 +38,7 @@ const operations: Record<MatrixOperationType, OperationHandler> = {
   read: message.read,
   react: message.react,
   edit: message.edit,
+  redact: message.redact,
   typing: message.typing,
   subscribe: message.subscribe,
   unsubscribe: message.unsubscribe,
@@ -92,7 +93,7 @@ export async function handleOperation(
  * Get the tool description for the unified tool
  */
 export function getToolDescription(): string {
-  return `Matrix messaging with 28 operations. Use 'operation' param to select: send, read, react, edit, typing, subscribe, unsubscribe, room_join, room_leave, room_info, room_list, room_create, room_invite, room_search, room_find, room_members, identity_create, identity_get, identity_list, identity_derive, letta_send, letta_chat, letta_lookup, letta_list, letta_identity, opencode_connect, opencode_send, opencode_status`;
+  return `Matrix messaging with 29 operations. Use 'operation' param to select: send, read, react, edit, redact, typing, subscribe, unsubscribe, room_join, room_leave, room_info, room_list, room_create, room_invite, room_search, room_find, room_members, identity_create, identity_get, identity_list, identity_derive, letta_send, letta_chat, letta_lookup, letta_list, letta_identity, opencode_connect, opencode_send, opencode_status`;
 }
 
 /**

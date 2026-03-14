@@ -175,6 +175,28 @@ export const edit: OperationHandler = async (args, ctx) => {
   return result({ edit_event_id: editEventId, room_id, original_event_id: event_id });
 };
 
+export const redact: OperationHandler = async (args, ctx) => {
+  const identity = await resolveIdentity(args, ctx);
+  const room_id = requireParam(args.room_id, 'room_id');
+  const event_id = requireParam(args.event_id, 'event_id');
+
+  const client = await ctx.clientPool.getClient(identity);
+  const txnId = `redact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const redactEventId = await client.doRequest(
+    'PUT',
+    `/_matrix/client/v3/rooms/${encodeURIComponent(room_id)}/redact/${encodeURIComponent(event_id)}/${encodeURIComponent(txnId)}`,
+    {},
+    { reason: args.message || 'Message deleted' }
+  ) as { event_id?: string };
+
+  return result({
+    redact_event_id: redactEventId?.event_id || txnId,
+    room_id,
+    redacted_event_id: event_id,
+    reason: args.message || 'Message deleted',
+  });
+};
+
 export const typing: OperationHandler = async (args, ctx) => {
   const identity = await requireIdentity(ctx, args.identity_id);
   const room_id = requireParam(args.room_id, 'room_id');

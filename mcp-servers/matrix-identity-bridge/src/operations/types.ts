@@ -15,7 +15,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 // All supported operations
 export const MatrixOperation = z.enum([
   // Message operations
-  'send', 'read', 'react', 'edit', 'typing', 'subscribe', 'unsubscribe',
+  'send', 'read', 'react', 'edit', 'redact', 'typing', 'subscribe', 'unsubscribe',
   // Room operations
   'room_join', 'room_leave', 'room_info', 'room_list', 'room_create', 'room_invite', 'room_search',
   'room_find', 'room_members',
