@@ -135,3 +135,8 @@ agent_mappings.db
 !.opencode/plugin/lib/**
 !claude-code-matrix-plugin/lib/
 !claude-code-matrix-plugin/lib/**
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
