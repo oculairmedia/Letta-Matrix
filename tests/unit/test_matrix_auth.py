@@ -229,27 +229,35 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_token_fallback_prefers_expected_user(self, auth_manager):
         """Test that token fallback tries MATRIX_ACCESS_TOKEN first and uses it if whoami matches."""
-        # Build a self-contained mock client (avoid fixture ordering issues)
-        nio_mock = AsyncMock()
-        nio_mock.access_token = None
-        nio_mock.device_id = None
-        nio_mock.user_id = "@testuser:test.com"
-        nio_mock.load_store = Mock()
-        nio_mock.login = AsyncMock()
-        nio_mock.close = AsyncMock()
+        # Use a plain object to avoid AsyncMock attribute-setting quirks across versions
+        class FakeClient:
+            def __init__(self):
+                self.access_token = None
+                self.device_id = None
+                self.user_id = "@testuser:test.com"
+                self.login_called = False
 
-        async def _whoami():
-            who = Mock()
-            if nio_mock.access_token == "token_for_expected":
-                who.user_id = "@testuser:test.com"
-            else:
-                who.user_id = "@admin:test.com"
-            return who
+            def load_store(self):
+                pass
 
-        nio_mock.whoami = _whoami
+            async def whoami(self):
+                who = Mock()
+                if self.access_token == "token_for_expected":
+                    who.user_id = "@testuser:test.com"
+                else:
+                    who.user_id = "@admin:test.com"
+                return who
+
+            async def login(self, *args, **kwargs):
+                self.login_called = True
+
+            async def close(self):
+                pass
+
+        fake = FakeClient()
 
         with (
-            patch('src.matrix.auth.AsyncClient', return_value=nio_mock),
+            patch('src.matrix.auth.AsyncClient', return_value=fake),
             patch.dict(
                 os.environ,
                 {
@@ -264,7 +272,7 @@ class TestAuthentication:
             assert client is not None
             assert client.user_id == "@testuser:test.com"
             assert client.access_token == "token_for_expected"
-            nio_mock.login.assert_not_called()
+            assert not fake.login_called
 
     @pytest.mark.asyncio
     async def test_mismatched_fallback_token_falls_back_to_password_login(
