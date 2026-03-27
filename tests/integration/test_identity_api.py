@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, AsyncMock, Mock
+from types import SimpleNamespace
 import sys
 import os
 
@@ -518,3 +519,103 @@ class TestDMRoomEndpoints:
         })
         
         assert response.status_code == 404
+
+
+class TestIdentitySyncNamesEndpoint:
+
+    def test_sync_names_dry_run_reports_diff(self, client, sample_letta_identity):
+        sample_letta_identity["id"] = "letta_agent-1"
+        sample_letta_identity["display_name"] = "Old Name"
+        sample_letta_identity["mxid"] = "@agent_1:matrix.test"
+        client.post("/api/v1/identities", json=sample_letta_identity)
+
+        with (
+            patch("src.api.routes.identity.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity._get_matrix_display_name", new_callable=AsyncMock, return_value="Old Name"),
+            patch("src.api.routes.identity._sync_identity_profile", new_callable=AsyncMock) as mock_sync_profile,
+            patch("src.models.agent_mapping.AgentMappingDB") as mock_mapping_db,
+        ):
+            mock_letta_service.return_value.list_agents.return_value = [
+                SimpleNamespace(id="agent-1", name="Huly - Meridian")
+            ]
+            mapping_obj = Mock()
+            mapping_obj.agent_name = "Old Name"
+            mock_mapping_db.return_value.get_by_agent_id.return_value = mapping_obj
+
+            response = client.post("/api/v1/identities/sync-names", json={"dry_run": True})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dry_run"] is True
+        assert data["checked"] == 1
+        assert data["missing_identity"] == 0
+        assert data["mismatched"] == 1
+        assert data["updated_identity"] == 0
+        assert data["updated_matrix"] == 0
+        assert data["updated_mapping"] == 0
+        assert data["failed"] == 0
+        assert len(data["changes"]) == 1
+        assert data["changes"][0]["desired_name"] == "Meridian"
+        assert data["changes"][0]["needs_identity_update"] is True
+        assert data["changes"][0]["needs_matrix_update"] is True
+        assert data["changes"][0]["needs_mapping_update"] is True
+        mock_sync_profile.assert_not_called()
+
+    def test_sync_names_apply_updates_all_layers(self, client, sample_letta_identity):
+        sample_letta_identity["id"] = "letta_agent-2"
+        sample_letta_identity["display_name"] = "Legacy Name"
+        sample_letta_identity["mxid"] = "@agent_2:matrix.test"
+        client.post("/api/v1/identities", json=sample_letta_identity)
+
+        with (
+            patch("src.api.routes.identity.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity._get_matrix_display_name", new_callable=AsyncMock, return_value="Legacy Name"),
+            patch("src.api.routes.identity._sync_identity_profile", new_callable=AsyncMock) as mock_sync_profile,
+            patch("src.models.agent_mapping.AgentMappingDB") as mock_mapping_db,
+        ):
+            mock_letta_service.return_value.list_agents.return_value = [
+                SimpleNamespace(id="agent-2", name="Huly - Nova")
+            ]
+            mapping_obj = Mock()
+            mapping_obj.agent_name = "Legacy Name"
+            mock_mapping_db.return_value.get_by_agent_id.return_value = mapping_obj
+            mock_mapping_db.return_value.update.return_value = mapping_obj
+
+            response = client.post("/api/v1/identities/sync-names", json={"dry_run": False})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dry_run"] is False
+        assert data["mismatched"] == 1
+        assert data["updated_identity"] == 1
+        assert data["updated_matrix"] == 1
+        assert data["updated_mapping"] == 1
+        assert data["failed"] == 0
+        assert data["changes"][0]["applied_identity_update"] is True
+        assert data["changes"][0]["applied_matrix_update"] is True
+        assert data["changes"][0]["applied_mapping_update"] is True
+        mock_sync_profile.assert_called_once_with("letta_agent-2", "Nova")
+
+        identity_response = client.get("/api/v1/identities/letta_agent-2")
+        assert identity_response.status_code == 200
+        assert identity_response.json()["display_name"] == "Nova"
+
+    def test_sync_names_counts_missing_identity(self, client):
+        with (
+            patch("src.api.routes.identity.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity._get_matrix_display_name", new_callable=AsyncMock, return_value=None),
+            patch("src.models.agent_mapping.AgentMappingDB") as mock_mapping_db,
+        ):
+            mock_letta_service.return_value.list_agents.return_value = [
+                SimpleNamespace(id="agent-missing", name="Huly - Missing")
+            ]
+            mock_mapping_db.return_value.get_by_agent_id.return_value = None
+
+            response = client.post("/api/v1/identities/sync-names", json={"dry_run": True})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["checked"] == 1
+        assert data["missing_identity"] == 1
+        assert data["mismatched"] == 0
+        assert data["changes"] == []

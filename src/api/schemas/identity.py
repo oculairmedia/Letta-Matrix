@@ -182,3 +182,44 @@ class IdentityProvisionResponse(BaseModel):
     access_token: str
     display_name: str
     error: Optional[str] = None
+
+
+class IdentitySyncNamesRequest(BaseModel):
+    dry_run: bool = Field(True, description="Return diff only without applying changes")
+    identity_type: str = Field("letta", description="Identity type filter")
+    remove_legacy_huly_prefix: bool = Field(True, description="Remove leading 'Huly - ' from Letta names")
+    limit: int = Field(1000, description="Maximum number of Letta agents to inspect")
+    sync_identity_db: bool = Field(True, description="Apply display_name updates to identity DB")
+    sync_matrix_profile: bool = Field(True, description="Apply display_name updates to Matrix profile")
+    sync_agent_mapping: bool = Field(True, description="Apply agent_name updates to agent_mappings")
+
+
+class IdentityNameSyncDiff(BaseModel):
+    agent_id: str
+    identity_id: str
+    mxid: str
+    letta_name: str
+    desired_name: str
+    identity_display_name: Optional[str]
+    matrix_display_name: Optional[str]
+    mapping_agent_name: Optional[str]
+    needs_identity_update: bool
+    needs_matrix_update: bool
+    needs_mapping_update: bool
+    applied_identity_update: bool = False
+    applied_matrix_update: bool = False
+    applied_mapping_update: bool = False
+    errors: List[str] = Field(default_factory=list)
+
+
+class IdentitySyncNamesResponse(BaseModel):
+    success: bool
+    dry_run: bool
+    checked: int
+    missing_identity: int
+    mismatched: int
+    updated_identity: int
+    updated_matrix: int
+    updated_mapping: int
+    failed: int
+    changes: List[IdentityNameSyncDiff]
