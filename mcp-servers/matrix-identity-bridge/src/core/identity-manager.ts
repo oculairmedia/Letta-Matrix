@@ -6,6 +6,7 @@ import type { MatrixIdentity, IdentityProvisionRequest } from '../types/index.js
 import type { Storage } from './storage.js';
 import { getAdminToken } from './admin-auth.js';
 import { getAgentMappingApi } from './agent-mapping-api.js';
+import { createHash } from 'node:crypto';
 
 interface SynapseUserCreateRequest {
   password?: string;
@@ -715,23 +716,8 @@ export class IdentityManager {
    * This allows recovery if identity is lost but user exists on Matrix server
    */
   private generateDeterministicPassword(localpart: string, secret: string): string {
-    // Simple hash-based password generation
-    // In production, use a proper crypto hash, but this works for our use case
-    const input = `${localpart}:${secret}`;
-    let hash = 0;
-    for (let i = 0; i < input.length; i++) {
-      const char = input.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
-    }
-    
-    // Generate password from hash
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let password = 'MCP_'; // Prefix for identification
-    const absHash = Math.abs(hash);
-    for (let i = 0; i < 24; i++) {
-      password += chars.charAt((absHash + i * 7) % chars.length);
-    }
-    return password;
+    const hashInput = `${localpart}:${secret}`;
+    const digest = createHash('sha256').update(hashInput).digest('hex').slice(0, 24);
+    return `MCP_${digest}`;
   }
 }

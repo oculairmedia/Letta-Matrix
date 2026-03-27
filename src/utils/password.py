@@ -7,6 +7,7 @@ Provides consistent, secure password generation across the codebase.
 import os
 import secrets
 import string
+import hashlib
 from typing import Optional
 
 
@@ -74,3 +75,13 @@ def generate_service_password(service_name: str) -> str:
     random_part = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
     return f"{service_name}_{random_part}!"
 
+
+def generate_deterministic_identity_password(
+    localpart: str,
+    password_secret: str,
+    prefix: str = "MCP_",
+    length: int = 24,
+) -> str:
+    hash_input = f"{localpart}:{password_secret}"
+    hash_val = hashlib.sha256(hash_input.encode()).hexdigest()[:length]
+    return f"{prefix}{hash_val}"

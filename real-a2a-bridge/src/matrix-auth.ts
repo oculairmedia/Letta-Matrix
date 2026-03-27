@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
+import { createHash } from "node:crypto";
 
 export interface MatrixCredentials {
   userId: string;
@@ -33,15 +34,21 @@ export interface MatrixAuthConfig {
  */
 function generateDeterministicPassword(localpart: string, secret: string): string {
   const input = `${localpart}:${secret}`;
+  const digest = createHash('sha256').update(input).digest('hex').slice(0, 24);
+  return `P2P_${digest}`;
+}
+
+function generateLegacyDeterministicPassword(localpart: string, secret: string): string {
+  const input = `${localpart}:${secret}`;
   let hash = 0;
   for (let i = 0; i < input.length; i++) {
     const char = input.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
     hash = hash & hash;
   }
-  
+
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let password = 'P2P_'; // Prefix for identification
+  let password = 'P2P_';
   const absHash = Math.abs(hash);
   for (let i = 0; i < 24; i++) {
     password += chars.charAt((absHash + i * 7) % chars.length);
@@ -272,9 +279,16 @@ export async function getOrCreateCredentials(config: MatrixAuthConfig): Promise<
   } catch (error: any) {
     if (error.message === 'USER_EXISTS') {
       // User exists, try login
-      const result = await loginUser(homeserver, localpart, password);
-      accessToken = result.accessToken;
-      resultUserId = result.userId;
+      try {
+        const result = await loginUser(homeserver, localpart, password);
+        accessToken = result.accessToken;
+        resultUserId = result.userId;
+      } catch {
+        const legacyPassword = generateLegacyDeterministicPassword(localpart, passwordSecret);
+        const result = await loginUser(homeserver, localpart, legacyPassword);
+        accessToken = result.accessToken;
+        resultUserId = result.userId;
+      }
     } else {
       throw error;
     }

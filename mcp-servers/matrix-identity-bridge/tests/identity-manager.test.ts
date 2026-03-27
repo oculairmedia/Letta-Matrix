@@ -235,4 +235,57 @@ describe('IdentityManager', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('Deterministic password generation', () => {
+    it('uses stable sha256-based MCP derivation', () => {
+      const manager = new IdentityManager(
+        {
+          getIdentityAsync: async () => undefined,
+          saveIdentity: async () => undefined,
+          getAllIdentitiesAsync: async () => [],
+          getIdentityByMXIDAsync: async () => undefined,
+          deleteIdentity: async () => undefined,
+        } as never,
+        'https://matrix.test',
+        'admin-token',
+        'matrix.test',
+      );
+
+      const derive = Reflect.get(
+        manager as object,
+        'generateDeterministicPassword',
+      ) as (localpart: string, secret: string) => string;
+
+      const password = derive.call(manager, 'agent_123', 'mcp_identity_bridge_2024');
+      expect(password).toBe('MCP_2497cf3211b1093d66295c4a');
+    });
+
+    it('is deterministic for same inputs and changes with input', () => {
+      const manager = new IdentityManager(
+        {
+          getIdentityAsync: async () => undefined,
+          saveIdentity: async () => undefined,
+          getAllIdentitiesAsync: async () => [],
+          getIdentityByMXIDAsync: async () => undefined,
+          deleteIdentity: async () => undefined,
+        } as never,
+        'https://matrix.test',
+        'admin-token',
+        'matrix.test',
+      );
+
+      const derive = Reflect.get(
+        manager as object,
+        'generateDeterministicPassword',
+      ) as (localpart: string, secret: string) => string;
+
+      const p1 = derive.call(manager, 'agent_abc', 'secret');
+      const p2 = derive.call(manager, 'agent_abc', 'secret');
+      const p3 = derive.call(manager, 'agent_abc', 'other-secret');
+
+      expect(p1).toBe(p2);
+      expect(p1).not.toBe(p3);
+      expect(p1).toMatch(/^MCP_[0-9a-f]{24}$/);
+    });
+  });
 });

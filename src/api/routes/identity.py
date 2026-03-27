@@ -40,6 +40,7 @@ from src.core.user_manager import MatrixUserManager
 from src.matrix.identity_client_pool import get_identity_client_pool
 from src.letta.client import LettaService
 from src.core.mapping_service import get_all_mappings
+from src.utils.password import generate_deterministic_identity_password
 
 logger = logging.getLogger(__name__)
 
@@ -1037,7 +1038,6 @@ async def provision_identity(
     verify_internal_key(x_internal_key)
     
     import base64
-    import hashlib
     from src.core.user_manager import MatrixUserManager
     
     homeserver_url = os.getenv("MATRIX_HOMESERVER_URL", "https://matrix.oculair.ca")
@@ -1092,9 +1092,7 @@ async def provision_identity(
             display_name=str(existing_mxid.display_name) if existing_mxid.display_name is not None else display_name
         )
     
-    hash_input = f"{localpart}:{password_secret}"
-    hash_val = hashlib.sha256(hash_input.encode()).hexdigest()[:24]
-    password = f"MCP_{hash_val}"
+    password = generate_deterministic_identity_password(localpart, password_secret)
     
     user_manager = MatrixUserManager(homeserver_url, admin_username, admin_password)
     
