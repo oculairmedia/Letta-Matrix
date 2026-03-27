@@ -4,6 +4,7 @@ import { mkdir, readFile, unlink, writeFile } from "fs/promises";
 import path from "path";
 import os from "os";
 import WebSocket from "ws";
+import YAML from "yaml";
 
 const BRIDGE_URL = process.env.OPENCODE_BRIDGE_URL || "http://127.0.0.1:3201";
 const BRIDGE_WS_URL = process.env.OPENCODE_BRIDGE_WS_URL || "ws://127.0.0.1:3201/ws";
@@ -63,6 +64,101 @@ interface MessageMeta {
   agent?: string;
   model?: { providerID: string; modelID: string };
   path?: { cwd: string; root: string };
+}
+
+interface MatrixConfig {
+  homeserver: string;
+  defaultRoomId: string;
+  projectRooms?: Record<string, string>;
+  extraRooms?: string[];
+  filters?: {
+    msgtypes?: string[];
+  };
+  subscribeRooms: string[];
+}
+
+function containsSecretField(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const secretKeys = new Set(["accesstoken", "token", "password", "apikey", "secret"]);
+
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (secretKeys.has(k.toLowerCase())) return true;
+    if (containsSecretField(v)) return true;
+  }
+  return false;
+}
+
+function loadMatrixConfig(baseDir: string): MatrixConfig {
+  const configPath = path.join(baseDir, ".opencode", "matrix.yaml");
+  if (!existsSync(configPath)) {
+    throw new Error(`Missing config file: ${configPath}`);
+  }
+
+  const raw = readFileSync(configPath, "utf-8");
+  const parsed = YAML.parse(raw) as Record<string, unknown>;
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Invalid .opencode/matrix.yaml: expected a YAML object");
+  }
+
+  if (containsSecretField(parsed)) {
+    throw new Error(
+      "Invalid .opencode/matrix.yaml: secret fields are not allowed (accessToken/token/password/apiKey/secret)"
+    );
+  }
+
+  const homeserver = parsed.homeserver;
+  const defaultRoomId = parsed.defaultRoomId;
+  if (typeof homeserver !== "string" || !homeserver.trim()) {
+    throw new Error("Invalid .opencode/matrix.yaml: missing required 'homeserver'");
+  }
+  if (typeof defaultRoomId !== "string" || !defaultRoomId.trim()) {
+    throw new Error("Invalid .opencode/matrix.yaml: missing required 'defaultRoomId'");
+  }
+
+  const projectRoomsRaw = parsed.projectRooms;
+  const projectRooms: Record<string, string> =
+    projectRoomsRaw && typeof projectRoomsRaw === "object"
+      ? Object.fromEntries(
+          Object.entries(projectRoomsRaw as Record<string, unknown>).filter(
+            ([, roomId]) => typeof roomId === "string" && !!roomId.trim()
+          ) as Array<[string, string]>
+        )
+      : {};
+
+  const extraRoomsRaw = parsed.extraRooms;
+  const extraRooms = Array.isArray(extraRoomsRaw)
+    ? extraRoomsRaw.filter((room) => typeof room === "string" && !!room.trim()) as string[]
+    : [];
+
+  const subscribeRooms = Array.from(
+    new Set([defaultRoomId, ...Object.values(projectRooms), ...extraRooms])
+  );
+
+  return {
+    homeserver,
+    defaultRoomId,
+    projectRooms,
+    extraRooms,
+    filters: (parsed.filters as MatrixConfig["filters"]) || undefined,
+    subscribeRooms,
+  };
+}
+
+function readMessageRole(sessionID: string, messageID: string): "user" | "assistant" | null {
+  try {
+    const messageDir = getOrCreateMessageDir(sessionID);
+    const metaPath = path.join(messageDir, `${messageID}.json`);
+    if (!existsSync(metaPath)) return null;
+    const content = readFileSync(metaPath, "utf-8");
+    const parsed = JSON.parse(content) as { role?: string };
+    if (parsed.role === "user" || parsed.role === "assistant") {
+      return parsed.role;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 interface TextPart {
@@ -265,10 +361,10 @@ async function releaseLock(lockPath: string): Promise<void> {
 async function registerWithBridge(
   directory: string,
   sessionId: string,
-  roomId?: string | null
+  roomIds?: string[]
 ): Promise<{ id: string; wsUrl: string } | null> {
   try {
-    const rooms = roomId ? [roomId] : [];
+    const rooms = roomIds && roomIds.length > 0 ? Array.from(new Set(roomIds)) : [];
     const response = await fetch(`${BRIDGE_URL}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -361,6 +457,7 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   const baseDir = worktree || directory;
   const opencodeDirPath = path.join(baseDir, ".opencode");
   const lockPath = path.join(opencodeDirPath, "matrix.lock");
+  const matrixConfig = loadMatrixConfig(baseDir);
 
   debugLog(`=== MatrixContextInjector initializing ===`);
   debugLog(`baseDir: ${baseDir}`);
@@ -504,8 +601,11 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     if (shuttingDown) return;
     debugLog("Re-registering with bridge...");
     const roomId = await ensureMatrixRoom(baseDir).catch(() => null);
+    const registerRooms = Array.from(
+      new Set([...(matrixConfig.subscribeRooms || []), ...(roomId ? [roomId] : [])])
+    );
     // IMPORTANT: Reuse the same session ID to avoid bridge cleanup loop
-    const result = await registerWithBridge(baseDir, currentSessionId, roomId);
+    const result = await registerWithBridge(baseDir, currentSessionId, registerRooms);
     if (result) {
       bridgeRegistrationId = result.id;
       debugLog(`Re-registered with bridge as: ${result.id}`);
@@ -636,11 +736,14 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
 
     try {
       const roomId = await ensureMatrixRoom(baseDir);
+      const registerRooms = Array.from(
+        new Set([...(matrixConfig.subscribeRooms || []), ...(roomId ? [roomId] : [])])
+      );
       if (roomId) {
         debugLog(`Room ensured: ${roomId}`);
       }
       
-      const result = await registerWithBridge(baseDir, currentSessionId, roomId);
+      const result = await registerWithBridge(baseDir, currentSessionId, registerRooms);
 
       if (result) {
         bridgeRegistrationId = result.id;
@@ -745,6 +848,14 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
         // Original outbound message handling
         for (const [messageID, parts] of messagePartsMap.entries()) {
           if (sentMessages.has(messageID)) continue;
+
+          if (sessionId) {
+            const messageRole = readMessageRole(sessionId, messageID);
+            if (messageRole === "user") {
+              sentMessages.add(messageID);
+              continue;
+            }
+          }
           
           const fullContent = Array.from(parts.values()).join("\n");
           
