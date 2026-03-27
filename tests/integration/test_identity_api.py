@@ -710,3 +710,130 @@ class TestIdentityProvisionHardening:
         data = response.json()
         assert data["success"] is False
         assert "after retries" in data["error"]
+
+
+class TestIdentityHealthEndpoint:
+
+    def test_identity_health_reports_healthy_record(self, client, sample_letta_identity):
+        sample_letta_identity["id"] = "letta_agent-1"
+        sample_letta_identity["identity_type"] = "letta"
+        sample_letta_identity["mxid"] = "@agent_1:matrix.test"
+        sample_letta_identity["display_name"] = "Meridian"
+        sample_letta_identity["password_hash"] = "pw-1"
+        client.post("/api/v1/identities", json=sample_letta_identity)
+
+        mock_monitor = Mock()
+        mock_monitor._validate_identity_token = AsyncMock(return_value=True)
+
+        with (
+            patch("src.api.routes.identity.get_identity_token_health_monitor", return_value=mock_monitor),
+            patch("src.api.routes.identity.get_all_mappings", return_value={
+                "agent-1": {
+                    "agent_name": "Meridian",
+                    "matrix_password": "pw-1",
+                    "matrix_user_id": "@agent_1:matrix.test",
+                    "room_id": "!room:matrix.test",
+                }
+            }),
+            patch("src.api.routes.identity.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value="Meridian")),
+        ):
+            mock_letta_service.return_value.list_agents.return_value = [
+                SimpleNamespace(id="agent-1", name="Meridian")
+            ]
+            response = client.get("/api/v1/identities/health")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["checked"] == 1
+        assert data["healthy"] == 1
+        assert data["degraded"] == 0
+        assert data["critical"] == 0
+        assert data["coverage"]["missing_letta_identities"] == []
+        record = data["records"][0]
+        assert record["identity_id"] == "letta_agent-1"
+        assert record["token_valid"] is True
+        assert record["identity_matrix_name_match"] is True
+        assert record["identity_letta_name_match"] is True
+        assert record["identity_mapping_name_match"] is True
+        assert record["password_consistent"] is True
+        assert record["dm_rooms_valid"] is True
+
+    def test_identity_health_detects_mismatches_and_invalid_dm(self, client, sample_letta_identity, sample_identity):
+        sample_letta_identity["id"] = "letta_agent-2"
+        sample_letta_identity["identity_type"] = "letta"
+        sample_letta_identity["mxid"] = "@agent_2:matrix.test"
+        sample_letta_identity["display_name"] = "Identity Name"
+        sample_letta_identity["password_hash"] = "pw-identity"
+        client.post("/api/v1/identities", json=sample_letta_identity)
+
+        sample_identity["id"] = "custom_2"
+        sample_identity["mxid"] = "@custom_2:matrix.test"
+        client.post("/api/v1/identities", json=sample_identity)
+
+        mock_monitor = Mock()
+        mock_monitor._validate_identity_token = AsyncMock(return_value=False)
+        mock_dm_service = Mock()
+        mock_dm_service.get_all.return_value = [
+            SimpleNamespace(
+                room_id="!dm:matrix.test",
+                participant_1="@agent_2:matrix.test",
+                participant_2="@missing:matrix.test",
+            )
+        ]
+
+        with (
+            patch("src.api.routes.identity.get_identity_token_health_monitor", return_value=mock_monitor),
+            patch("src.api.routes.identity.get_dm_room_service", return_value=mock_dm_service),
+            patch("src.api.routes.identity.get_all_mappings", return_value={
+                "agent-2": {
+                    "agent_name": "Mapping Name",
+                    "matrix_password": "pw-mapping",
+                    "matrix_user_id": "@agent_2:matrix.test",
+                    "room_id": "!room:matrix.test",
+                }
+            }),
+            patch("src.api.routes.identity.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value="Matrix Name")),
+        ):
+            mock_letta_service.return_value.list_agents.return_value = [
+                SimpleNamespace(id="agent-2", name="Letta Name")
+            ]
+            response = client.get("/api/v1/identities/health")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["token_invalid"] >= 1
+        assert data["name_mismatches"] >= 3
+        assert data["password_mismatches"] >= 1
+        assert data["invalid_dm_rooms"] >= 1
+
+        letta_record = next(r for r in data["records"] if r["identity_id"] == "letta_agent-2")
+        assert letta_record["token_valid"] is False
+        assert letta_record["identity_matrix_name_match"] is False
+        assert letta_record["identity_letta_name_match"] is False
+        assert letta_record["identity_mapping_name_match"] is False
+        assert letta_record["password_consistent"] is False
+        assert letta_record["dm_rooms_valid"] is False
+
+    def test_identity_health_reports_missing_letta_identity_coverage(self, client):
+        mock_monitor = Mock()
+        mock_monitor._validate_identity_token = AsyncMock(return_value=True)
+
+        with (
+            patch("src.api.routes.identity.get_identity_token_health_monitor", return_value=mock_monitor),
+            patch("src.api.routes.identity.get_all_mappings", return_value={}),
+            patch("src.api.routes.identity.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value=None)),
+        ):
+            mock_letta_service.return_value.list_agents.return_value = [
+                SimpleNamespace(id="agent-3", name="Orphan")
+            ]
+            response = client.get("/api/v1/identities/health")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["coverage"]["letta_agents_total"] == 1
+        assert data["coverage"]["letta_identities_total"] == 0
+        assert data["coverage"]["missing_letta_identities"] == ["letta_agent-3"]

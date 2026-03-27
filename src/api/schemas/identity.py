@@ -223,3 +223,46 @@ class IdentitySyncNamesResponse(BaseModel):
     updated_mapping: int
     failed: int
     changes: List[IdentityNameSyncDiff]
+
+
+class IdentityHealthCoverage(BaseModel):
+    letta_agents_total: int
+    letta_identities_total: int
+    missing_letta_identities: List[str] = Field(default_factory=list)
+
+
+class IdentityHealthRecord(BaseModel):
+    identity_id: str
+    identity_type: str
+    mxid: str
+    is_active: bool
+    token_valid: bool
+    token_checked_at: int
+    token_error: Optional[str] = None
+    identity_display_name: Optional[str] = None
+    matrix_display_name: Optional[str] = None
+    letta_display_name: Optional[str] = None
+    mapping_agent_name: Optional[str] = None
+    identity_matrix_name_match: Optional[bool] = None
+    identity_letta_name_match: Optional[bool] = None
+    identity_mapping_name_match: Optional[bool] = None
+    password_consistent: Optional[bool] = None
+    mxid_valid: bool
+    dm_rooms_count: int
+    dm_rooms_valid: bool
+    issues: List[str] = Field(default_factory=list)
+
+
+class IdentityHealthResponse(BaseModel):
+    success: bool
+    checked: int
+    healthy: int
+    degraded: int
+    critical: int
+    token_invalid: int
+    name_mismatches: int
+    password_mismatches: int
+    invalid_mxid: int
+    invalid_dm_rooms: int
+    coverage: IdentityHealthCoverage
+    records: List[IdentityHealthRecord]
