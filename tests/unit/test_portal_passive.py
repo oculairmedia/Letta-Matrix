@@ -72,13 +72,13 @@ def _make_event(
 TRIAGE_AGENT_ID = "agent-triage-0000-0000-000000000001"
 
 
-def _make_portal_link(mention_enabled=False, agent_id=AGENT_ID, triage_agent_id=None):
+def _make_portal_link(mention_enabled=False, agent_id=AGENT_ID, triage_agent_id=None, relay_mode=True):
     """Create a portal link dict matching the DB schema."""
     return {
         "agent_id": agent_id,
         "room_id": PORTAL_ROOM_ID,
         "enabled": True,
-        "relay_mode": True,
+        "relay_mode": relay_mode,
         "mention_enabled": mention_enabled,
         "triage_agent_id": triage_agent_id,
     }
@@ -419,14 +419,17 @@ class TestPortalRoutingMessageCallback:
         agent_name = AGENT_NAME
 
         is_admin = sender == ADMIN_MXID
-        mention_allowed = is_admin or portal_link.get("mention_enabled", False)
-
-        agent_mentioned = mention_allowed and agent_name and (
+        contact_mentioned = bool(
+            portal_link.get("mention_enabled", False)
+            and agent_name
+            and (
             f"@{agent_name.lower()}" in message_text.lower()
             or agent_name.lower() in message_text.lower()
+            )
         )
+        active_request = is_admin or contact_mentioned
 
-        assert not agent_mentioned, "Contact message without @mention should not trigger active mode"
+        assert not active_request, "Contact message without @mention should not trigger active mode"
 
     @pytest.mark.asyncio
     async def test_active_route_with_mention_enabled(self):
@@ -437,14 +440,17 @@ class TestPortalRoutingMessageCallback:
         agent_name = AGENT_NAME
 
         is_admin = sender == ADMIN_MXID
-        mention_allowed = is_admin or portal_link.get("mention_enabled", True)
-
-        agent_mentioned = mention_allowed and agent_name and (
+        contact_mentioned = bool(
+            portal_link.get("mention_enabled", True)
+            and agent_name
+            and (
             f"@{agent_name.lower()}" in message_text.lower()
             or agent_name.lower() in message_text.lower()
+            )
         )
+        active_request = is_admin or contact_mentioned
 
-        assert agent_mentioned, "@Meridian with mention_enabled=True should trigger active mode"
+        assert active_request, "@Meridian with mention_enabled=True should trigger active mode"
 
     @pytest.mark.asyncio
     async def test_contact_mention_blocked_without_flag(self):
@@ -455,50 +461,104 @@ class TestPortalRoutingMessageCallback:
         agent_name = AGENT_NAME
 
         is_admin = sender == ADMIN_MXID
-        mention_allowed = is_admin or portal_link.get("mention_enabled", False)
-
-        agent_mentioned = mention_allowed and agent_name and (
+        contact_mentioned = bool(
+            portal_link.get("mention_enabled", False)
+            and agent_name
+            and (
             f"@{agent_name.lower()}" in message_text.lower()
             or agent_name.lower() in message_text.lower()
+            )
         )
+        active_request = is_admin or contact_mentioned
 
-        assert not agent_mentioned, "Contact @mention with mention_enabled=False should be blocked"
+        assert not active_request, "Contact @mention with mention_enabled=False should be blocked"
 
     @pytest.mark.asyncio
-    async def test_admin_bypass_mention_disabled(self):
-        """Admin can invoke agent even with mention_enabled=False."""
-        portal_link = _make_portal_link(mention_enabled=False)
+    async def test_admin_bypass_mention_disabled_non_relay(self):
+        """Admin can invoke agent in non-relay rooms even with mention_enabled=False."""
+        portal_link = _make_portal_link(mention_enabled=False, relay_mode=False)
         message_text = "@Meridian add a calendar entry for tomorrow"
         sender = ADMIN_MXID
         agent_name = AGENT_NAME
 
         is_admin = sender == ADMIN_MXID
-        mention_allowed = is_admin or portal_link.get("mention_enabled", False)
-
-        agent_mentioned = mention_allowed and agent_name and (
+        is_relay = portal_link.get("relay_mode", False)
+        contact_mentioned = bool(
+            portal_link.get("mention_enabled", False)
+            and agent_name
+            and (
             f"@{agent_name.lower()}" in message_text.lower()
             or agent_name.lower() in message_text.lower()
+            )
         )
+        active_request = (is_admin and not is_relay) or contact_mentioned
 
-        assert agent_mentioned, "Admin should be able to invoke agent regardless of mention_enabled"
+        assert active_request, "Admin should be able to invoke agent in non-relay rooms"
 
     @pytest.mark.asyncio
-    async def test_admin_without_mention_still_passive(self):
-        """Admin message without @mention → passive mode (admin doesn't auto-activate)."""
-        portal_link = _make_portal_link(mention_enabled=False)
+    async def test_admin_without_mention_is_active_non_relay(self):
+        portal_link = _make_portal_link(mention_enabled=False, relay_mode=False)
         message_text = "Just checking in on this thread"
         sender = ADMIN_MXID
         agent_name = AGENT_NAME
 
         is_admin = sender == ADMIN_MXID
-        mention_allowed = is_admin or portal_link.get("mention_enabled", False)
-
-        agent_mentioned = mention_allowed and agent_name and (
+        is_relay = portal_link.get("relay_mode", False)
+        contact_mentioned = bool(
+            portal_link.get("mention_enabled", False)
+            and agent_name
+            and (
             f"@{agent_name.lower()}" in message_text.lower()
             or agent_name.lower() in message_text.lower()
+            )
         )
+        active_request = (is_admin and not is_relay) or contact_mentioned
 
-        assert not agent_mentioned, "Admin message without @mention should still go passive"
+        assert active_request, "Admin message without @mention should route active in non-relay rooms"
+
+    @pytest.mark.asyncio
+    async def test_admin_passive_in_relay_mode(self):
+        """Admin acting as bridge relay should stay passive (regression test)."""
+        portal_link = _make_portal_link(mention_enabled=False, relay_mode=True)
+        message_text = "thats amazing!"
+        sender = ADMIN_MXID
+        agent_name = AGENT_NAME
+
+        is_admin = sender == ADMIN_MXID
+        is_relay = portal_link.get("relay_mode", False)
+        contact_mentioned = bool(
+            portal_link.get("mention_enabled", False)
+            and agent_name
+            and (
+            f"@{agent_name.lower()}" in message_text.lower()
+            or agent_name.lower() in message_text.lower()
+            )
+        )
+        active_request = (is_admin and not is_relay) or contact_mentioned
+
+        assert not active_request, "Admin as bridge relay should NOT trigger active mode"
+
+    @pytest.mark.asyncio
+    async def test_admin_relay_with_mention_enabled_and_mention(self):
+        """Admin relay with @mention + mention_enabled should still go active."""
+        portal_link = _make_portal_link(mention_enabled=True, relay_mode=True)
+        message_text = "@Meridian check this"
+        sender = ADMIN_MXID
+        agent_name = AGENT_NAME
+
+        is_admin = sender == ADMIN_MXID
+        is_relay = portal_link.get("relay_mode", False)
+        contact_mentioned = bool(
+            portal_link.get("mention_enabled", False)
+            and agent_name
+            and (
+            f"@{agent_name.lower()}" in message_text.lower()
+            or agent_name.lower() in message_text.lower()
+            )
+        )
+        active_request = (is_admin and not is_relay) or contact_mentioned
+
+        assert active_request, "@mention with mention_enabled should activate even in relay mode"
 
     @pytest.mark.asyncio
     async def test_mention_detection_case_insensitive(self):
@@ -507,14 +567,17 @@ class TestPortalRoutingMessageCallback:
         agent_name = AGENT_NAME  # "Meridian"
 
         for msg in ["@meridian help", "@MERIDIAN help", "@Meridian help", "hey meridian help"]:
-            mention_allowed = True  # mention_enabled=True
-
-            agent_mentioned = mention_allowed and agent_name and (
+            contact_mentioned = bool(
+                True
+                and agent_name
+                and (
                 f"@{agent_name.lower()}" in msg.lower()
                 or agent_name.lower() in msg.lower()
+                )
             )
+            active_request = False or contact_mentioned
 
-            assert agent_mentioned, f"Should detect mention in: {msg}"
+            assert active_request, f"Should detect mention in: {msg}"
 
     @pytest.mark.asyncio
     async def test_mention_detection_in_formatted_body(self):
@@ -525,15 +588,18 @@ class TestPortalRoutingMessageCallback:
         formatted_body = '<a href="https://matrix.to/#/@agent:matrix.oculair.ca">Meridian</a> help me'
 
         is_admin = False
-        mention_allowed = True  # mention_enabled=True
-
-        agent_mentioned = mention_allowed and agent_name and (
+        contact_mentioned = bool(
+            True
+            and agent_name
+            and (
             f"@{agent_name.lower()}" in message_text.lower()
             or agent_name.lower() in message_text.lower()
             or agent_name.lower() in formatted_body.lower()
+            )
         )
+        active_request = is_admin or contact_mentioned
 
-        assert agent_mentioned, "Should detect agent name in formatted_body HTML"
+        assert active_request, "Should detect agent name in formatted_body HTML"
 
 
 # =============================================================================
@@ -685,49 +751,63 @@ class TestPortalRoutingDecisionMatrix:
     """Exhaustive test of every combination of sender type × mention × flag."""
 
     @pytest.mark.parametrize(
-        "sender,mention_enabled,has_mention,expected_active",
+        "sender,mention_enabled,has_mention,relay_mode,expected_active",
         [
-            # Contact scenarios
-            (CONTACT_MXID, False, False, False),   # Contact, disabled, no mention → passive
-            (CONTACT_MXID, False, True, False),     # Contact, disabled, mention → passive (blocked)
-            (CONTACT_MXID, True, False, False),     # Contact, enabled, no mention → passive
-            (CONTACT_MXID, True, True, True),       # Contact, enabled, mention → ACTIVE
+            # Contact scenarios (relay_mode doesn't affect contacts)
+            (CONTACT_MXID, False, False, True, False),   # Contact, disabled, no mention → passive
+            (CONTACT_MXID, False, True, True, False),     # Contact, disabled, mention → passive (blocked)
+            (CONTACT_MXID, True, False, True, False),     # Contact, enabled, no mention → passive
+            (CONTACT_MXID, True, True, True, True),       # Contact, enabled, mention → ACTIVE
 
-            # Admin scenarios
-            (ADMIN_MXID, False, False, False),      # Admin, disabled, no mention → passive
-            (ADMIN_MXID, False, True, True),        # Admin, disabled, mention → ACTIVE (bypass)
-            (ADMIN_MXID, True, False, False),       # Admin, enabled, no mention → passive
-            (ADMIN_MXID, True, True, True),         # Admin, enabled, mention → ACTIVE
+            # Admin in relay_mode=True (bridge relay — admin bypass suppressed)
+            (ADMIN_MXID, False, False, True, False),      # Admin relay, disabled, no mention → passive
+            (ADMIN_MXID, False, True, True, False),       # Admin relay, disabled, mention → passive (blocked)
+            (ADMIN_MXID, True, False, True, False),       # Admin relay, enabled, no mention → passive
+            (ADMIN_MXID, True, True, True, True),         # Admin relay, enabled, mention → ACTIVE
+
+            # Admin in relay_mode=False (direct human admin — bypass preserved)
+            (ADMIN_MXID, False, False, False, True),      # Admin direct, disabled, no mention → ACTIVE
+            (ADMIN_MXID, False, True, False, True),       # Admin direct, disabled, mention → ACTIVE
+            (ADMIN_MXID, True, False, False, True),       # Admin direct, enabled, no mention → ACTIVE
+            (ADMIN_MXID, True, True, False, True),        # Admin direct, enabled, mention → ACTIVE
         ],
         ids=[
             "contact-disabled-no_mention",
             "contact-disabled-with_mention",
             "contact-enabled-no_mention",
             "contact-enabled-with_mention",
-            "admin-disabled-no_mention",
-            "admin-disabled-with_mention",
-            "admin-enabled-no_mention",
-            "admin-enabled-with_mention",
+            "admin_relay-disabled-no_mention",
+            "admin_relay-disabled-with_mention",
+            "admin_relay-enabled-no_mention",
+            "admin_relay-enabled-with_mention",
+            "admin_direct-disabled-no_mention",
+            "admin_direct-disabled-with_mention",
+            "admin_direct-enabled-no_mention",
+            "admin_direct-enabled-with_mention",
         ],
     )
-    def test_routing_decision(self, sender, mention_enabled, has_mention, expected_active):
-        """Parametric test covering all sender × flag × mention combinations."""
-        portal_link = _make_portal_link(mention_enabled=mention_enabled)
+    def test_routing_decision(self, sender, mention_enabled, has_mention, relay_mode, expected_active):
+        """Parametric test covering all sender × flag × mention × relay_mode combinations."""
+        portal_link = _make_portal_link(mention_enabled=mention_enabled, relay_mode=relay_mode)
         agent_name = AGENT_NAME
         message_text = f"@{agent_name} do something" if has_mention else "Regular message"
 
         is_admin = sender == ADMIN_MXID
-        mention_allowed = is_admin or portal_link.get("mention_enabled", False)
-
-        agent_mentioned = mention_allowed and agent_name and (
+        is_relay = portal_link.get("relay_mode", False)
+        contact_mentioned = bool(
+            portal_link.get("mention_enabled", False)
+            and agent_name
+            and (
             f"@{agent_name.lower()}" in message_text.lower()
             or agent_name.lower() in message_text.lower()
+            )
         )
+        active_request = (is_admin and not is_relay) or contact_mentioned
 
-        assert agent_mentioned == expected_active, (
+        assert active_request == expected_active, (
             f"sender={sender}, mention_enabled={mention_enabled}, "
-            f"has_mention={has_mention} → expected_active={expected_active}, "
-            f"got agent_mentioned={agent_mentioned}"
+            f"has_mention={has_mention}, relay_mode={relay_mode} → "
+            f"expected_active={expected_active}, got active_request={active_request}"
         )
 
 
