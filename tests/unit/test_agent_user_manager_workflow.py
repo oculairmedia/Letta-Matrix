@@ -156,12 +156,12 @@ class TestUserExistence:
 
     @pytest.mark.asyncio
     async def test_user_exists_returns_true_on_403(self, mock_config, mock_aiohttp_session):
-        """Test that 403 response with M_FORBIDDEN indicates user exists with wrong password"""
+        """Test that 403 response indicates user exists"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                # Mock 403 response with M_FORBIDDEN errcode (wrong password = user exists)
+                # Mock 403 response (wrong password = user exists)
                 mock_response = AsyncMock()
                 mock_response.status = 403
                 mock_response.json = AsyncMock(return_value={"errcode": "M_FORBIDDEN", "error": "Invalid password"})

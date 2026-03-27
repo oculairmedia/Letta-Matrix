@@ -660,7 +660,7 @@ class TestIdentityProvisionHardening:
         }
 
         mock_manager = Mock()
-        mock_manager.check_user_exists = AsyncMock(return_value="exists_auth_failed")
+        mock_manager.check_user_exists = AsyncMock(return_value="exists_wrong_password")
         mock_manager.create_matrix_user = AsyncMock(return_value=False)
 
         with (
@@ -692,7 +692,7 @@ class TestIdentityProvisionHardening:
         }
 
         mock_manager = Mock()
-        mock_manager.check_user_exists = AsyncMock(return_value="exists_auth_failed")
+        mock_manager.check_user_exists = AsyncMock(return_value="exists_wrong_password")
         mock_manager.create_matrix_user = AsyncMock(return_value=False)
 
         with (

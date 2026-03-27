@@ -227,26 +227,29 @@ class TestAuthentication:
             assert os.path.exists(auth_manager.store_path)
 
     @pytest.mark.asyncio
-    async def test_token_fallback_prefers_expected_user(self, auth_manager, mock_nio_client):
-        mock_nio_client.access_token = None
-        mock_nio_client.device_id = None
+    async def test_token_fallback_prefers_expected_user(self, auth_manager):
+        """Test that token fallback tries MATRIX_ACCESS_TOKEN first and uses it if whoami matches."""
+        # Build a self-contained mock client (avoid fixture ordering issues)
+        nio_mock = AsyncMock()
+        nio_mock.access_token = None
+        nio_mock.device_id = None
+        nio_mock.user_id = "@testuser:test.com"
+        nio_mock.load_store = Mock()
+        nio_mock.login = AsyncMock()
+        nio_mock.close = AsyncMock()
 
-        # Track what token was set when whoami was called
-        whoami_tokens = []
-
-        async def mock_whoami():
-            whoami_tokens.append(mock_nio_client.access_token)
+        async def _whoami():
             who = Mock()
-            if mock_nio_client.access_token == "token_for_expected":
+            if nio_mock.access_token == "token_for_expected":
                 who.user_id = "@testuser:test.com"
             else:
                 who.user_id = "@admin:test.com"
             return who
 
-        mock_nio_client.whoami = mock_whoami
+        nio_mock.whoami = _whoami
 
         with (
-            patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client),
+            patch('src.matrix.auth.AsyncClient', return_value=nio_mock),
             patch.dict(
                 os.environ,
                 {
@@ -261,7 +264,7 @@ class TestAuthentication:
             assert client is not None
             assert client.user_id == "@testuser:test.com"
             assert client.access_token == "token_for_expected"
-            assert "token_for_expected" in whoami_tokens
+            nio_mock.login.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_mismatched_fallback_token_falls_back_to_password_login(

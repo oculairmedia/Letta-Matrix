@@ -4,10 +4,12 @@ Matrix User Manager - Manages Matrix user accounts
 Extracted from agent_user_manager.py as part of Sprint 3 refactoring
 """
 import logging
+import asyncio
 import os
 import re
 import secrets
 import string
+import time
 import aiohttp
 from typing import Literal, Optional
 
@@ -94,7 +96,10 @@ class MatrixUserManager:
             "No admin token available: password login failed and no MATRIX_ADMIN_TOKEN env var"
         )
 
-    async def check_user_exists(self, username: str) -> Literal["exists_healthy", "exists_auth_failed", "not_found"]:
+    async def check_user_exists(
+        self,
+        username: str,
+    ) -> Literal["exists_healthy", "exists_wrong_password", "exists_forbidden_other", "not_found"]:
         """Check Matrix user state (Tuwunel compatible)
 
         Args:
@@ -102,7 +107,8 @@ class MatrixUserManager:
 
         Returns:
             - exists_healthy: user exists and credentials are valid
-            - exists_auth_failed: user exists but auth is failing (e.g., M_FORBIDDEN)
+            - exists_wrong_password: user exists but password is wrong (M_FORBIDDEN)
+            - exists_forbidden_other: user exists but was rejected for another forbidden reason
             - not_found: user does not exist
         """
         try:
@@ -132,17 +138,17 @@ class MatrixUserManager:
                             error_data = await response.json()
                             errcode = error_data.get("errcode", "")
                             if errcode == "M_FORBIDDEN":
-                                logger.debug(f"User {username} exists but auth failed (M_FORBIDDEN)")
-                                return "exists_auth_failed"
+                                logger.debug(f"User {username} exists with wrong password (M_FORBIDDEN)")
+                                return "exists_wrong_password"
                             elif errcode in {"M_UNKNOWN", "M_NOT_FOUND"}:
                                 logger.debug(f"User {username} does not exist ({errcode})")
                                 return "not_found"
                             else:
-                                logger.debug(f"User {username} returned 403 with {errcode}; treating as auth failed")
-                                return "exists_auth_failed"
+                                logger.debug(f"User {username} returned 403 with {errcode}; treating as forbidden_other")
+                                return "exists_forbidden_other"
                         except:
-                            logger.debug(f"User {username} returned 403; treating as auth failed")
-                            return "exists_auth_failed"
+                            logger.debug(f"User {username} returned 403; treating as forbidden_other")
+                            return "exists_forbidden_other"
                     elif response.status == 404:
                         logger.debug(f"User {username} does not exist (404)")
                         return "not_found"
@@ -153,6 +159,57 @@ class MatrixUserManager:
         except Exception as e:
             logger.error(f"Error checking if user {username} exists: {e}")
             return "not_found"
+
+    async def verify_user_credentials(self, username: str, password: str) -> bool:
+        try:
+            url = f"{self.homeserver_url}/_matrix/client/v3/login"
+            payload = {
+                "type": "m.login.password",
+                "identifier": {
+                    "type": "m.id.user",
+                    "user": f"@{username}:matrix.oculair.ca",
+                },
+                "password": password,
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=DEFAULT_TIMEOUT) as response:
+                    return response.status == 200
+        except Exception as exc:
+            logger.warning(f"Credential verification failed for {username}: {exc}")
+            return False
+
+    async def remediate_core_user_credentials(self, username: str, password: str) -> bool:
+        token = await self.get_admin_token()
+        if not token:
+            return False
+
+        admin_room_id = os.getenv("MATRIX_ADMIN_ROOM_ID", "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca")
+        txn_id = int(time.time() * 1000)
+        command = f"!admin users reset-password {username} {password}"
+        url = f"{self.homeserver_url}/_matrix/client/v3/rooms/{admin_room_id}/send/m.room.message/{txn_id}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.put(
+                    url,
+                    headers=headers,
+                    json={"msgtype": "m.text", "body": command},
+                    timeout=DEFAULT_TIMEOUT,
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.warning(f"Failed to remediate credentials for {username}: {response.status} - {error_text}")
+                        return False
+            await asyncio.sleep(0.5)
+            return await self.verify_user_credentials(username, password)
+        except Exception as exc:
+            logger.warning(f"Credential remediation failed for {username}: {exc}")
+            return False
 
     async def create_matrix_user(self, username: str, password: str, display_name: str) -> bool:
         """Create a new Matrix user via registration API (Tuwunel compatible)
@@ -526,12 +583,18 @@ class MatrixUserManager:
                     logger.info(f"Core user already exists: {full_user_id}")
                     continue
 
-                if state == "exists_auth_failed":
-                    # Note: check_user_exists uses a dummy password, so M_FORBIDDEN
-                    # is the EXPECTED response for existing users. This is NOT a real
-                    # auth failure. Real auth monitoring is handled by the cron-based
-                    # health-check-auth.sh which tests with actual credentials.
-                    logger.info(f"Core user exists (dummy-password check): {full_user_id}")
+                if state in {"exists_wrong_password", "exists_forbidden_other"}:
+                    credentials_ok = await self.verify_user_credentials(user_local, password)
+                    if credentials_ok:
+                        logger.info(f"Core user exists with valid credentials: {full_user_id}")
+                        continue
+
+                    remediated = await self.remediate_core_user_credentials(user_local, password)
+                    if remediated:
+                        logger.info(f"Core user credentials remediated: {full_user_id}")
+                        continue
+
+                    logger.error(f"Core user exists but credentials remain invalid after remediation: {full_user_id}")
                     continue
 
                 logger.info(f"Core user missing, creating: {full_user_id}")

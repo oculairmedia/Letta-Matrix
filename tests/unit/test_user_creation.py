@@ -38,7 +38,7 @@ class TestUserCreation:
         
         with patch('aiohttp.ClientSession', return_value=mock_session):
             exists = await user_manager.check_user_exists("testuser")
-            assert exists == "exists_auth_failed"
+            assert exists == "exists_wrong_password"
 
     @pytest.mark.asyncio
     async def test_check_user_exists_user_not_found(self, user_manager):
@@ -153,17 +153,19 @@ class TestUserCreation:
             ("@letta:test.com", "letta_pass", "Letta Bot")
         ]
         
-        # Mock check_user_exists to return True (users exist)
         with patch.object(user_manager, 'check_user_exists', new_callable=AsyncMock) as mock_check:
-            mock_check.return_value = "exists_auth_failed"
-            
-            # Mock create_matrix_user (should not be called)
-            with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
-                await user_manager.ensure_core_users_exist(core_users)
-                
-                # Verify users were checked but not created
-                assert mock_check.call_count == 2
-                assert mock_create.call_count == 0
+            mock_check.return_value = "exists_wrong_password"
+
+            with patch.object(user_manager, 'verify_user_credentials', new_callable=AsyncMock) as mock_verify:
+                mock_verify.return_value = True
+
+                # Mock create_matrix_user (should not be called)
+                with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
+                    await user_manager.ensure_core_users_exist(core_users)
+
+                    assert mock_check.call_count == 2
+                    assert mock_verify.call_count == 2
+                    assert mock_create.call_count == 0
 
     @pytest.mark.asyncio
     async def test_ensure_core_users_exist_mixed_scenario(self, user_manager):
@@ -175,17 +177,20 @@ class TestUserCreation:
         
         # Mock check_user_exists: first exists, second doesn't
         with patch.object(user_manager, 'check_user_exists', new_callable=AsyncMock) as mock_check:
-            mock_check.side_effect = ["exists_auth_failed", "not_found"]
-            
-            # Mock create_matrix_user
-            with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
-                mock_create.return_value = True
-                
-                await user_manager.ensure_core_users_exist(core_users)
-                
-                # Verify: 2 checks, 1 creation
-                assert mock_check.call_count == 2
-                assert mock_create.call_count == 1
+            mock_check.side_effect = ["exists_wrong_password", "not_found"]
+
+            with patch.object(user_manager, 'verify_user_credentials', new_callable=AsyncMock) as mock_verify:
+                mock_verify.return_value = True
+
+                # Mock create_matrix_user
+                with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
+                    mock_create.return_value = True
+
+                    await user_manager.ensure_core_users_exist(core_users)
+
+                    assert mock_check.call_count == 2
+                    assert mock_verify.call_count == 1
+                    assert mock_create.call_count == 1
 
     @pytest.mark.asyncio
     async def test_ensure_core_users_exist_handles_exceptions(self, user_manager):
@@ -229,6 +234,63 @@ class TestUserCreation:
             token = await user_manager.get_admin_token()
             assert token == "admin_token_123"
             assert user_manager.admin_token == "admin_token_123"
+
+    @pytest.mark.asyncio
+    async def test_verify_user_credentials_valid(self, user_manager):
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_post = MagicMock(return_value=mock_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            result = await user_manager.verify_user_credentials("admin", "correct_password")
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_verify_user_credentials_invalid(self, user_manager):
+        mock_response = MagicMock()
+        mock_response.status = 403
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_post = MagicMock(return_value=mock_response)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            result = await user_manager.verify_user_credentials("admin", "wrong_password")
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_core_users_exist_attempts_remediation_when_credentials_invalid(self, user_manager):
+        core_users = [
+            ("@admin:test.com", "admin_pass", "Admin"),
+        ]
+
+        with patch.object(user_manager, 'check_user_exists', new_callable=AsyncMock) as mock_check:
+            mock_check.return_value = "exists_wrong_password"
+
+            with patch.object(user_manager, 'verify_user_credentials', new_callable=AsyncMock) as mock_verify:
+                mock_verify.return_value = False
+
+                with patch.object(user_manager, 'remediate_core_user_credentials', new_callable=AsyncMock) as mock_remediate:
+                    mock_remediate.return_value = True
+
+                    with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
+                        await user_manager.ensure_core_users_exist(core_users)
+
+                        mock_check.assert_called_once()
+                        mock_verify.assert_called_once()
+                        mock_remediate.assert_called_once_with("admin", "admin_pass")
+                        mock_create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_admin_token_uses_cache(self, user_manager):
@@ -769,8 +831,11 @@ class TestUserCreationIntegration:
         # First call: user doesn't exist, gets created
         # Second call: user already exists
         with patch.object(user_manager, 'check_user_exists', new_callable=AsyncMock) as mock_check:
-            mock_check.side_effect = ["not_found", "exists_auth_failed"]
+            mock_check.side_effect = ["not_found", "exists_wrong_password"]
             
+            with patch.object(user_manager, 'verify_user_credentials', new_callable=AsyncMock) as mock_verify:
+                mock_verify.return_value = True
+
             with patch.object(user_manager, 'create_matrix_user', new_callable=AsyncMock) as mock_create:
                 mock_create.return_value = True
                 
