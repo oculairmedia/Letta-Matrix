@@ -78,6 +78,7 @@ class MatrixMessagingServer {
         storage,
         identityManager
       );
+      lettaService.start();
       console.log('[Server] Letta integration enabled:', lettaUrl);
     }
 
@@ -153,6 +154,7 @@ class MatrixMessagingServer {
 
   async shutdown(): Promise<void> {
     console.log('[Server] Shutting down...');
+    this.ctx.lettaService?.stop();
     await this.ctx.clientPool.stopAll();
     process.exit(0);
   }

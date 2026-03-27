@@ -7,14 +7,19 @@
 import { z } from 'zod';
 import type { InferSchema, ToolMetadata } from 'xmcp';
 import { headers } from 'xmcp/dist/runtime/headers.js';
-import { initializeServices } from '../core/services';
-import { getToolContext, result, requireParam, requireIdentity, requireLetta, ToolContext } from '../core/tool-context';
-import { IdentityManager } from '../core/identity-manager';
-import { getCallerContext, resolveCallerIdentity, resolveCallerIdentityId, type CallerContext } from '../core/caller-context';
-import { getOrCreateAgentRoom } from '../core/agent-rooms';
+import { initializeServices } from '../core/services.js';
+import { getToolContext, result, requireParam, requireIdentity, requireLetta } from '../core/tool-context.js';
+import type { ToolContext } from '../core/tool-context.js';
+import { IdentityManager } from '../core/identity-manager.js';
+import { getCallerContext, resolveCallerIdentity, resolveCallerIdentityId } from '../core/caller-context.js';
+import type { CallerContext } from '../core/caller-context.js';
+import { getOrCreateAgentRoom } from '../core/agent-rooms.js';
 import { getOrCreateOpenCodeRoom, updateBridgeRegistration } from '../core/opencode-rooms.js';
-import { autoRegisterWithBridge } from '../core/opencode-bridge';
+import { autoRegisterWithBridge } from '../core/opencode-bridge.js';
 import { getAdminToken, getAdminConfig } from '../core/admin-auth.js';
+import type { MatrixEvent, MatrixIdentity } from '../types/index.js';
+import type { ServerRoomInfo } from '../core/room-manager.js';
+import type { ActiveOpenCodeInstance, OpenCodeSession } from '../opencode/opencode-service.js';
 
 // Room membership cache — tracks known room members to skip redundant join/invite cycles
 const roomMembershipCache = new Map<string, Set<string>>();
@@ -332,7 +337,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         return result({
           room_id,
           message_count: messages.length,
-          messages: messages.map(m => ({
+          messages: messages.map((m: MatrixEvent) => ({
             event_id: m.event_id,
             sender: m.sender,
             timestamp: m.origin_server_ts,
@@ -480,7 +485,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           const { homeserverUrl } = getAdminConfig();
           const rooms = await ctx.roomManager.listServerRooms(adminToken, homeserverUrl);
           return result({ 
-            rooms: rooms.map(r => ({ room_id: r.roomId, name: r.name, topic: r.topic, alias: r.canonicalAlias })),
+            rooms: rooms.map((r: ServerRoomInfo) => ({ room_id: r.roomId, name: r.name, topic: r.topic, alias: r.canonicalAlias })),
             count: rooms.length,
             scope: 'server'
           });
@@ -636,7 +641,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const identities = await ctx.identityManager.listIdentities(input.type);
         return result({
           count: identities.length,
-          identities: identities.map(i => ({
+          identities: identities.map((i: MatrixIdentity) => ({
             id: i.id, mxid: i.mxid, display_name: i.displayName, type: i.type,
             created_at: i.createdAt, last_used_at: i.lastUsedAt
           }))
@@ -697,6 +702,10 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
 
       case 'talk_to_agent':
       case 'letta_chat': {
+        // Note: A simpler version of talk_to_agent is also available as an MCP operation
+        // (operations/letta.ts) for direct Letta communication without Matrix room plumbing.
+        // This version handles full Matrix room management, identity resolution, and bridge integration.
+        //
         // Unified agent chat - supports agent name, agent_name, or agent_id
         // Sends message to the agent's Matrix room
         console.log(`[MatrixMessaging] talk_to_agent called with:`, JSON.stringify({
@@ -722,7 +731,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
             `EASIEST WAY:\n` +
             `  {operation: "talk_to_agent", agent: "Meridian", message: "Hello!"}\n\n` +
             `AVAILABLE AGENTS:\n` +
-            suggestions.map(s => `  • ${s}`).join('\n') + '\n\n' +
+            suggestions.map((s: string) => `  • ${s}`).join('\n') + '\n\n' +
             `TIP: Use agent names like "Meridian" or "BMO" - no need for UUIDs!`
           );
         }
@@ -734,7 +743,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           throw new Error(
             `Agent not found: "${agentInput}"\n\n` +
             (suggestions.length > 0 
-              ? `DID YOU MEAN:\n${suggestions.map(s => `  • ${s}`).join('\n')}\n\n`
+              ? `DID YOU MEAN:\n${suggestions.map((s: string) => `  • ${s}`).join('\n')}\n\n`
               : '') +
             `TO SEE ALL AGENTS:\n` +
             `  {operation: "letta_list"}\n\n` +
@@ -951,7 +960,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ room_id: roomId })
               }))
-              .then(r => r?.json())
+              .then((r: Response | undefined) => r?.json())
               .then((retryData: any) => {
                 if (retryData?.joined || retryData?.already_joined) {
                   console.log(`[MatrixMessaging] OpenCode bridge joined room ${roomId} after invite`);
@@ -989,7 +998,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         });
         
         // Start tracking this conversation for cross-run handling
-                const { getConversationTracker } = await import('../core/conversation-tracker.ts');
+        const { getConversationTracker } = await import('../core/conversation-tracker.js');
         const tracker = getConversationTracker();
         const conv = tracker.startConversation(eventId, roomId, agent_id, message);
         console.log(`[MatrixMessaging] Started tracking conversation ${eventId} for agent ${agent_id}`);
@@ -1033,7 +1042,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           throw new Error(
             `Agent not found: "${agentInput}"\n\n` +
             (suggestions.length > 0 
-              ? `DID YOU MEAN:\n${suggestions.map(s => `  • ${s}`).join('\n')}\n\n`
+              ? `DID YOU MEAN:\n${suggestions.map((s: string) => `  • ${s}`).join('\n')}\n\n`
               : '') +
             `TO SEE ALL AGENTS:\n` +
             `  {operation: "letta_list"}`
@@ -1063,7 +1072,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
 
         const agents = await letta.listAgents({ limit: input.limit });
         const agentsWithIdentities = await Promise.all(
-          agents.map(async agent => {
+          agents.map(async (agent: { id: string; name: string; description?: string; model?: string }) => {
             const identityId = IdentityManager.generateLettaId(agent.id);
             const identity = await ctx.storage.getIdentityAsync(identityId);
             return {
@@ -1210,7 +1219,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         return result({
           total_identities: identities.length,
           active_sessions: sessions.length,
-          sessions: sessions.map((s) => ({ directory: s.directory, identity_id: s.identityId, mxid: s.mxid, connected_at: s.connectedAt }))
+          sessions: sessions.map((s: OpenCodeSession) => ({ directory: s.directory, identity_id: s.identityId, mxid: s.mxid, connected_at: s.connectedAt }))
         });
       }
 
@@ -1219,7 +1228,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         
         return result({
           success: true,
-          instances: instances.map(inst => ({
+          instances: instances.map((inst: ActiveOpenCodeInstance) => ({
             directory: inst.directory,
             project_name: inst.projectName,
             identity: inst.identity.mxid,
@@ -1360,7 +1369,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
   }
 
 
-const servicesInitPromise = initializeServices().catch((error) => {
+const servicesInitPromise = initializeServices().catch((error: unknown) => {
   console.error("[MatrixMessaging] Failed to initialize services:", error);
 });
 

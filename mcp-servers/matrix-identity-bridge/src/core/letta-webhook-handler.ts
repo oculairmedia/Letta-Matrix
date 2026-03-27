@@ -556,10 +556,6 @@ export class LettaWebhookHandler {
       msgtype: 'm.text',
       body: content
     };
-    const messageContent: Record<string, unknown> = {
-      msgtype: 'm.text',
-      body: content
-    };
 
     // Add reply relation if we have an event to reply to
     if (replyToEventId) {

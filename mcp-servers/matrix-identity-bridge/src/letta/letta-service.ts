@@ -7,6 +7,7 @@ import { Letta } from '@letta-ai/letta-client';
 import type { AgentState } from '@letta-ai/letta-client/resources/agents/agents.js';
 import type { Storage } from '../core/storage.js';
 import { IdentityManager } from '../core/identity-manager.js';
+import { getAgentMappingApi } from '../core/agent-mapping-api.js';
 
 export interface LettaConfig {
   baseUrl: string;
@@ -30,6 +31,12 @@ export class LettaService {
   private lastIndexRefresh: number = 0;
   private readonly INDEX_TTL = 60000; // Refresh name index every 60 seconds
   private toolAttachmentCache: Set<string> = new Set();
+  private reconciliationTimer: NodeJS.Timeout | null = null;
+  private reconciliationRunning = false;
+  private readonly NAME_RECONCILIATION_INTERVAL_MS = parseInt(
+    process.env.LETTA_NAME_RECONCILIATION_INTERVAL_MS || '300000',
+    10
+  );
 
   constructor(
     config: LettaConfig,
@@ -43,6 +50,104 @@ export class LettaService {
     });
     this.storage = storage;
     this.identityManager = identityManager;
+  }
+
+  start(): void {
+    if (this.reconciliationTimer) {
+      return;
+    }
+
+    this.reconciliationTimer = setInterval(() => {
+      void this.reconcileAgentDisplayNames();
+    }, this.NAME_RECONCILIATION_INTERVAL_MS);
+
+    this.reconciliationTimer.unref?.();
+    void this.reconcileAgentDisplayNames();
+  }
+
+  stop(): void {
+    if (!this.reconciliationTimer) {
+      return;
+    }
+
+    clearInterval(this.reconciliationTimer);
+    this.reconciliationTimer = null;
+  }
+
+  async reconcileAgentDisplayNames(): Promise<{
+    checked: number;
+    updated: number;
+    missingIdentity: number;
+    failed: number;
+  }> {
+    if (this.reconciliationRunning) {
+      return {
+        checked: 0,
+        updated: 0,
+        missingIdentity: 0,
+        failed: 0,
+      };
+    }
+
+    this.reconciliationRunning = true;
+
+    try {
+      const [agents, identities] = await Promise.all([
+        this.listAgents(),
+        this.storage.getAllIdentitiesAsync('letta'),
+      ]);
+
+      const identitiesById = new Map(identities.map(identity => [identity.id, identity]));
+      const agentMappingApi = getAgentMappingApi();
+
+      const summary = {
+        checked: agents.length,
+        updated: 0,
+        missingIdentity: 0,
+        failed: 0,
+      };
+
+      for (const agent of agents) {
+        const identityId = IdentityManager.generateLettaId(agent.id);
+        const identity = identitiesById.get(identityId);
+
+        if (!identity) {
+          summary.missingIdentity += 1;
+          continue;
+        }
+
+        if (identity.displayName === agent.name) {
+          this.agentCache.set(agent.id, agent);
+          this.agentNameIndex.set(agent.name.toLowerCase(), agent.id);
+          continue;
+        }
+
+        try {
+          await this.identityManager.updateIdentity(identity.id, agent.name, identity.avatarUrl);
+          await agentMappingApi.update(agent.id, { agent_name: agent.name });
+
+          identity.displayName = agent.name;
+          this.agentCache.set(agent.id, agent);
+          this.agentNameIndex.set(agent.name.toLowerCase(), agent.id);
+          summary.updated += 1;
+        } catch (error) {
+          summary.failed += 1;
+          console.error('[LettaService] Failed to reconcile agent display name:', {
+            agentId: agent.id,
+            identityId,
+            error,
+          });
+        }
+      }
+
+      if (summary.updated > 0 || summary.failed > 0) {
+        console.log('[LettaService] Agent name reconciliation summary:', summary);
+      }
+
+      return summary;
+    } finally {
+      this.reconciliationRunning = false;
+    }
   }
 
   /**
@@ -243,17 +348,20 @@ export class LettaService {
   /**
    * Send a message to a Letta agent
    */
-  async sendMessage(agentId: string, message: string): Promise<{
+  async sendMessage(agentId: string, message: string, conversationId?: string): Promise<{
     messages: Array<{ role: string; content: string }>;
     usage?: { total_tokens?: number };
+    conversation_id?: string;
   }> {
     try {
       const response = await this.client.agents.messages.create(agentId, {
-        messages: [{ role: 'user', content: message }]
+        messages: [{ role: 'user', content: message }],
+        ...(conversationId && { conversation_id: conversationId })
       });
 
       // Extract assistant messages from response
       const messages: Array<{ role: string; content: string }> = [];
+      let responseConversationId: string | undefined;
       
       if (response && typeof response === 'object' && 'messages' in response) {
         const respMessages = (response as { messages: Array<{ message_type?: string; content?: string }> }).messages;
@@ -264,7 +372,12 @@ export class LettaService {
         }
       }
 
-      return { messages };
+      // Extract conversation_id from response if available
+      if (response && typeof response === 'object' && 'conversation_id' in response) {
+        responseConversationId = (response as { conversation_id?: string }).conversation_id;
+      }
+
+      return { messages, ...(responseConversationId && { conversation_id: responseConversationId }) };
     } catch (error) {
       console.error('[LettaService] Failed to send message:', error);
       throw error;

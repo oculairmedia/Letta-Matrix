@@ -49,7 +49,7 @@ export class RoomManager {
    */
   private async createDMRoom(fromMxid: string, toMxid: string): Promise<string> {
     // Get client for the initiator
-    const fromIdentity = this.storage.getIdentityByMXID(fromMxid);
+    const fromIdentity = await this.storage.getIdentityByMXIDAsync(fromMxid);
     if (!fromIdentity) {
       throw new Error(`Identity not found for MXID: ${fromMxid}`);
     }
@@ -61,14 +61,26 @@ export class RoomManager {
       preset: 'trusted_private_chat',
       is_direct: true,
       invite: [toMxid],
-      initial_state: [],
-      power_level_content_override: {
+    });
+
+    // Set power levels after room creation to avoid Tuwunel ordering issues
+    try {
+      await client.sendStateEvent(roomId, 'm.room.power_levels', '', {
         users: {
           [fromMxid]: 100,
           [toMxid]: 100
-        }
-      }
-    });
+        },
+        users_default: 0,
+        events_default: 0,
+        state_default: 50,
+        ban: 50,
+        kick: 50,
+        redact: 50,
+        invite: 0
+      });
+    } catch (err) {
+      console.warn(`[RoomManager] Could not set power levels for DM room ${roomId}:`, err instanceof Error ? err.message : err);
+    }
 
     // Mark room as direct message
     const directRooms = await this.getDirectRooms(client, fromMxid);

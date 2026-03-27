@@ -76,6 +76,7 @@ export async function initializeServices(): Promise<void> {
         storage,
         identityManager
       );
+      lettaService.start();
       console.log("[Services] Letta integration enabled");
     }
 
@@ -165,6 +166,7 @@ export async function shutdownServices(): Promise<void> {
   if (_services.webhookServer) {
     await _services.webhookServer.stop();
   }
+  _services.lettaService?.stop();
   await _services.clientPool.stopAll();
   _services = null;
   _initPromise = null;

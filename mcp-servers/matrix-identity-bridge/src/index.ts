@@ -78,6 +78,7 @@ async function main() {
       storage,
       identityManager
     );
+    lettaService.start();
     console.log('[MatrixMCP] Letta integration enabled');
   }
 
@@ -209,6 +210,7 @@ async function main() {
     if (httpProxy) {
       await httpProxy.stop();
     }
+    lettaService?.stop();
     await clientPool.stopAll();
     await server.stop();
     process.exit(0);

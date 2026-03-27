@@ -12,6 +12,8 @@ import uvicorn
 from pydantic import BaseModel
 
 from src.api.auth import verify_internal_key
+from src.core.identity_health_monitor import get_identity_token_health_monitor
+from src.matrix.identity_client_pool import get_identity_client_pool
 
 from src.api.routes.agent_sync import (
     NewAgentNotification,
@@ -225,6 +227,28 @@ class MatrixAPIClient:
 
 matrix_client = MatrixAPIClient()
 app.state.matrix_client = matrix_client
+
+
+@app.on_event("startup")
+async def start_identity_token_monitor():
+    if not IDENTITY_API_AVAILABLE:
+        return
+    monitor = get_identity_token_health_monitor()
+    await monitor.start()
+    app.state.identity_token_monitor = monitor
+    client_pool = get_identity_client_pool()
+    await client_pool.start()
+    app.state.identity_client_pool = client_pool
+
+
+@app.on_event("shutdown")
+async def stop_identity_token_monitor():
+    client_pool = getattr(app.state, "identity_client_pool", None)
+    if client_pool:
+        await client_pool.stop()
+    monitor = getattr(app.state, "identity_token_monitor", None)
+    if monitor:
+        await monitor.stop()
 
 
 @app.get("/")

@@ -48,6 +48,19 @@ def auth_manager(temp_store_path):
     return manager
 
 
+@pytest.fixture(autouse=True)
+def fast_auth_retry_env():
+    with patch.dict(
+        os.environ,
+        {
+            "MATRIX_LOGIN_MAX_RETRIES": "1",
+            "MATRIX_LOGIN_RETRY_DELAY": "0",
+        },
+        clear=False,
+    ):
+        yield
+
+
 @pytest.fixture
 def mock_nio_client():
     """Create a mock nio AsyncClient"""
@@ -212,6 +225,75 @@ class TestAuthentication:
 
             # Store directory should now exist
             assert os.path.exists(auth_manager.store_path)
+
+    @pytest.mark.asyncio
+    async def test_token_fallback_prefers_expected_user(self, auth_manager, mock_nio_client):
+        mock_nio_client.access_token = None
+        mock_nio_client.device_id = None
+
+        async def mock_whoami():
+            who = Mock()
+            if mock_nio_client.access_token == "token_for_expected":
+                who.user_id = "@testuser:test.com"
+            else:
+                who.user_id = "@admin:test.com"
+            return who
+
+        mock_nio_client.whoami = AsyncMock(side_effect=mock_whoami)
+
+        with (
+            patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client),
+            patch.dict(
+                os.environ,
+                {
+                    'MATRIX_ACCESS_TOKEN': 'token_for_expected',
+                    'MATRIX_ADMIN_TOKEN': 'token_for_admin',
+                },
+                clear=False,
+            ),
+        ):
+            client = await auth_manager.get_authenticated_client()
+
+            assert client is not None
+            assert client.user_id == "@testuser:test.com"
+            assert client.access_token == "token_for_expected"
+            mock_nio_client.login.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mismatched_fallback_token_falls_back_to_password_login(
+        self, auth_manager, mock_nio_client
+    ):
+        mock_nio_client.access_token = None
+        mock_nio_client.device_id = None
+
+        who = Mock()
+        who.user_id = "@admin:test.com"
+        mock_nio_client.whoami = AsyncMock(return_value=who)
+
+        class MockLoginResponse:
+            pass
+
+        async def mock_login(*args, **kwargs):
+            mock_nio_client.access_token = "login_token"
+            mock_nio_client.device_id = "LOGIN_DEVICE"
+            mock_nio_client.user_id = "@testuser:test.com"
+            return MockLoginResponse()
+
+        mock_nio_client.login = mock_login
+
+        with (
+            patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client),
+            patch.dict(
+                os.environ,
+                {'MATRIX_ACCESS_TOKEN': '', 'MATRIX_ADMIN_TOKEN': 'admin_only_token'},
+                clear=False,
+            ),
+        ):
+            client = await auth_manager.get_authenticated_client()
+
+            assert client is not None
+            assert client.user_id == "@testuser:test.com"
+            assert client.access_token == "login_token"
 
 
 # ============================================================================
