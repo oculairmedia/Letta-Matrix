@@ -216,7 +216,8 @@ class TestIdentityEndpoints:
         client.post("/api/v1/identities", json=sample_identity)
         
         update_data = {"display_name": "Updated Name"}
-        response = client.put(f"/api/v1/identities/{sample_identity['id']}", json=update_data)
+        with patch('src.api.routes.identity._sync_identity_profile', new_callable=AsyncMock):
+            response = client.put(f"/api/v1/identities/{sample_identity['id']}", json=update_data)
         
         assert response.status_code == 200
         data = response.json()

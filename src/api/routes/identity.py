@@ -21,12 +21,59 @@ from src.api.schemas.identity import (
     IdentityProvisionRequest,
     IdentityProvisionResponse,
 )
+from src.core.identity_health_monitor import get_identity_token_health_monitor
 from src.core.identity_storage import get_identity_service, get_dm_room_service
+from src.core.user_manager import MatrixUserManager
 from src.matrix.identity_client_pool import get_identity_client_pool
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["identities"])
+
+
+async def _sync_identity_profile(identity_id: str, display_name: Optional[str]) -> None:
+    if display_name is None:
+        return
+
+    service = get_identity_service()
+    identity = service.get(identity_id)
+    if not identity:
+        raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
+
+    homeserver_url = os.getenv("MATRIX_HOMESERVER_URL", "https://matrix.oculair.ca")
+    admin_username = os.getenv("MATRIX_ADMIN_USERNAME", "admin")
+    admin_password = os.getenv("MATRIX_ADMIN_PASSWORD", "")
+    user_manager = MatrixUserManager(homeserver_url, admin_username, admin_password)
+
+    monitor = get_identity_token_health_monitor()
+    token_ready = await monitor.ensure_identity_healthy(identity_id)
+
+    refreshed_identity = service.get(identity_id)
+    if not refreshed_identity:
+        raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found after refresh")
+
+    sync_success = False
+    if token_ready and refreshed_identity.access_token is not None:
+        sync_success = await user_manager.set_user_display_name(
+            str(refreshed_identity.mxid),
+            display_name,
+            str(refreshed_identity.access_token),
+        )
+
+    if not sync_success and refreshed_identity.password_hash is not None:
+        sync_success = await user_manager.update_display_name(
+            str(refreshed_identity.mxid),
+            display_name,
+            str(refreshed_identity.password_hash),
+        )
+        if sync_success:
+            await monitor.ensure_identity_healthy(identity_id)
+
+    if not sync_success:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to sync Matrix profile display name for {identity_id}",
+        )
 
 
 @router.post("/identities", response_model=IdentityResponse, status_code=status.HTTP_201_CREATED)
@@ -64,7 +111,7 @@ async def list_identities(
     if identity_type:
         identities = service.get_by_type(identity_type)
         if active_only:
-            identities = [i for i in identities if i.is_active]
+            identities = [i for i in identities if bool(i.is_active)]
     else:
         identities = service.get_all(active_only=active_only)
     
@@ -108,16 +155,23 @@ async def update_identity(identity_id: str, request: IdentityUpdate):
     service = get_identity_service()
     
     existing = service.get(identity_id)
-    if not existing:
+    if existing is None:
         raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
     
     update_data = request.model_dump(exclude_unset=True)
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    display_name_changed = (
+        "display_name" in update_data and update_data["display_name"] != existing.display_name
+    )
     
     identity = service.update(identity_id, **update_data)
     if not identity:
         raise HTTPException(status_code=500, detail="Update failed")
+
+    if display_name_changed:
+        await _sync_identity_profile(identity_id, str(identity.display_name) if identity.display_name is not None else None)
     
     return IdentityResponse.from_identity(identity)
 
@@ -156,7 +210,7 @@ async def send_as_identity(request: SendAsIdentityRequest):
             error=f"Identity {request.identity_id} not found"
         )
     
-    if not identity.is_active:
+    if not bool(identity.is_active):
         return SendAsIdentityResponse(
             success=False,
             identity_id=request.identity_id,
@@ -307,7 +361,7 @@ async def lookup_dm_room(mxid1: str, mxid2: str):
 async def get_dm_room_by_id(room_id: str):
     service = get_dm_room_service()
     dm_room = service.get_by_room_id(unquote(room_id))
-    if not dm_room:
+    if dm_room is None:
         raise HTTPException(status_code=404, detail=f"DM room {room_id} not found")
     return DMRoomResponse.from_dm_room(dm_room)
 
@@ -355,10 +409,10 @@ async def list_full_identities(
     verify_internal_key(x_internal_key)
     service = get_identity_service()
     
-    if identity_type:
+    if identity_type is not None:
         identities = service.get_by_type(identity_type)
         if active_only:
-            identities = [i for i in identities if i.is_active]
+            identities = [i for i in identities if bool(i.is_active)]
     else:
         identities = service.get_all(active_only=active_only)
     
@@ -413,23 +467,23 @@ async def provision_identity(
     
     service = get_identity_service()
     existing = service.get(identity_id)
-    if existing and existing.access_token:
+    if existing is not None and existing.access_token is not None:
         return IdentityProvisionResponse(
             success=True,
             identity_id=identity_id,
-            mxid=existing.mxid,
-            access_token=existing.access_token,
-            display_name=existing.display_name or display_name
+            mxid=str(existing.mxid),
+            access_token=str(existing.access_token),
+            display_name=str(existing.display_name) if existing.display_name is not None else display_name
         )
     
     existing_mxid = service.get_by_mxid(mxid)
-    if existing_mxid and existing_mxid.access_token:
+    if existing_mxid is not None and existing_mxid.access_token is not None:
         return IdentityProvisionResponse(
             success=True,
-            identity_id=existing_mxid.id,
-            mxid=existing_mxid.mxid,
-            access_token=existing_mxid.access_token,
-            display_name=existing_mxid.display_name or display_name
+            identity_id=str(existing_mxid.id),
+            mxid=str(existing_mxid.mxid),
+            access_token=str(existing_mxid.access_token),
+            display_name=str(existing_mxid.display_name) if existing_mxid.display_name is not None else display_name
         )
     
     hash_input = f"{localpart}:{password_secret}"
@@ -462,8 +516,8 @@ async def provision_identity(
                         )
                         return IdentityProvisionResponse(
                             success=True,
-                            identity_id=identity.id,
-                            mxid=identity.mxid,
+                            identity_id=str(identity.id),
+                            mxid=str(identity.mxid),
                             access_token=access_token,
                             display_name=display_name
                         )
@@ -523,8 +577,8 @@ async def provision_identity(
     
     return IdentityProvisionResponse(
         success=True,
-        identity_id=identity.id,
-        mxid=identity.mxid,
+        identity_id=str(identity.id),
+        mxid=str(identity.mxid),
         access_token=access_token,
         display_name=display_name
     )
