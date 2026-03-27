@@ -5,13 +5,14 @@ Agent authentication and token management helpers.
 import asyncio
 import logging
 import time
-from typing import Callable, Dict, Optional
+from typing import Awaitable, Callable, Dict, Optional
 
 import aiohttp
 
 from src.matrix.config import Config
 from src.models.agent_mapping import AgentMappingDB
 from src.core.mapping_service import invalidate_cache
+from src.core.password_consistency import sync_agent_password_consistently
 
 
 _AGENT_LOGIN_TIMEOUT = aiohttp.ClientTimeout(total=10)
@@ -111,6 +112,7 @@ async def repair_agent_password(
     _session_factory: Callable[[], aiohttp.ClientSession] = aiohttp.ClientSession,
     _db_factory: Callable[[], AgentMappingDB] = AgentMappingDB,
     _invalidate_fn: Callable[[], None] = invalidate_cache,
+    _sync_password_fn: Callable[..., Awaitable[bool]] = sync_agent_password_consistently,
     _cooldown_override: Optional[int] = None,
 ) -> Optional[str]:
     """
@@ -223,28 +225,22 @@ async def repair_agent_password(
                     f"[{caller}] Password repair: no correlated confirmation for {agent_username}, "
                     f"persisting new password optimistically"
                 )
-        # Update DB with new password (persist even without confirmation —
-        # the command was sent successfully, and Tuwunel may just be slow to respond)
-
-        db = _db_factory()
-        mapping = db.get_by_agent_id(agent_id)
-        if mapping:
-            room_id = str(mapping.room_id) if mapping.room_id is not None else None
-            db.upsert(
-                str(mapping.agent_id),
-                str(mapping.agent_name),
-                str(mapping.matrix_user_id),
-                new_password,
-                room_id=room_id,
+        sync_ok = await _sync_password_fn(
+            agent_id,
+            new_password,
+            mapping_db=_db_factory(),
+            invalidate_cache_fn=_invalidate_fn,
+        )
+        if not sync_ok:
+            logger.error(
+                f"[{caller}] Password repair: failed to persist password consistently for {agent_name} ({agent_username})"
             )
-            _invalidate_fn()
-            logger.info(
-                f"[{caller}] Password repair: reset password and updated DB for {agent_name} ({agent_username})"
-            )
-            return new_password
+            return None
 
-        logger.error(f"[{caller}] Password repair: mapping not found for {agent_id}")
-        return None
+        logger.info(
+            f"[{caller}] Password repair: reset password and synced stores for {agent_name} ({agent_username})"
+        )
+        return new_password
     except Exception as e:
         logger.error(f"[{caller}] Password repair failed for {agent_username}: {e}", exc_info=True)
         return None

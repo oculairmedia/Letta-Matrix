@@ -1,7 +1,7 @@
 /**
  * Tests for Identity Manager static methods
  */
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, jest, afterEach } from '@jest/globals';
 import { IdentityManager } from '../src/core/identity-manager.js';
 
 describe('IdentityManager', () => {
@@ -134,6 +134,105 @@ describe('IdentityManager', () => {
       
       // Should still produce valid localpart
       expect(localpart).toMatch(/^[a-z0-9._=-]+$/);
+    });
+  });
+
+  describe('Password sync retry behavior', () => {
+    const originalRetries = process.env.PASSWORD_SYNC_MAX_RETRIES;
+    const originalBackoff = process.env.PASSWORD_SYNC_BACKOFF_MS;
+
+    afterEach(() => {
+      jest.useRealTimers();
+      process.env.PASSWORD_SYNC_MAX_RETRIES = originalRetries;
+      process.env.PASSWORD_SYNC_BACKOFF_MS = originalBackoff;
+      jest.restoreAllMocks();
+    });
+
+    it('retries syncPasswordToDb with bounded backoff and succeeds', async () => {
+      jest.useFakeTimers();
+      process.env.PASSWORD_SYNC_MAX_RETRIES = '3';
+      process.env.PASSWORD_SYNC_BACKOFF_MS = '10';
+
+      const fetchMock: jest.MockedFunction<typeof fetch> = jest.fn();
+      fetchMock
+        .mockResolvedValueOnce(new Response('temporary failure', { status: 500 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ mapping: { agent_id: 'agent-123' } }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+      global.fetch = fetchMock as typeof fetch;
+
+      const manager = new IdentityManager(
+        {
+          getIdentityAsync: async () => undefined,
+          saveIdentity: async () => undefined,
+          getAllIdentitiesAsync: async () => [],
+          getIdentityByMXIDAsync: async () => undefined,
+          deleteIdentity: async () => undefined,
+        } as never,
+        'https://matrix.test',
+        'admin-token',
+        'matrix.test',
+      );
+
+      const syncPasswordToDb = Reflect.get(
+        manager as object,
+        'syncPasswordToDb',
+      ) as (localpart: string, password: string) => Promise<void>;
+      const run = syncPasswordToDb.call(manager, 'agent_123', 'new-pass');
+      await jest.runAllTimersAsync();
+      await run;
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        'http://matrix-api:8000/agents/agent-123/mapping',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ matrix_password: 'new-pass' }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        'http://matrix-api:8000/agents/agent-123/mapping',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ matrix_password: 'new-pass' }),
+        }),
+      );
+    });
+
+    it('throws after retry exhaustion in syncPasswordToDb', async () => {
+      process.env.PASSWORD_SYNC_MAX_RETRIES = '2';
+      process.env.PASSWORD_SYNC_BACKOFF_MS = '1';
+
+      const fetchMock: jest.MockedFunction<typeof fetch> = jest.fn();
+      fetchMock.mockImplementation(async () => new Response('persistent failure', { status: 500 }));
+      global.fetch = fetchMock as typeof fetch;
+
+      const manager = new IdentityManager(
+        {
+          getIdentityAsync: async () => undefined,
+          saveIdentity: async () => undefined,
+          getAllIdentitiesAsync: async () => [],
+          getIdentityByMXIDAsync: async () => undefined,
+          deleteIdentity: async () => undefined,
+        } as never,
+        'https://matrix.test',
+        'admin-token',
+        'matrix.test',
+      );
+
+      const syncPasswordToDb = Reflect.get(
+        manager as object,
+        'syncPasswordToDb',
+      ) as (localpart: string, password: string) => Promise<void>;
+      await expect(syncPasswordToDb.call(manager, 'agent_999', 'new-pass')).rejects.toThrow(
+        'Failed to sync password to DB',
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
 });

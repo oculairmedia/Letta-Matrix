@@ -12,6 +12,7 @@ from typing import Optional, Tuple
 import aiohttp
 
 from src.core.identity_storage import IdentityStorageService, get_identity_service
+from src.core.password_consistency import sync_agent_password_consistently
 from src.core.user_manager import MatrixUserManager
 from src.models.identity import Identity
 
@@ -171,12 +172,31 @@ class IdentityTokenHealthMonitor:
             relogin_after_reset = await self._login_with_password(identity_mxid, new_password)
             if relogin_after_reset:
                 access_token, device_id = relogin_after_reset
-                self.identity_service.update(
+                updated_identity = self.identity_service.update(
                     identity_id,
                     access_token=access_token,
                     device_id=device_id,
                     password_hash=new_password,
                 )
+                if updated_identity is None:
+                    logger.warning("Failed to update identity state for %s after reset", identity_id)
+                    await asyncio.sleep(float(attempt))
+                    continue
+
+                if identity_id.startswith("letta_"):
+                    agent_id = identity_id[6:]
+                    synced = await sync_agent_password_consistently(
+                        agent_id,
+                        new_password,
+                        identity_service=self.identity_service,
+                    )
+                    if not synced:
+                        logger.warning(
+                            "Password reset recovered token for %s but failed cross-store sync",
+                            identity_id,
+                        )
+                        await asyncio.sleep(float(attempt))
+                        continue
                 return "reset_recovered"
 
             await asyncio.sleep(float(attempt))

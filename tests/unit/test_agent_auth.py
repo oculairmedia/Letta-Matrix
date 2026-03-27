@@ -1,6 +1,7 @@
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Iterator
 
 import pytest
 
@@ -16,7 +17,7 @@ def _make_async_cm(response: MagicMock) -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _reset_repair_attempts() -> None:
+def _reset_repair_attempts() -> Iterator[None]:
     agent_auth._repair_last_attempt.clear()
     yield
     agent_auth._repair_last_attempt.clear()
@@ -152,10 +153,12 @@ async def test_repair_agent_password_sends_admin_room_command(
     db_instance.get_by_agent_id.return_value = db_record
 
     with patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)):
+        sync_password = AsyncMock(return_value=True)
         new_password = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
             _db_factory=lambda: db_instance,
             _invalidate_fn=lambda: None,
+            _sync_password_fn=sync_password,
             _cooldown_override=0,
         )
 
@@ -191,9 +194,7 @@ async def test_repair_agent_password_respects_cooldown(
     http_session.__aenter__ = AsyncMock(return_value=http_session)
     http_session.__aexit__ = AsyncMock(return_value=None)
 
-    with (
-        patch("src.matrix.agent_auth.time.monotonic", side_effect=[1000.0, 1000.0, 1100.0]),
-    ):
+    with patch("src.matrix.agent_auth.time.monotonic", side_effect=[1000.0, 1000.0, 1100.0]):
         first = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
         )
@@ -251,10 +252,12 @@ async def test_repair_confirmation_correlates_to_agent_username(
     db_instance.get_by_agent_id.return_value = db_record
 
     with patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)):
+        sync_password = AsyncMock(return_value=True)
         new_password = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
             _db_factory=lambda: db_instance,
             _invalidate_fn=lambda: None,
+            _sync_password_fn=sync_password,
             _cooldown_override=0,
         )
 
@@ -307,10 +310,12 @@ async def test_repair_ignores_other_agent_confirmation(
     db_instance.get_by_agent_id.return_value = db_record
 
     with patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)):
+        sync_password = AsyncMock(return_value=True)
         new_password = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
             _db_factory=lambda: db_instance,
             _invalidate_fn=lambda: None,
+            _sync_password_fn=sync_password,
             _cooldown_override=0,
         )
 
@@ -363,10 +368,12 @@ async def test_repair_expanded_polling_window(
     db_instance.get_by_agent_id.return_value = db_record
 
     with patch("src.matrix.agent_auth.asyncio.sleep", new=AsyncMock(return_value=None)):
+        sync_password = AsyncMock(return_value=True)
         new_password = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
             _db_factory=lambda: db_instance,
             _invalidate_fn=lambda: None,
+            _sync_password_fn=sync_password,
             _cooldown_override=0,
         )
 

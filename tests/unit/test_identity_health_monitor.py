@@ -1,5 +1,6 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -88,6 +89,65 @@ async def test_check_identity_reset_recovered_after_failed_login():
     assert update_kwargs["access_token"] == "fresh-token"
     assert update_kwargs["device_id"] == "DEV2"
     assert update_kwargs["password_hash"].startswith("IdentityRepair_id3_")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_check_identity_reset_recovered_syncs_agent_mapping_for_letta_identity():
+    identity_service = MagicMock()
+    user_manager = MagicMock()
+    monitor = IdentityTokenHealthMonitor(
+        homeserver_url="https://matrix.test",
+        interval_seconds=1,
+        identity_service=identity_service,
+        user_manager=user_manager,
+    )
+    identity = _identity("letta_agent-abc", "@agent_abc:matrix.test", password="old-pass")
+
+    monitor._validate_identity_token = AsyncMock(return_value=False)
+    monitor._login_with_password = AsyncMock(side_effect=[None, ("fresh-token", "DEVX")])
+    monitor._reset_password_via_admin_room = AsyncMock(return_value=True)
+    identity_service.update.return_value = identity
+
+    with patch(
+        "src.core.identity_health_monitor.sync_agent_password_consistently",
+        new=AsyncMock(return_value=True),
+    ) as sync_password:
+        status = await monitor._check_identity(identity)
+
+    assert status == "reset_recovered"
+    assert sync_password.await_count == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_check_identity_reset_recovery_fails_when_cross_store_sync_fails():
+    identity_service = MagicMock()
+    user_manager = MagicMock()
+    monitor = IdentityTokenHealthMonitor(
+        homeserver_url="https://matrix.test",
+        interval_seconds=1,
+        identity_service=identity_service,
+        user_manager=user_manager,
+    )
+    monitor.max_reset_retries = 1
+    identity = _identity("letta_agent-fail", "@agent_fail:matrix.test", password="old-pass")
+
+    monitor._validate_identity_token = AsyncMock(return_value=False)
+    monitor._login_with_password = AsyncMock(side_effect=[None, ("fresh-token", "DEVY")])
+    monitor._reset_password_via_admin_room = AsyncMock(return_value=True)
+    identity_service.update.return_value = identity
+
+    with (
+        patch("src.core.identity_health_monitor.asyncio.sleep", new=AsyncMock(return_value=None)),
+        patch(
+            "src.core.identity_health_monitor.sync_agent_password_consistently",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        status = await monitor._check_identity(identity)
+
+    assert status == "failed"
 
 
 @pytest.mark.unit

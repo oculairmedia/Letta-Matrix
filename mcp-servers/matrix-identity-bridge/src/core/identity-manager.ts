@@ -399,22 +399,41 @@ export class IdentityManager {
    * Agent ID format: agent-{uuid_with_hyphens}
    */
   private async syncPasswordToDb(localpart: string, password: string): Promise<void> {
-    try {
-      // Convert localpart back to agent ID: agent_{uuid} -> agent-{uuid}
-      if (!localpart.startsWith('agent_')) {
-        // Not a Letta agent localpart — skip DB sync
-        return;
-      }
-      const uuidPart = localpart.substring(6).replace(/_/g, '-');
-      const agentId = `agent-${uuidPart}`;
-      
-      const api = getAgentMappingApi();
-      await api.update(agentId, { matrix_password: password });
-      console.log(`[IdentityManager] Synced password to DB for ${agentId}`);
-    } catch (error) {
-      // Non-fatal: log but don't throw — the identity was still created/updated successfully
-      console.warn('[IdentityManager] Failed to sync password to DB (non-fatal):', error);
+    if (!localpart.startsWith('agent_')) {
+      return;
     }
+
+    const uuidPart = localpart.substring(6).replace(/_/g, '-');
+    const agentId = `agent-${uuidPart}`;
+    const retries = Number(process.env.PASSWORD_SYNC_MAX_RETRIES || '3');
+    const baseBackoffMs = Number(process.env.PASSWORD_SYNC_BACKOFF_MS || '250');
+    const api = getAgentMappingApi();
+
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= retries; attempt += 1) {
+      try {
+        const updated = await api.update(agentId, { matrix_password: password });
+        if (!updated) {
+          throw new Error(`Agent mapping update returned null for ${agentId}`);
+        }
+        console.log(`[IdentityManager] Synced password to DB for ${agentId}`);
+        return;
+      } catch (error) {
+        lastError = error;
+        console.warn(
+          `[IdentityManager] Password sync failed for ${agentId} (attempt ${attempt}/${retries})`,
+          error,
+        );
+        if (attempt < retries) {
+          const delay = baseBackoffMs * (2 ** (attempt - 1));
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    throw new Error(
+      `[IdentityManager] Failed to sync password to DB for ${agentId} after ${retries} attempts: ${String(lastError)}`,
+    );
   }
 
   /**
