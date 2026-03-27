@@ -5,8 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from temporal_workflows import activities
+from temporal_workflows.activities import deliver as deliver_activities
 from temporal_workflows.activities import (
     CleanupArtifactsInput,
+    DeliveryAckInput,
+    DeliverToLettaInput,
     MatrixAPIError,
     MatrixStatusInput,
     NotifyAgentInput,
@@ -308,3 +311,144 @@ async def test_notify_letta_agent_raises_on_receive_timeout(monkeypatch):
                 room_id="!room:matrix.test",
             )
         )
+
+
+class _DeliverWS:
+    def __init__(self, events):
+        self._events = list(events)
+        self.sent = []
+
+    async def send(self, payload):
+        self.sent.append(payload)
+
+    async def recv(self):
+        if not self._events:
+            raise AssertionError("No queued websocket events")
+        return self._events.pop(0)
+
+    async def close(self):
+        return None
+
+
+class _HTTPResponse:
+    def __init__(self, status_code=200, text="ok"):
+        self.status_code = status_code
+        self.text = text
+
+
+class _HTTPClient:
+    def __init__(self, response):
+        self._response = response
+        self.post_calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, **kwargs):
+        self.post_calls.append((url, kwargs))
+        return self._response
+
+
+@pytest.mark.asyncio
+async def test_deliver_to_letta_collects_stream_and_result(monkeypatch):
+    ws = _DeliverWS(
+        [
+            json.dumps({"type": "session_init", "session_id": "sess-1"}),
+            json.dumps({"type": "stream", "event": "assistant", "content": "Hello "}),
+            json.dumps({"type": "stream", "event": "assistant", "content": "world"}),
+            json.dumps({"type": "result", "success": True}),
+        ]
+    )
+
+    async def _connect(*args, **kwargs):
+        return ws
+
+    monkeypatch.setattr(deliver_activities.websockets, "connect", _connect)
+
+    result = await deliver_activities.deliver_to_letta(
+        DeliverToLettaInput(
+            agent_id="agent-123",
+            message_body="hi",
+            room_id="!room:matrix.test",
+        )
+    )
+
+    assert result.success is True
+    assert result.response_text == "Hello world"
+    assert len(ws.sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_deliver_to_letta_agent_not_found_is_non_retryable(monkeypatch):
+    ws = _DeliverWS(
+        [json.dumps({"type": "error", "message": "Agent does not exist"})]
+    )
+
+    async def _connect(*args, **kwargs):
+        return ws
+
+    monkeypatch.setattr(deliver_activities.websockets, "connect", _connect)
+
+    with pytest.raises(deliver_activities.AgentNotFoundError):
+        await deliver_activities.deliver_to_letta(
+            DeliverToLettaInput(agent_id="missing-agent", message_body="hello")
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_delivery_ack_handles_5xx_gracefully(monkeypatch):
+    client = _HTTPClient(_HTTPResponse(status_code=500, text="boom"))
+    monkeypatch.setattr(deliver_activities.httpx, "AsyncClient", lambda timeout=10.0: client)
+
+    result = await deliver_activities.send_delivery_ack(
+        DeliveryAckInput(
+            room_id="!room:matrix.test",
+            event_id="$evt",
+            agent_id="agent-123",
+        )
+    )
+
+    assert result.success is False
+    assert len(client.post_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_dead_letter_message_writes_db_and_alerts(monkeypatch):
+    execute_calls = []
+
+    class _Conn:
+        async def execute(self, query, *args):
+            execute_calls.append((query, args))
+
+        async def close(self):
+            return None
+
+    async def _connect(_db_url):
+        return _Conn()
+
+    client = _HTTPClient(_HTTPResponse(status_code=200, text="ok"))
+    monkeypatch.setattr(deliver_activities.httpx, "AsyncClient", lambda timeout=10.0: client)
+
+    import types
+    fake_asyncpg = types.SimpleNamespace(connect=_connect)
+    import sys
+    monkeypatch.setitem(sys.modules, "asyncpg", fake_asyncpg)
+
+    result = await deliver_activities.dead_letter_message(
+        deliver_activities.DeadLetterInput(
+            event_id="$evt",
+            room_id="!room:matrix.test",
+            agent_id="agent-123",
+            message_body="payload",
+            sender="@user:matrix.test",
+            error="failed",
+            attempts=3,
+        )
+    )
+
+    assert result.success is True
+    assert len(execute_calls) == 1
+    assert len(client.post_calls) == 1

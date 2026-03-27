@@ -1,5 +1,5 @@
 """
-Temporal Worker — Registers file processing workflows and activities, polls for tasks.
+Temporal Worker — Registers file processing and message delivery workflows, polls for tasks.
 
 Connects to the Temporal server and runs the matrix-file-queue worker.
 Follows the same structure as /opt/stacks/letta/temporal_workflows/worker.py.
@@ -21,6 +21,7 @@ from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 # Import workflows and activities
 from temporal_workflows.workflows import file_processing
+from temporal_workflows.workflows import message_delivery
 from temporal_workflows import activities
 
 # ---------------------------------------------------------------------------
@@ -49,7 +50,7 @@ logger = logging.getLogger("temporal_worker")
 # ---------------------------------------------------------------------------
 
 async def run_worker() -> None:
-    """Connect to Temporal and run the file processing worker."""
+    """Connect to Temporal and run the file processing + message delivery worker."""
 
     logger.info(f"Connecting to Temporal at {TEMPORAL_HOST} (namespace={TEMPORAL_NAMESPACE})")
 
@@ -69,6 +70,7 @@ async def run_worker() -> None:
         task_queue=TEMPORAL_TASK_QUEUE,
         workflows=[
             file_processing.FileProcessingWorkflow,
+            message_delivery.MessageDeliveryWorkflow,
         ],
         activities=[
             activities.download_file_from_matrix,
@@ -77,6 +79,9 @@ async def run_worker() -> None:
             activities.notify_letta_agent,
             activities.update_matrix_status,
             activities.cleanup_file_artifacts,
+            activities.deliver_to_letta,
+            activities.dead_letter_message,
+            activities.send_delivery_ack,
         ],
         max_concurrent_activities=MAX_CONCURRENT_ACTIVITIES,
         max_concurrent_workflow_tasks=MAX_CONCURRENT_WORKFLOWS,
@@ -87,7 +92,7 @@ async def run_worker() -> None:
 
     logger.info(
         f"Worker started. Polling queue={TEMPORAL_TASK_QUEUE}. "
-        f"Registered: FileProcessingWorkflow + 6 activities"
+        f"Registered: FileProcessingWorkflow + MessageDeliveryWorkflow + 9 activities"
     )
 
     # Graceful shutdown on SIGINT/SIGTERM

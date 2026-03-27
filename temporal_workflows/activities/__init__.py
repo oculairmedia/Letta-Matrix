@@ -46,6 +46,17 @@ from .notify import (
     notify_letta_agent,
     update_matrix_status,
 )
+from .deliver import (
+    deliver_to_letta,
+    dead_letter_message,
+    send_delivery_ack,
+    DeliverToLettaInput,
+    DeliverToLettaResult,
+    DeadLetterInput,
+    DeadLetterResult,
+    DeliveryAckInput,
+    DeliveryAckResult,
+)
 from .parse import ParseInput, ParseResult, parse_with_markitdown
 
 # Config vars from the original module not used by activities but kept for compat
@@ -102,6 +113,15 @@ __all__ = [
     "LETTA_GATEWAY_API_KEY",
     "HAYHOOKS_INGEST_URL",
     "PERSISTENT_DOCUMENTS_DIR",
+    "deliver_to_letta",
+    "dead_letter_message",
+    "send_delivery_ack",
+    "DeliverToLettaInput",
+    "DeliverToLettaResult",
+    "DeadLetterInput",
+    "DeadLetterResult",
+    "DeliveryAckInput",
+    "DeliveryAckResult",
     "_sha256",
     "_hash_index_paths",
     "_load_hash_index",

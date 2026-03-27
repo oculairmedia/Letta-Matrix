@@ -16,7 +16,9 @@ Extracted from client.py as a standalone module.
 Re-exported by client.py for backward compatibility.
 """
 import asyncio
+import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Union
@@ -35,6 +37,88 @@ from src.matrix.letta_bridge import (
 )
 from src.matrix import formatter as matrix_formatter
 from src.matrix.poll_handler import process_agent_response
+
+
+# ── Temporal durable delivery (opt-in) ────────────────────────────────
+_temporal_client = None
+
+
+async def _get_temporal_client():
+    """Lazy-init Temporal client connection."""
+    global _temporal_client
+    if _temporal_client is None:
+        try:
+            from temporalio.client import Client
+            _temporal_client = await Client.connect(
+                os.getenv("TEMPORAL_HOST", "192.168.50.90:7233"),
+                namespace=os.getenv("TEMPORAL_NAMESPACE", "matrix"),
+            )
+        except Exception as e:
+            logging.getLogger("matrix_client.temporal").error(
+                f"Failed to connect to Temporal: {e}"
+            )
+            return None
+    return _temporal_client
+
+
+async def _dispatch_via_temporal(
+    *,
+    room_id: str,
+    agent_id: str,
+    message_body: str,
+    sender: str,
+    event_id: str,
+    conversation_id: str = "",
+    is_streaming: bool = False,
+    config: Config,
+    logger: logging.Logger,
+) -> bool:
+    """
+    Dispatch a message via Temporal for durable delivery.
+    Returns True if successfully enqueued, False if fallback to direct path needed.
+    """
+    try:
+        client = await _get_temporal_client()
+        if client is None:
+            logger.warning("[TEMPORAL] Client unavailable, falling back to direct path")
+            return False
+
+        from temporal_workflows.workflows.message_delivery import (
+            MessageDeliveryWorkflow,
+            MessageDeliveryInput,
+        )
+
+        workflow_id = f"msg-delivery-{event_id}"
+
+        await client.start_workflow(
+            MessageDeliveryWorkflow.run,
+            MessageDeliveryInput(
+                room_id=room_id,
+                agent_id=agent_id,
+                message_body=message_body if isinstance(message_body, str) else str(message_body),
+                sender=sender,
+                event_id=event_id,
+                conversation_id=conversation_id,
+                is_streaming=is_streaming,
+                source_channel="matrix",
+            ),
+            id=workflow_id,
+            task_queue=os.getenv("TEMPORAL_TASK_QUEUE", "matrix-file-queue"),
+        )
+
+        logger.info(
+            f"[TEMPORAL] Dispatched message delivery workflow: {workflow_id} "
+            f"for agent {agent_id} in room {room_id}"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(
+            f"[TEMPORAL] Failed to dispatch workflow: {e}. "
+            f"Falling back to direct path."
+        )
+        return False
+
 
 @dataclass
 class MessageContext:
@@ -214,6 +298,36 @@ async def process_letta_message(ctx: MessageContext) -> None:
             asyncio.create_task(
                 send_read_receipt_as_agent(room_id, original_event_id, config, logger)
             )
+
+        # ── Temporal durable delivery (opt-in) ───────────────────────
+        use_temporal = (
+            getattr(config, "temporal_message_delivery", False)
+            or os.getenv("TEMPORAL_MESSAGE_DELIVERY", "").lower() in ("true", "1", "yes")
+        )
+        if use_temporal:
+            temporal_dispatched = await _dispatch_via_temporal(
+                room_id=room_id,
+                agent_id=room_agent_id or config.letta_agent_id,
+                message_body=(
+                    message_to_send
+                    if isinstance(message_to_send, str)
+                    else json.dumps(message_to_send)
+                    if isinstance(message_to_send, list)
+                    else str(message_to_send)
+                ),
+                sender=event_sender,
+                event_id=original_event_id or "",
+                conversation_id="",
+                is_streaming=config.letta_streaming_enabled,
+                config=config,
+                logger=logger,
+            )
+            if temporal_dispatched:
+                logger.info(
+                    "[TEMPORAL] Message routed through Temporal, skipping direct path"
+                )
+                return  # Temporal handles delivery + response
+            # Fall through to direct path if Temporal dispatch failed
 
         # ── Streaming path ────────────────────────────────────────
         if config.letta_streaming_enabled:
