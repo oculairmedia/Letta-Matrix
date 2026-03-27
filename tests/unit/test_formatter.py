@@ -322,3 +322,21 @@ class TestIsNoReply:
 
     def test_case_sensitive(self):
         assert is_no_reply("<NO-REPLY/>") is False
+
+    def test_with_opencode_mxid_prefix(self):
+        assert is_no_reply("@oc_project_v2:matrix.oculair.ca <no-reply/>") is True
+
+    def test_with_opencode_mxid_prefix_and_newlines(self):
+        assert is_no_reply("@oc_project_v2:matrix.oculair.ca \n\n<no-reply/>") is True
+
+    def test_with_opencode_mxid_prefix_space_variant(self):
+        assert is_no_reply("@oc_test:domain.com <no-reply />") is True
+
+    def test_mxid_prefix_with_extra_text_not_matched(self):
+        assert is_no_reply("@oc_test:domain.com Hello <no-reply/>") is False
+
+    def test_mxid_only_not_matched(self):
+        assert is_no_reply("@oc_test:domain.com") is False
+
+    def test_non_mxid_at_prefix_not_matched(self):
+        assert is_no_reply("@mention some text") is False

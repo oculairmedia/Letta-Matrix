@@ -195,9 +195,26 @@ def is_no_reply(text: Optional[str]) -> bool:
 
     Agents use this to signal they choose not to reply. The bridge should
     silently discard the message instead of posting it to Matrix.
+
+    Also handles the case where agents prepend an @mention prefix before
+    the no-reply tag (e.g. "@oc_project:domain <no-reply/>") which occurs
+    when responding to OpenCode-routed messages.
     """
     stripped = (text or "").strip()
-    return stripped in ("<no-reply/>", "<no-reply />")
+    if stripped in ("<no-reply/>", "<no-reply />"):
+        return True
+
+    # Strip leading @mxid prefix (e.g. "@oc_project_v2:matrix.oculair.ca")
+    # that agents sometimes prepend to OpenCode-routed responses.
+    if stripped.startswith("@"):
+        # Remove the @mxid (everything up to first whitespace)
+        after_mxid = stripped.split(None, 1)
+        if len(after_mxid) == 2:
+            remainder = after_mxid[1].strip()
+            if remainder in ("<no-reply/>", "<no-reply />"):
+                return True
+
+    return False
 
 def wrap_opencode_routing(content: str, opencode_mxid: str) -> str:
     """
