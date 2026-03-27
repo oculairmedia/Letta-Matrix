@@ -9,12 +9,64 @@ The database (PostgreSQL/SQLite) is the authoritative source.
 import logging
 from typing import Optional, Dict, List
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+import os
+import time
+
+from src.core.identity_storage import get_identity_service
 
 logger = logging.getLogger(__name__)
 
 # Cache for performance - invalidated on writes
 _mapping_cache: Optional[Dict[str, dict]] = None
 _cache_valid = False
+_cache_timestamp: Optional[float] = None
+_cache_ttl_seconds = int(os.getenv("MAPPING_CACHE_TTL_SECONDS", "300"))
+
+
+def _is_cache_fresh() -> bool:
+    if not _cache_valid or _mapping_cache is None:
+        return False
+    if _cache_timestamp is None:
+        return False
+    return (time.time() - _cache_timestamp) <= _cache_ttl_seconds
+
+
+def _purge_expired_soft_deleted_mappings(grace_period_days: int = 7) -> int:
+    try:
+        db = _get_db()
+        pending = db.get_pending_removals()
+        if not pending:
+            return 0
+        cutoff = datetime.utcnow() - timedelta(days=grace_period_days)
+        purged = 0
+        for mapping in pending:
+            removed_at = getattr(mapping, "removed_at", None)
+            if removed_at is not None and removed_at < cutoff:
+                if db.delete(str(mapping.agent_id)):
+                    purged += 1
+        if purged:
+            invalidate_cache()
+        return purged
+    except Exception as e:
+        logger.warning(f"Error purging soft-deleted mappings: {e}")
+        return 0
+
+
+def _enrich_with_identity(mapping: Dict[str, object]) -> Dict[str, object]:
+    agent_id = str(mapping.get("agent_id") or "")
+    if not agent_id:
+        return mapping
+
+    identity = get_identity_service().get_by_agent_id(agent_id)
+    if identity is None:
+        return mapping
+
+    if getattr(identity, "display_name", None):
+        mapping["agent_name"] = str(identity.display_name)
+    if getattr(identity, "mxid", None):
+        mapping["matrix_user_id"] = str(identity.mxid)
+    return mapping
 
 
 @dataclass
@@ -37,8 +89,9 @@ def _get_db():
 
 def invalidate_cache():
     """Invalidate the mapping cache - call after any write operation"""
-    global _cache_valid
+    global _cache_valid, _cache_timestamp
     _cache_valid = False
+    _cache_timestamp = None
 
 
 def get_all_mappings(include_removed: bool = False) -> Dict[str, dict]:
@@ -48,20 +101,27 @@ def get_all_mappings(include_removed: bool = False) -> Dict[str, dict]:
     Returns:
         Dict mapping agent_id to mapping data (compatible with old JSON format)
     """
-    global _mapping_cache, _cache_valid
-    
-    if _cache_valid and _mapping_cache is not None:
+    global _mapping_cache, _cache_valid, _cache_timestamp
+
+    _purge_expired_soft_deleted_mappings(grace_period_days=int(os.getenv("MAPPING_SOFT_DELETE_GRACE_DAYS", "7")))
+
+    if _is_cache_fresh() and _mapping_cache is not None:
+        cached = {k: dict(v) for k, v in _mapping_cache.items()}
+        enriched = {k: _enrich_with_identity(v) for k, v in cached.items()}
         if include_removed:
-            return _mapping_cache
-        return {k: v for k, v in _mapping_cache.items() if "removed_at" not in v}
+            return enriched
+        return {k: v for k, v in enriched.items() if "removed_at" not in v}
     
     try:
         db = _get_db()
         _mapping_cache = db.export_to_dict()
         _cache_valid = True
+        _cache_timestamp = time.time()
+        materialized = {k: dict(v) for k, v in _mapping_cache.items()}
+        enriched = {k: _enrich_with_identity(v) for k, v in materialized.items()}
         if include_removed:
-            return _mapping_cache
-        return {k: v for k, v in _mapping_cache.items() if "removed_at" not in v}
+            return enriched
+        return {k: v for k, v in enriched.items() if "removed_at" not in v}
     except Exception as e:
         logger.error(f"Error loading mappings from database: {e}")
         return {}
@@ -81,7 +141,7 @@ def get_mapping_by_agent_id(agent_id: str) -> Optional[dict]:
         db = _get_db()
         mapping = db.get_by_agent_id(agent_id)
         if mapping and mapping.removed_at is None:
-            return mapping.to_dict()
+            return _enrich_with_identity(mapping.to_dict())
         return None
     except Exception as e:
         logger.error(f"Error getting mapping for agent {agent_id}: {e}")
@@ -102,7 +162,7 @@ def get_mapping_by_room_id(room_id: str) -> Optional[dict]:
         db = _get_db()
         mapping = db.get_by_room_id(room_id)
         if mapping and mapping.removed_at is None:
-            return mapping.to_dict()
+            return _enrich_with_identity(mapping.to_dict())
         return None
     except Exception as e:
         logger.error(f"Error getting mapping for room {room_id}: {e}")
@@ -123,7 +183,7 @@ def get_mapping_by_matrix_user(matrix_user_id: str) -> Optional[dict]:
         db = _get_db()
         mapping = db.get_by_matrix_user(matrix_user_id)
         if mapping and mapping.removed_at is None:
-            return mapping.to_dict()
+            return _enrich_with_identity(mapping.to_dict())
         return None
     except Exception as e:
         logger.error(f"Error getting mapping for user {matrix_user_id}: {e}")

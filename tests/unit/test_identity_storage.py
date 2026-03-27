@@ -55,6 +55,28 @@ class TestIdentityStorageService:
         assert result1 == mock_identity
         assert result2 == mock_identity
         identity_service._db.get_by_id.assert_called_once_with("test_id")
+
+    def test_get_expires_stale_cache_entry_and_refetches(self, identity_service):
+        stale_identity = MagicMock()
+        stale_identity.id = "test_id"
+        stale_identity.mxid = "@test:matrix.org"
+        refreshed_identity = MagicMock()
+        refreshed_identity.id = "test_id"
+        refreshed_identity.mxid = "@test:matrix.org"
+
+        identity_service._cache_ttl_seconds = 60
+        identity_service._cache["test_id"] = stale_identity
+        identity_service._cache_timestamps["test_id"] = 100.0
+        identity_service._mxid_cache["@test:matrix.org"] = "test_id"
+        identity_service._mxid_cache_timestamps["@test:matrix.org"] = 100.0
+        identity_service._db.get_by_id.return_value = refreshed_identity
+
+        with patch.object(identity_service, "_now", return_value=200.0):
+            result = identity_service.get("test_id")
+
+        assert result == refreshed_identity
+        identity_service._db.get_by_id.assert_called_once_with("test_id")
+        assert identity_service._cache["test_id"] == refreshed_identity
     
     def test_get_by_mxid_caches_result(self, identity_service, mock_identity_db):
         mock_identity = MagicMock()
@@ -66,6 +88,28 @@ class TestIdentityStorageService:
         
         assert result == mock_identity
         assert "@test:matrix.org" in identity_service._mxid_cache
+
+    def test_get_by_mxid_expires_stale_cache_entry_and_refetches(self, identity_service):
+        stale_identity = MagicMock()
+        stale_identity.id = "test_id"
+        stale_identity.mxid = "@test:matrix.org"
+        refreshed_identity = MagicMock()
+        refreshed_identity.id = "test_id"
+        refreshed_identity.mxid = "@test:matrix.org"
+
+        identity_service._cache_ttl_seconds = 60
+        identity_service._cache["test_id"] = stale_identity
+        identity_service._cache_timestamps["test_id"] = 100.0
+        identity_service._mxid_cache["@test:matrix.org"] = "test_id"
+        identity_service._mxid_cache_timestamps["@test:matrix.org"] = 100.0
+        identity_service._db.get_by_mxid.return_value = refreshed_identity
+
+        with patch.object(identity_service, "_now", return_value=200.0):
+            result = identity_service.get_by_mxid("@test:matrix.org")
+
+        assert result == refreshed_identity
+        identity_service._db.get_by_mxid.assert_called_once_with("@test:matrix.org")
+        assert identity_service._cache["test_id"] == refreshed_identity
     
     def test_get_by_agent_id(self, identity_service, mock_identity_db):
         mock_identity = MagicMock()
@@ -110,11 +154,35 @@ class TestIdentityStorageService:
     def test_clear_cache(self, identity_service):
         identity_service._cache["test"] = MagicMock()
         identity_service._mxid_cache["@test:matrix.org"] = "test"
+        identity_service._cache_timestamps["test"] = 123.0
+        identity_service._mxid_cache_timestamps["@test:matrix.org"] = 123.0
         
         identity_service.clear_cache()
         
         assert len(identity_service._cache) == 0
         assert len(identity_service._mxid_cache) == 0
+        assert len(identity_service._cache_timestamps) == 0
+        assert len(identity_service._mxid_cache_timestamps) == 0
+
+    def test_set_cache_entry_prunes_oldest_when_over_max_entries(self, identity_service):
+        identity_service._cache_ttl_seconds = 10_000
+        identity_service._max_cache_entries = 1
+
+        first_identity = MagicMock()
+        first_identity.id = "first"
+        first_identity.mxid = "@first:matrix.org"
+        second_identity = MagicMock()
+        second_identity.id = "second"
+        second_identity.mxid = "@second:matrix.org"
+
+        with patch.object(identity_service, "_now", side_effect=[100.0, 100.0, 101.0, 101.0]):
+            identity_service._set_cache_entry(first_identity)
+            identity_service._set_cache_entry(second_identity)
+
+        assert "first" not in identity_service._cache
+        assert "second" in identity_service._cache
+        assert "@first:matrix.org" not in identity_service._mxid_cache
+        assert identity_service._mxid_cache.get("@second:matrix.org") == "second"
 
 
 class TestDMRoomStorageService:

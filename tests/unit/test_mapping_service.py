@@ -6,6 +6,7 @@ and provides a consistent API for all consumers.
 """
 import pytest
 from unittest.mock import Mock, patch, MagicMock
+from datetime import datetime, timedelta
 from src.core.mapping_service import (
     get_all_mappings,
     get_mapping_by_agent_id,
@@ -17,6 +18,7 @@ from src.core.mapping_service import (
     get_agents_without_rooms,
     get_agents_with_rooms,
     invalidate_cache,
+    _purge_expired_soft_deleted_mappings,
 )
 
 
@@ -75,6 +77,66 @@ class TestGetAllMappings:
         
         assert result == {}
 
+    def test_cache_expires_after_ttl(self, mock_db):
+        mock_db.export_to_dict.return_value = {"agent-1": {"agent_id": "agent-1"}}
+
+        with patch('src.core.mapping_service._purge_expired_soft_deleted_mappings', return_value=0), \
+             patch('src.core.mapping_service._cache_ttl_seconds', 1), \
+             patch('src.core.mapping_service.time.time', side_effect=[1000.0, 1002.0, 1002.0, 1002.0, 1002.0]):
+            get_all_mappings()
+            get_all_mappings()
+
+        assert mock_db.export_to_dict.call_count == 2
+
+    def test_get_all_mappings_enriches_agent_name_and_mxid_from_identity(self, mock_db):
+        mock_db.export_to_dict.return_value = {
+            "agent-1": {
+                "agent_id": "agent-1",
+                "agent_name": "Legacy Name",
+                "matrix_user_id": "@legacy:test",
+            }
+        }
+
+        mock_identity = Mock()
+        mock_identity.display_name = "Canonical Name"
+        mock_identity.mxid = "@canonical:test"
+        mock_identity_service = Mock()
+        mock_identity_service.get_by_agent_id.return_value = mock_identity
+
+        with patch('src.core.mapping_service.get_identity_service', return_value=mock_identity_service), \
+             patch('src.core.mapping_service._purge_expired_soft_deleted_mappings', return_value=0):
+            result = get_all_mappings()
+
+        assert result["agent-1"]["agent_name"] == "Canonical Name"
+        assert result["agent-1"]["matrix_user_id"] == "@canonical:test"
+
+
+class TestSoftDeletePurge:
+    def test_purge_expired_soft_deleted_mappings_deletes_only_expired(self, mock_db):
+        old_mapping = Mock()
+        old_mapping.agent_id = "agent-old"
+        old_mapping.removed_at = datetime.utcnow() - timedelta(days=8)
+
+        recent_mapping = Mock()
+        recent_mapping.agent_id = "agent-recent"
+        recent_mapping.removed_at = datetime.utcnow() - timedelta(days=2)
+
+        mock_db.get_pending_removals.return_value = [old_mapping, recent_mapping]
+        mock_db.delete.return_value = True
+
+        purged = _purge_expired_soft_deleted_mappings(grace_period_days=7)
+
+        assert purged == 1
+        mock_db.delete.assert_called_once_with("agent-old")
+
+    def test_purge_expired_soft_deleted_mappings_noop_when_none_pending(self, mock_db):
+        mock_db.get_pending_removals.return_value = []
+
+        purged = _purge_expired_soft_deleted_mappings(grace_period_days=7)
+
+        assert purged == 0
+        mock_db.delete.assert_not_called()
+
 
 class TestGetMappingByAgentId:
     """Tests for get_mapping_by_agent_id()"""
@@ -109,8 +171,32 @@ class TestGetMappingByAgentId:
         mock_db.get_by_agent_id.side_effect = Exception("Database error")
         
         result = get_mapping_by_agent_id("agent-123")
-        
+
         assert result is None
+
+    def test_enriches_mapping_from_identity(self, mock_db):
+        mock_mapping = Mock()
+        mock_mapping.removed_at = None
+        mock_mapping.to_dict.return_value = {
+            "agent_id": "agent-123",
+            "agent_name": "LegacyAgent",
+            "matrix_user_id": "@legacy:test",
+            "room_id": "!room:test",
+        }
+        mock_db.get_by_agent_id.return_value = mock_mapping
+
+        mock_identity = Mock()
+        mock_identity.display_name = "IdentityAgent"
+        mock_identity.mxid = "@identity:test"
+        mock_identity_service = Mock()
+        mock_identity_service.get_by_agent_id.return_value = mock_identity
+
+        with patch('src.core.mapping_service.get_identity_service', return_value=mock_identity_service):
+            result = get_mapping_by_agent_id("agent-123")
+
+        assert result is not None
+        assert result["agent_name"] == "IdentityAgent"
+        assert result["matrix_user_id"] == "@identity:test"
 
 
 class TestGetMappingByRoomId:
