@@ -619,3 +619,94 @@ class TestIdentitySyncNamesEndpoint:
         assert data["missing_identity"] == 1
         assert data["mismatched"] == 0
         assert data["changes"] == []
+
+
+class TestIdentityProvisionHardening:
+
+    def test_provision_uses_create_then_login_retry_path(self, client):
+        request_payload = {
+            "identity_type": "opencode",
+            "directory": "/opt/stacks/sample-project",
+            "display_name": "OpenCode: Sample Project",
+        }
+
+        mock_manager = Mock()
+        mock_manager.check_user_exists = AsyncMock(return_value="not_found")
+        mock_manager.create_matrix_user = AsyncMock(return_value=True)
+
+        with (
+            patch("src.core.user_manager.MatrixUserManager", return_value=mock_manager),
+            patch("src.api.routes.identity._provision_login", new=AsyncMock(side_effect=[None, "token_created"])),
+            patch("src.api.routes.identity._reset_password_and_verify_login", new=AsyncMock(return_value=None)) as reset_login,
+        ):
+            response = client.post(
+                "/api/v1/internal/identities/provision",
+                json=request_payload,
+                headers={"x-internal-key": "matrix-identity-internal-key"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["access_token"] == "token_created"
+        mock_manager.create_matrix_user.assert_awaited_once()
+        reset_login.assert_not_awaited()
+
+    def test_provision_existing_user_auth_failed_triggers_reset_login(self, client):
+        request_payload = {
+            "identity_type": "opencode",
+            "directory": "/opt/stacks/existing-project",
+            "display_name": "OpenCode: Existing Project",
+        }
+
+        mock_manager = Mock()
+        mock_manager.check_user_exists = AsyncMock(return_value="exists_auth_failed")
+        mock_manager.create_matrix_user = AsyncMock(return_value=False)
+
+        with (
+            patch("src.core.user_manager.MatrixUserManager", return_value=mock_manager),
+            patch("src.api.routes.identity._provision_login", new=AsyncMock(side_effect=[None, None])),
+            patch(
+                "src.api.routes.identity._reset_password_and_verify_login",
+                new=AsyncMock(return_value="token_after_reset"),
+            ) as reset_login,
+        ):
+            response = client.post(
+                "/api/v1/internal/identities/provision",
+                json=request_payload,
+                headers={"x-internal-key": "matrix-identity-internal-key"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["access_token"] == "token_after_reset"
+        mock_manager.create_matrix_user.assert_not_awaited()
+        reset_login.assert_awaited_once()
+
+    def test_provision_fails_after_all_retries(self, client):
+        request_payload = {
+            "identity_type": "opencode",
+            "directory": "/opt/stacks/failing-project",
+            "display_name": "OpenCode: Failing Project",
+        }
+
+        mock_manager = Mock()
+        mock_manager.check_user_exists = AsyncMock(return_value="exists_auth_failed")
+        mock_manager.create_matrix_user = AsyncMock(return_value=False)
+
+        with (
+            patch("src.core.user_manager.MatrixUserManager", return_value=mock_manager),
+            patch("src.api.routes.identity._provision_login", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.identity._reset_password_and_verify_login", new=AsyncMock(return_value=None)),
+        ):
+            response = client.post(
+                "/api/v1/internal/identities/provision",
+                json=request_payload,
+                headers={"x-internal-key": "matrix-identity-internal-key"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "after retries" in data["error"]

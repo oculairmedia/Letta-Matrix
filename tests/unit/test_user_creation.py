@@ -256,6 +256,32 @@ class TestUserCreation:
             with pytest.raises(AdminAuthError):
                 await user_manager.get_admin_token()
 
+    @pytest.mark.asyncio
+    async def test_get_admin_token_failure_clears_cached_token(self, user_manager, monkeypatch):
+        from src.core.user_manager import AdminAuthError
+
+        user_manager.admin_token = "stale-token"
+        user_manager.clear_admin_token_cache()
+        monkeypatch.delenv('MATRIX_ADMIN_TOKEN', raising=False)
+        monkeypatch.delenv('MATRIX_ACCESS_TOKEN', raising=False)
+
+        mock_response = AsyncMock()
+        mock_response.status = 403
+        mock_response.text = AsyncMock(return_value="Forbidden")
+
+        with patch('aiohttp.ClientSession') as mock_session:
+            mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
+
+            with pytest.raises(AdminAuthError):
+                await user_manager.get_admin_token()
+
+        assert user_manager.admin_token is None
+
+    def test_clear_admin_token_cache(self, user_manager):
+        user_manager.admin_token = "cached-token"
+        user_manager.clear_admin_token_cache()
+        assert user_manager.admin_token is None
+
     def test_generate_username(self, user_manager):
         """Test username generation from agent ID"""
         # Test with agent- prefix

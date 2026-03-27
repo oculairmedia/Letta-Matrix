@@ -39,6 +39,9 @@ class MatrixUserManager:
         logger.info(f"Initialized MatrixUserManager with homeserver: {homeserver_url}")
         logger.info(f"Using admin account: {admin_username}")
 
+    def clear_admin_token_cache(self) -> None:
+        self.admin_token = None
+
     async def get_admin_token(self) -> Optional[str]:
         """Get an admin access token by logging in as the admin user.
 
@@ -72,9 +75,11 @@ class MatrixUserManager:
                         return self.admin_token
                     else:
                         error_text = await response.text()
+                        self.clear_admin_token_cache()
                         logger.warning(f"Admin login failed for {username}: {response.status} - {error_text}")
 
         except Exception as e:
+            self.clear_admin_token_cache()
             logger.warning(f"Admin login exception: {e}")
 
         # Self-healing fallback: use pre-configured admin token

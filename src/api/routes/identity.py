@@ -4,6 +4,8 @@ from urllib.parse import unquote
 import logging
 import os
 import aiohttp
+import asyncio
+import time
 
 from src.api.schemas.identity import (
     IdentityCreate,
@@ -102,6 +104,107 @@ async def _get_matrix_display_name(mxid: str, access_token: str) -> Optional[str
                 return str(value) if value is not None else None
     except Exception:
         return None
+
+
+async def _provision_login(
+    homeserver_url: str,
+    localpart: str,
+    password: str,
+    retries: int = 1,
+) -> Optional[str]:
+    login_url = f"{homeserver_url}/_matrix/client/v3/login"
+    login_data = {
+        "type": "m.login.password",
+        "identifier": {"type": "m.id.user", "user": localpart},
+        "password": password,
+    }
+
+    for attempt in range(1, retries + 1):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(login_url, json=login_data) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        token = result.get("access_token")
+                        return str(token) if token is not None else None
+        except Exception as exc:
+            logger.debug("Provision login failed (attempt %s/%s): %s", attempt, retries, exc)
+        if attempt < retries:
+            await asyncio.sleep(float(attempt))
+
+    return None
+
+
+async def _send_admin_password_reset_command(
+    user_manager: MatrixUserManager,
+    homeserver_url: str,
+    localpart: str,
+    password: str,
+) -> bool:
+    admin_room_id = os.getenv("MATRIX_ADMIN_ROOM_ID", "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca")
+    command = f"!admin users reset-password {localpart} {password}"
+    url = f"{homeserver_url}/_matrix/client/v3/rooms/{admin_room_id}/send/m.room.message/{int(time.time() * 1000)}"
+
+    for token_attempt in range(1, 3):
+        try:
+            admin_token = await user_manager.get_admin_token()
+        except Exception as exc:
+            logger.warning("Failed to obtain admin token for provisioning reset (attempt %s): %s", token_attempt, exc)
+            user_manager.clear_admin_token_cache()
+            continue
+        if not admin_token:
+            user_manager.clear_admin_token_cache()
+            continue
+
+        headers = {
+            "Authorization": f"Bearer {admin_token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.put(
+                    url,
+                    headers=headers,
+                    json={"msgtype": "m.text", "body": command},
+                ) as response:
+                    if response.status == 200:
+                        return True
+                    if response.status in (401, 403):
+                        user_manager.clear_admin_token_cache()
+                        continue
+                    return False
+        except Exception as exc:
+            logger.warning("Provisioning reset command failed (attempt %s): %s", token_attempt, exc)
+            user_manager.clear_admin_token_cache()
+
+    return False
+
+
+async def _reset_password_and_verify_login(
+    user_manager: MatrixUserManager,
+    homeserver_url: str,
+    localpart: str,
+    password: str,
+    max_attempts: int = 3,
+) -> Optional[str]:
+    for attempt in range(1, max_attempts + 1):
+        reset_ok = await _send_admin_password_reset_command(
+            user_manager,
+            homeserver_url,
+            localpart,
+            password,
+        )
+        if not reset_ok:
+            continue
+
+        access_token = await _provision_login(homeserver_url, localpart, password, retries=1)
+        if access_token:
+            return access_token
+
+        if attempt < max_attempts:
+            await asyncio.sleep(float(attempt))
+
+    return None
 
 
 @router.post("/identities", response_model=IdentityResponse, status_code=status.HTTP_201_CREATED)
@@ -638,78 +741,42 @@ async def provision_identity(
     
     user_manager = MatrixUserManager(homeserver_url, admin_username, admin_password)
     
-    import aiohttp
-    try:
-        login_url = f"{homeserver_url}/_matrix/client/v3/login"
-        login_data = {
-            "type": "m.login.password",
-            "identifier": {"type": "m.id.user", "user": localpart},
-            "password": password
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(login_url, json=login_data) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    access_token = result.get("access_token")
-                    if access_token:
-                        identity = service.create(
-                            identity_id=identity_id,
-                            identity_type=request.identity_type,
-                            mxid=mxid,
-                            access_token=access_token,
-                            display_name=display_name,
-                            password_hash=password
-                        )
-                        return IdentityProvisionResponse(
-                            success=True,
-                            identity_id=str(identity.id),
-                            mxid=str(identity.mxid),
-                            access_token=access_token,
-                            display_name=display_name
-                        )
-    except Exception as e:
-        logger.debug(f"Login attempt failed: {e}")
-    
-    created = await user_manager.create_matrix_user(localpart, password, display_name)
-    if not created:
+    access_token = await _provision_login(homeserver_url, localpart, password, retries=3)
+    if access_token is None:
+        user_state = await user_manager.check_user_exists(localpart)
+
+        if user_state == "not_found":
+            created = await user_manager.create_matrix_user(localpart, password, display_name)
+            if not created:
+                return IdentityProvisionResponse(
+                    success=False,
+                    identity_id=identity_id,
+                    mxid=mxid,
+                    access_token="",
+                    display_name=display_name,
+                    error=f"Failed to create Matrix user {mxid}",
+                )
+            access_token = await _provision_login(homeserver_url, localpart, password, retries=3)
+        else:
+            access_token = await _provision_login(homeserver_url, localpart, password, retries=3)
+
+        if access_token is None:
+            access_token = await _reset_password_and_verify_login(
+                user_manager,
+                homeserver_url,
+                localpart,
+                password,
+                max_attempts=3,
+            )
+
+    if access_token is None:
         return IdentityProvisionResponse(
             success=False,
             identity_id=identity_id,
             mxid=mxid,
             access_token="",
             display_name=display_name,
-            error=f"Failed to create Matrix user {mxid}"
-        )
-    
-    try:
-        login_url = f"{homeserver_url}/_matrix/client/v3/login"
-        login_data = {
-            "type": "m.login.password",
-            "identifier": {"type": "m.id.user", "user": localpart},
-            "password": password
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(login_url, json=login_data) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    return IdentityProvisionResponse(
-                        success=False,
-                        identity_id=identity_id,
-                        mxid=mxid,
-                        access_token="",
-                        display_name=display_name,
-                        error=f"Failed to login after user creation: {error_text}"
-                    )
-                result = await resp.json()
-                access_token = result.get("access_token")
-    except Exception as e:
-        return IdentityProvisionResponse(
-            success=False,
-            identity_id=identity_id,
-            mxid=mxid,
-            access_token="",
-            display_name=display_name,
-            error=f"Login error: {str(e)}"
+            error=f"Failed to login/provision Matrix user {mxid} after retries",
         )
     
     identity = service.create(
