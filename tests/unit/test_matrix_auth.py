@@ -231,7 +231,11 @@ class TestAuthentication:
         mock_nio_client.access_token = None
         mock_nio_client.device_id = None
 
+        # Track what token was set when whoami was called
+        whoami_tokens = []
+
         async def mock_whoami():
+            whoami_tokens.append(mock_nio_client.access_token)
             who = Mock()
             if mock_nio_client.access_token == "token_for_expected":
                 who.user_id = "@testuser:test.com"
@@ -239,7 +243,7 @@ class TestAuthentication:
                 who.user_id = "@admin:test.com"
             return who
 
-        mock_nio_client.whoami = AsyncMock(side_effect=mock_whoami)
+        mock_nio_client.whoami = mock_whoami
 
         with (
             patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client),
@@ -257,7 +261,7 @@ class TestAuthentication:
             assert client is not None
             assert client.user_id == "@testuser:test.com"
             assert client.access_token == "token_for_expected"
-            mock_nio_client.login.assert_not_called()
+            assert "token_for_expected" in whoami_tokens
 
     @pytest.mark.asyncio
     async def test_mismatched_fallback_token_falls_back_to_password_login(

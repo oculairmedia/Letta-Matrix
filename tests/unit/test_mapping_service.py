@@ -80,9 +80,13 @@ class TestGetAllMappings:
     def test_cache_expires_after_ttl(self, mock_db):
         mock_db.export_to_dict.return_value = {"agent-1": {"agent_id": "agent-1"}}
 
+        mock_identity_service = Mock()
+        mock_identity_service.get_by_agent_id.return_value = None
+
         with patch('src.core.mapping_service._purge_expired_soft_deleted_mappings', return_value=0), \
              patch('src.core.mapping_service._cache_ttl_seconds', 1), \
-             patch('src.core.mapping_service.time.time', side_effect=[1000.0, 1002.0, 1002.0, 1002.0, 1002.0]):
+             patch('src.core.mapping_service.time.time', side_effect=[1000.0, 1002.0, 1002.0]), \
+             patch('src.core.mapping_service.get_identity_service', return_value=mock_identity_service):
             get_all_mappings()
             get_all_mappings()
 
@@ -238,8 +242,12 @@ class TestGetMappingByMatrixUser:
             "matrix_user_id": "@agent:test"
         }
         mock_db.get_by_matrix_user.return_value = mock_mapping
+
+        mock_identity_service = Mock()
+        mock_identity_service.get_by_agent_id.return_value = None
         
-        result = get_mapping_by_matrix_user("@agent:test")
+        with patch('src.core.mapping_service.get_identity_service', return_value=mock_identity_service):
+            result = get_mapping_by_matrix_user("@agent:test")
         
         assert result is not None
         assert result["matrix_user_id"] == "@agent:test"

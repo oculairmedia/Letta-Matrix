@@ -156,14 +156,15 @@ class TestUserExistence:
 
     @pytest.mark.asyncio
     async def test_user_exists_returns_true_on_403(self, mock_config, mock_aiohttp_session):
-        """Test that 403 response indicates user exists"""
+        """Test that 403 response with M_FORBIDDEN indicates user exists with wrong password"""
         with patch('src.core.agent_user_manager.logging.getLogger'):
             with patch('src.core.agent_user_manager.os.makedirs'):
                 manager = AgentUserManager(config=mock_config)
 
-                # Mock 403 response (wrong password = user exists)
+                # Mock 403 response with M_FORBIDDEN errcode (wrong password = user exists)
                 mock_response = AsyncMock()
                 mock_response.status = 403
+                mock_response.json = AsyncMock(return_value={"errcode": "M_FORBIDDEN", "error": "Invalid password"})
                 mock_response.__aenter__ = AsyncMock(return_value=mock_response)
                 mock_response.__aexit__ = AsyncMock(return_value=None)
 
@@ -174,7 +175,7 @@ class TestUserExistence:
                 with patch('src.core.agent_user_manager.aiohttp.ClientSession', return_value=mock_aiohttp_session):
                     exists = await manager.check_user_exists("@test:matrix.oculair.ca")
 
-                    assert exists == "exists_auth_failed"
+                    assert exists == "exists_wrong_password"
 
     @pytest.mark.asyncio
     async def test_user_exists_returns_false_on_404(self, mock_config, mock_aiohttp_session):
