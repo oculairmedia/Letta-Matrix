@@ -137,6 +137,36 @@ class DMRoomListResponse(BaseModel):
     dm_rooms: List[DMRoomResponse]
 
 
+class DMRoomNameReconcileRequest(BaseModel):
+    dry_run: bool = Field(True, description="Only report mismatches without applying profile sync")
+    sync_profiles: bool = Field(True, description="Apply profile sync for mismatched identities")
+    limit: int = Field(1000, description="Maximum number of DM rooms to inspect")
+
+
+class DMRoomNameReconcileDiff(BaseModel):
+    room_id: str
+    agent_identity_id: Optional[str] = None
+    participant_identity_ids: List[str] = Field(default_factory=list)
+    room_name: Optional[str] = None
+    expected_room_name: Optional[str] = None
+    room_name_mismatch: bool = False
+    profile_mismatches: List[str] = Field(default_factory=list)
+    profiles_synced: List[str] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+
+
+class DMRoomNameReconcileResponse(BaseModel):
+    success: bool
+    dry_run: bool
+    checked: int
+    agent_dm_rooms: int
+    mismatched_rooms: int
+    profile_mismatches: int
+    profiles_synced: int
+    failed: int
+    changes: List[DMRoomNameReconcileDiff]
+
+
 class SendAsIdentityRequest(BaseModel):
     identity_id: str = Field(..., description="Identity ID to send as")
     room_id: str = Field(..., description="Target Matrix room ID")

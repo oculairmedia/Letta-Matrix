@@ -847,3 +847,133 @@ class TestIdentityHealthEndpoint:
         assert data["coverage"]["letta_identities_total"] == 0
         assert data["coverage"]["missing_letta_identities"] == ["letta_agent-3"]
         assert data["coverage_percentage"] == 100.0
+
+
+class TestDMRoomNameReconciliation:
+
+    def test_dm_reconcile_dry_run_reports_profile_and_room_name_mismatch(self, client, sample_letta_identity, sample_identity):
+        sample_letta_identity["id"] = "letta_agent-11"
+        sample_letta_identity["identity_type"] = "letta"
+        sample_letta_identity["mxid"] = "@agent_11:matrix.test"
+        sample_letta_identity["display_name"] = "Agent Eleven"
+        sample_letta_identity["access_token"] = "token-agent"
+        client.post("/api/v1/identities", json=sample_letta_identity)
+
+        sample_identity["id"] = "custom_user_11"
+        sample_identity["mxid"] = "@user_11:matrix.test"
+        sample_identity["display_name"] = "User Eleven"
+        sample_identity["access_token"] = "token-user"
+        client.post("/api/v1/identities", json=sample_identity)
+
+        client.post(
+            "/api/v1/dm-rooms",
+            json={
+                "room_id": "!dm11:matrix.test",
+                "mxid1": "@agent_11:matrix.test",
+                "mxid2": "@user_11:matrix.test",
+            },
+        )
+
+        with (
+            patch("src.api.routes.identity._get_room_name", new=AsyncMock(return_value="Wrong Name")),
+            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value="Not Synced")),
+            patch("src.api.routes.identity._sync_identity_profile", new=AsyncMock()) as sync_profile,
+        ):
+            response = client.post("/api/v1/dm-rooms/reconcile-names", json={"dry_run": True})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["checked"] == 1
+        assert data["agent_dm_rooms"] == 1
+        assert data["mismatched_rooms"] == 1
+        assert data["profile_mismatches"] == 2
+        assert data["profiles_synced"] == 0
+        assert data["failed"] == 0
+        assert len(data["changes"]) == 1
+        change = data["changes"][0]
+        assert change["room_id"] == "!dm11:matrix.test"
+        assert change["room_name_mismatch"] is True
+        assert set(change["profile_mismatches"]) == {"letta_agent-11", "custom_user_11"}
+        sync_profile.assert_not_awaited()
+
+    def test_dm_reconcile_apply_syncs_profile_mismatches(self, client, sample_letta_identity, sample_identity):
+        sample_letta_identity["id"] = "letta_agent-12"
+        sample_letta_identity["identity_type"] = "letta"
+        sample_letta_identity["mxid"] = "@agent_12:matrix.test"
+        sample_letta_identity["display_name"] = "Agent Twelve"
+        sample_letta_identity["access_token"] = "token-agent"
+        client.post("/api/v1/identities", json=sample_letta_identity)
+
+        sample_identity["id"] = "custom_user_12"
+        sample_identity["mxid"] = "@user_12:matrix.test"
+        sample_identity["display_name"] = "User Twelve"
+        sample_identity["access_token"] = "token-user"
+        client.post("/api/v1/identities", json=sample_identity)
+
+        client.post(
+            "/api/v1/dm-rooms",
+            json={
+                "room_id": "!dm12:matrix.test",
+                "mxid1": "@agent_12:matrix.test",
+                "mxid2": "@user_12:matrix.test",
+            },
+        )
+
+        with (
+            patch("src.api.routes.identity._get_room_name", new=AsyncMock(return_value="Agent Twelve ↔ User Twelve")),
+            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value="Outdated")),
+            patch("src.api.routes.identity._sync_identity_profile", new=AsyncMock()) as sync_profile,
+        ):
+            response = client.post(
+                "/api/v1/dm-rooms/reconcile-names",
+                json={"dry_run": False, "sync_profiles": True},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["mismatched_rooms"] == 1
+        assert data["profile_mismatches"] == 2
+        assert data["profiles_synced"] == 2
+        assert data["failed"] == 0
+        change = data["changes"][0]
+        assert set(change["profiles_synced"]) == {"letta_agent-12", "custom_user_12"}
+        assert sync_profile.await_count == 2
+
+    def test_dm_reconcile_skips_non_agent_dm_rooms(self, client, sample_identity):
+        sample_identity["id"] = "custom_user_21"
+        sample_identity["mxid"] = "@user_21:matrix.test"
+        client.post("/api/v1/identities", json=sample_identity)
+
+        sample_identity2 = {
+            "id": "custom_user_22",
+            "identity_type": "custom",
+            "mxid": "@user_22:matrix.test",
+            "access_token": "token22",
+            "display_name": "User 22",
+            "avatar_url": None,
+            "password_hash": None,
+            "device_id": "DEV22",
+        }
+        client.post("/api/v1/identities", json=sample_identity2)
+
+        client.post(
+            "/api/v1/dm-rooms",
+            json={
+                "room_id": "!dm22:matrix.test",
+                "mxid1": "@user_21:matrix.test",
+                "mxid2": "@user_22:matrix.test",
+            },
+        )
+
+        with (
+            patch("src.api.routes.identity._get_room_name", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value=None)),
+        ):
+            response = client.post("/api/v1/dm-rooms/reconcile-names", json={"dry_run": True})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["checked"] == 1
+        assert data["agent_dm_rooms"] == 0
+        assert data["mismatched_rooms"] == 0
+        assert data["changes"] == []
