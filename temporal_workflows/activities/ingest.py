@@ -13,6 +13,10 @@ from .common import IngestError
 HAYHOOKS_INGEST_URL = os.getenv(
     "HAYHOOKS_INGEST_URL", "http://192.168.50.90:1416/ingest_document/run"
 )
+HAYHOOKS_DELETE_BY_FILENAME_URL = os.getenv(
+    "HAYHOOKS_DELETE_BY_FILENAME_URL",
+    HAYHOOKS_INGEST_URL.replace("/ingest_document/run", "/delete_by_filename/run"),
+)
 
 
 def _normalize_text(text: str) -> str:
@@ -81,6 +85,25 @@ async def ingest_to_haystack(input: IngestInput) -> IngestResult:
 
     try:
         async with httpx.AsyncClient(timeout=600.0) as client:
+            delete_enabled = os.getenv("HAYHOOKS_DELETE_BEFORE_INGEST", "true").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+            if delete_enabled:
+                delete_resp = await client.post(
+                    HAYHOOKS_DELETE_BY_FILENAME_URL,
+                    json={
+                        "source_filename": input.filename,
+                        "room_id": input.room_id,
+                    },
+                )
+                if delete_resp.status_code != 200:
+                    raise IngestError(
+                        f"Hayhooks delete HTTP {delete_resp.status_code} for {input.filename}: "
+                        f"{delete_resp.text[:500]}"
+                    )
+
             total_chunks = 0
             total_sections = len(sections)
 

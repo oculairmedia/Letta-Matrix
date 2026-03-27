@@ -725,6 +725,10 @@ class LettaFileHandler:
             "HAYHOOKS_INGEST_URL",
             "http://192.168.50.90:1416/ingest_document/run"
         )
+        delete_by_filename_url = os.getenv(
+            "HAYHOOKS_DELETE_BY_FILENAME_URL",
+            hayhooks_url.replace("/ingest_document/run", "/delete_by_filename/run"),
+        )
 
         normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
         normalized_text = re.sub(r"[\t\f\v ]+", " ", normalized_text)
@@ -759,6 +763,28 @@ class LettaFileHandler:
         
         try:
             async with aiohttp.ClientSession() as session:
+                delete_enabled = os.getenv("HAYHOOKS_DELETE_BEFORE_INGEST", "true").lower() in (
+                    "true",
+                    "1",
+                    "yes",
+                )
+                if delete_enabled:
+                    async with session.post(
+                        delete_by_filename_url,
+                        json={
+                            "source_filename": filename,
+                            "room_id": room_id,
+                        },
+                        timeout=aiohttp.ClientTimeout(total=60),
+                    ) as delete_response:
+                        if delete_response.status != 200:
+                            error_text = await delete_response.text()
+                            logger.error(
+                                f"Hayhooks delete-by-filename failed for {filename}: "
+                                f"HTTP {delete_response.status} - {error_text[:500]}"
+                            )
+                            return False
+
                 total_chunks = 0
                 total_sections = len(sections)
 

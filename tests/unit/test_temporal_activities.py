@@ -474,8 +474,13 @@ async def test_ingest_to_haystack_normalizes_and_presplits(monkeypatch):
     )
 
     assert result.success is True
-    assert len(client.post_calls) >= 2
-    for _, kwargs in client.post_calls:
+    assert len(client.post_calls) >= 3
+
+    first_url, first_kwargs = client.post_calls[0]
+    assert "delete_by_filename" in first_url
+    assert first_kwargs["json"]["source_filename"] == "large.txt"
+
+    for _, kwargs in client.post_calls[1:]:
         payload = kwargs["json"]
         assert "\t" not in payload["text"]
         assert "\n\n\n" not in payload["text"]
@@ -498,4 +503,4 @@ async def test_ingest_to_haystack_single_payload_under_threshold(monkeypatch):
     )
 
     assert result.success is True
-    assert len(client.post_calls) == 1
+    assert len(client.post_calls) == 2
