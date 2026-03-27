@@ -126,6 +126,32 @@ def _is_streaming_progress(text: str) -> bool:
         ln.startswith(_STREAMING_PROGRESS_PREFIXES) for ln in non_empty
     )
 
+
+def _is_portal_active_request(
+    *,
+    sender: str,
+    message_text: str,
+    formatted_body: str,
+    room_agent_name: Optional[str],
+    portal_link: Dict[str, Any],
+    admin_username: str,
+) -> bool:
+    is_admin = sender == admin_username
+    mention_enabled = portal_link.get('mention_enabled', False)
+    is_relay = portal_link.get('relay_mode', False)
+
+    contact_mentioned = bool(
+        mention_enabled
+        and room_agent_name
+        and (
+            f'@{room_agent_name.lower()}' in message_text.lower()
+            or room_agent_name.lower() in message_text.lower()
+            or room_agent_name.lower() in formatted_body.lower()
+        )
+    )
+
+    return (is_admin and not is_relay) or contact_mentioned
+
 def _on_letta_task_done(key: Tuple[str, str], task: asyncio.Task) -> None:
     _active_letta_tasks.pop(key, None)
     if task.cancelled():
@@ -800,26 +826,19 @@ async def message_callback(
     # Portal rooms: check for @agent mention to activate, otherwise passive observation
     if router.portal_link:
         message_text, _ = router._extract_message_content(event)
-        is_admin = event.sender == os.getenv('MATRIX_ADMIN_USERNAME', '@admin:matrix.oculair.ca')
-        mention_enabled = router.portal_link.get('mention_enabled', False)
         formatted_body = (
             event.source.get('content', {}).get('formatted_body', '')
             if getattr(event, 'source', None)
             else ''
         )
-        contact_mentioned = bool(
-            mention_enabled
-            and room_agent_name
-            and (
-                f'@{room_agent_name.lower()}' in message_text.lower()
-                or room_agent_name.lower() in message_text.lower()
-                or room_agent_name.lower() in formatted_body.lower()
-            )
+        active_request = _is_portal_active_request(
+            sender=event.sender,
+            message_text=message_text,
+            formatted_body=formatted_body,
+            room_agent_name=room_agent_name,
+            portal_link=router.portal_link,
+            admin_username=os.getenv('MATRIX_ADMIN_USERNAME', '@admin:matrix.oculair.ca'),
         )
-        # In relay_mode the admin user is a bridge relay, not a human —
-        # suppress the admin bypass so relay traffic stays passive.
-        is_relay = router.portal_link.get('relay_mode', False)
-        active_request = (is_admin and not is_relay) or contact_mentioned
         if not active_request:
             triage_id = router.portal_link.get('triage_agent_id') or None
             await _handle_passive_portal_message(

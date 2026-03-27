@@ -413,193 +413,129 @@ class TestPortalRoutingMessageCallback:
     @pytest.mark.asyncio
     async def test_passive_route_contact_no_mention(self):
         """Verify contact message without @mention routes to passive handler."""
-        portal_link = _make_portal_link(mention_enabled=False)
-        message_text = "Just saying hi"
-        sender = CONTACT_MXID
-        agent_name = AGENT_NAME
+        from src.matrix.client import _is_portal_active_request
 
-        is_admin = sender == ADMIN_MXID
-        contact_mentioned = bool(
-            portal_link.get("mention_enabled", False)
-            and agent_name
-            and (
-            f"@{agent_name.lower()}" in message_text.lower()
-            or agent_name.lower() in message_text.lower()
-            )
-        )
-        active_request = is_admin or contact_mentioned
-
-        assert not active_request, "Contact message without @mention should not trigger active mode"
+        assert not _is_portal_active_request(
+            sender=CONTACT_MXID,
+            message_text="Just saying hi",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=_make_portal_link(mention_enabled=False),
+            admin_username=ADMIN_MXID,
+        ), "Contact message without @mention should not trigger active mode"
 
     @pytest.mark.asyncio
     async def test_active_route_with_mention_enabled(self):
         """Verify @mention + mention_enabled=True routes to active handler."""
-        portal_link = _make_portal_link(mention_enabled=True)
-        message_text = "@Meridian can you check my calendar?"
-        sender = CONTACT_MXID
-        agent_name = AGENT_NAME
+        from src.matrix.client import _is_portal_active_request
 
-        is_admin = sender == ADMIN_MXID
-        contact_mentioned = bool(
-            portal_link.get("mention_enabled", True)
-            and agent_name
-            and (
-            f"@{agent_name.lower()}" in message_text.lower()
-            or agent_name.lower() in message_text.lower()
-            )
-        )
-        active_request = is_admin or contact_mentioned
-
-        assert active_request, "@Meridian with mention_enabled=True should trigger active mode"
+        assert _is_portal_active_request(
+            sender=CONTACT_MXID,
+            message_text="@Meridian can you check my calendar?",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=_make_portal_link(mention_enabled=True),
+            admin_username=ADMIN_MXID,
+        ), "@Meridian with mention_enabled=True should trigger active mode"
 
     @pytest.mark.asyncio
     async def test_contact_mention_blocked_without_flag(self):
         """Contact @mention with mention_enabled=False → passive mode (blocked)."""
-        portal_link = _make_portal_link(mention_enabled=False)
-        message_text = "@Meridian what's up?"
-        sender = CONTACT_MXID
-        agent_name = AGENT_NAME
+        from src.matrix.client import _is_portal_active_request
 
-        is_admin = sender == ADMIN_MXID
-        contact_mentioned = bool(
-            portal_link.get("mention_enabled", False)
-            and agent_name
-            and (
-            f"@{agent_name.lower()}" in message_text.lower()
-            or agent_name.lower() in message_text.lower()
-            )
-        )
-        active_request = is_admin or contact_mentioned
-
-        assert not active_request, "Contact @mention with mention_enabled=False should be blocked"
+        assert not _is_portal_active_request(
+            sender=CONTACT_MXID,
+            message_text="@Meridian what's up?",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=_make_portal_link(mention_enabled=False),
+            admin_username=ADMIN_MXID,
+        ), "Contact @mention with mention_enabled=False should be blocked"
 
     @pytest.mark.asyncio
     async def test_admin_bypass_mention_disabled_non_relay(self):
         """Admin can invoke agent in non-relay rooms even with mention_enabled=False."""
-        portal_link = _make_portal_link(mention_enabled=False, relay_mode=False)
-        message_text = "@Meridian add a calendar entry for tomorrow"
-        sender = ADMIN_MXID
-        agent_name = AGENT_NAME
+        from src.matrix.client import _is_portal_active_request
 
-        is_admin = sender == ADMIN_MXID
-        is_relay = portal_link.get("relay_mode", False)
-        contact_mentioned = bool(
-            portal_link.get("mention_enabled", False)
-            and agent_name
-            and (
-            f"@{agent_name.lower()}" in message_text.lower()
-            or agent_name.lower() in message_text.lower()
-            )
-        )
-        active_request = (is_admin and not is_relay) or contact_mentioned
-
-        assert active_request, "Admin should be able to invoke agent in non-relay rooms"
+        assert _is_portal_active_request(
+            sender=ADMIN_MXID,
+            message_text="@Meridian add a calendar entry for tomorrow",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=_make_portal_link(mention_enabled=False, relay_mode=False),
+            admin_username=ADMIN_MXID,
+        ), "Admin should be able to invoke agent in non-relay rooms"
 
     @pytest.mark.asyncio
     async def test_admin_without_mention_is_active_non_relay(self):
-        portal_link = _make_portal_link(mention_enabled=False, relay_mode=False)
-        message_text = "Just checking in on this thread"
-        sender = ADMIN_MXID
-        agent_name = AGENT_NAME
+        from src.matrix.client import _is_portal_active_request
 
-        is_admin = sender == ADMIN_MXID
-        is_relay = portal_link.get("relay_mode", False)
-        contact_mentioned = bool(
-            portal_link.get("mention_enabled", False)
-            and agent_name
-            and (
-            f"@{agent_name.lower()}" in message_text.lower()
-            or agent_name.lower() in message_text.lower()
-            )
-        )
-        active_request = (is_admin and not is_relay) or contact_mentioned
-
-        assert active_request, "Admin message without @mention should route active in non-relay rooms"
+        assert _is_portal_active_request(
+            sender=ADMIN_MXID,
+            message_text="Just checking in on this thread",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=_make_portal_link(mention_enabled=False, relay_mode=False),
+            admin_username=ADMIN_MXID,
+        ), "Admin message without @mention should route active in non-relay rooms"
 
     @pytest.mark.asyncio
     async def test_admin_passive_in_relay_mode(self):
         """Admin acting as bridge relay should stay passive (regression test)."""
-        portal_link = _make_portal_link(mention_enabled=False, relay_mode=True)
-        message_text = "thats amazing!"
-        sender = ADMIN_MXID
-        agent_name = AGENT_NAME
+        from src.matrix.client import _is_portal_active_request
 
-        is_admin = sender == ADMIN_MXID
-        is_relay = portal_link.get("relay_mode", False)
-        contact_mentioned = bool(
-            portal_link.get("mention_enabled", False)
-            and agent_name
-            and (
-            f"@{agent_name.lower()}" in message_text.lower()
-            or agent_name.lower() in message_text.lower()
-            )
-        )
-        active_request = (is_admin and not is_relay) or contact_mentioned
-
-        assert not active_request, "Admin as bridge relay should NOT trigger active mode"
+        assert not _is_portal_active_request(
+            sender=ADMIN_MXID,
+            message_text="thats amazing!",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=_make_portal_link(mention_enabled=False, relay_mode=True),
+            admin_username=ADMIN_MXID,
+        ), "Admin as bridge relay should NOT trigger active mode"
 
     @pytest.mark.asyncio
     async def test_admin_relay_with_mention_enabled_and_mention(self):
         """Admin relay with @mention + mention_enabled should still go active."""
-        portal_link = _make_portal_link(mention_enabled=True, relay_mode=True)
-        message_text = "@Meridian check this"
-        sender = ADMIN_MXID
-        agent_name = AGENT_NAME
+        from src.matrix.client import _is_portal_active_request
 
-        is_admin = sender == ADMIN_MXID
-        is_relay = portal_link.get("relay_mode", False)
-        contact_mentioned = bool(
-            portal_link.get("mention_enabled", False)
-            and agent_name
-            and (
-            f"@{agent_name.lower()}" in message_text.lower()
-            or agent_name.lower() in message_text.lower()
-            )
-        )
-        active_request = (is_admin and not is_relay) or contact_mentioned
-
-        assert active_request, "@mention with mention_enabled should activate even in relay mode"
+        assert _is_portal_active_request(
+            sender=ADMIN_MXID,
+            message_text="@Meridian check this",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=_make_portal_link(mention_enabled=True, relay_mode=True),
+            admin_username=ADMIN_MXID,
+        ), "@mention with mention_enabled should activate even in relay mode"
 
     @pytest.mark.asyncio
     async def test_mention_detection_case_insensitive(self):
         """@mention detection should be case-insensitive."""
+        from src.matrix.client import _is_portal_active_request
+
         portal_link = _make_portal_link(mention_enabled=True)
-        agent_name = AGENT_NAME  # "Meridian"
-
         for msg in ["@meridian help", "@MERIDIAN help", "@Meridian help", "hey meridian help"]:
-            contact_mentioned = bool(
-                True
-                and agent_name
-                and (
-                f"@{agent_name.lower()}" in msg.lower()
-                or agent_name.lower() in msg.lower()
-                )
-            )
-            active_request = False or contact_mentioned
-
-            assert active_request, f"Should detect mention in: {msg}"
+            assert _is_portal_active_request(
+                sender=CONTACT_MXID,
+                message_text=msg,
+                formatted_body="",
+                room_agent_name=AGENT_NAME,
+                portal_link=portal_link,
+                admin_username=ADMIN_MXID,
+            ), f"Should detect mention in: {msg}"
 
     @pytest.mark.asyncio
     async def test_mention_detection_in_formatted_body(self):
         """@mention in formatted_body (HTML pills) should be detected."""
-        portal_link = _make_portal_link(mention_enabled=True)
-        message_text = "help me"
-        agent_name = AGENT_NAME
-        formatted_body = '<a href="https://matrix.to/#/@agent:matrix.oculair.ca">Meridian</a> help me'
+        from src.matrix.client import _is_portal_active_request
 
-        is_admin = False
-        contact_mentioned = bool(
-            True
-            and agent_name
-            and (
-            f"@{agent_name.lower()}" in message_text.lower()
-            or agent_name.lower() in message_text.lower()
-            or agent_name.lower() in formatted_body.lower()
-            )
-        )
-        active_request = is_admin or contact_mentioned
-
-        assert active_request, "Should detect agent name in formatted_body HTML"
+        assert _is_portal_active_request(
+            sender=CONTACT_MXID,
+            message_text="help me",
+            formatted_body='<a href="https://matrix.to/#/@agent:matrix.oculair.ca">Meridian</a> help me',
+            room_agent_name=AGENT_NAME,
+            portal_link=_make_portal_link(mention_enabled=True),
+            admin_username=ADMIN_MXID,
+        ), "Should detect agent name in formatted_body HTML"
 
 
 # =============================================================================
@@ -787,22 +723,21 @@ class TestPortalRoutingDecisionMatrix:
         ],
     )
     def test_routing_decision(self, sender, mention_enabled, has_mention, relay_mode, expected_active):
-        """Parametric test covering all sender × flag × mention × relay_mode combinations."""
+        """Parametric test calling _is_portal_active_request (production code)."""
+        from src.matrix.client import _is_portal_active_request
+
         portal_link = _make_portal_link(mention_enabled=mention_enabled, relay_mode=relay_mode)
         agent_name = AGENT_NAME
         message_text = f"@{agent_name} do something" if has_mention else "Regular message"
 
-        is_admin = sender == ADMIN_MXID
-        is_relay = portal_link.get("relay_mode", False)
-        contact_mentioned = bool(
-            portal_link.get("mention_enabled", False)
-            and agent_name
-            and (
-            f"@{agent_name.lower()}" in message_text.lower()
-            or agent_name.lower() in message_text.lower()
-            )
+        active_request = _is_portal_active_request(
+            sender=sender,
+            message_text=message_text,
+            formatted_body="",
+            room_agent_name=agent_name,
+            portal_link=portal_link,
+            admin_username=ADMIN_MXID,
         )
-        active_request = (is_admin and not is_relay) or contact_mentioned
 
         assert active_request == expected_active, (
             f"sender={sender}, mention_enabled={mention_enabled}, "
@@ -984,3 +919,101 @@ class TestTriageAgentRouting:
         assert (link_with_triage.get("triage_agent_id") or None) == TRIAGE_AGENT_ID
         assert (link_without_triage.get("triage_agent_id") or None) is None
         assert (link_empty_triage.get("triage_agent_id") or None) is None
+
+
+# =============================================================================
+# Test: Relay-mode admin bypass regression guard
+# =============================================================================
+
+
+class TestRelayModeAdminBypassRegression:
+    """Regression guard for MXSYN-4bc: Google Messages bridge relay triggers
+    active dispatch because admin sender bypasses passive mode.
+
+    These tests call the production helper _is_portal_active_request directly
+    so any change to routing logic is caught immediately.
+    """
+
+    @pytest.mark.parametrize(
+        "message_text",
+        [
+            "thats amazing! 😄",
+            "Sold out and everyone showed up",
+            "looking for my insta handle omg manny",
+            "The girl at the bottom asked me if we can host a birthday party for her!! 😵",
+            "",
+            "   ",
+        ],
+        ids=[
+            "casual_reply",
+            "event_recap",
+            "contains_manny_not_meridian",
+            "excited_message_with_emoji",
+            "empty_body",
+            "whitespace_only",
+        ],
+    )
+    def test_admin_relay_never_active_without_explicit_mention(self, message_text):
+        from src.matrix.client import _is_portal_active_request
+
+        portal_link = _make_portal_link(mention_enabled=False, relay_mode=True)
+        assert not _is_portal_active_request(
+            sender=ADMIN_MXID,
+            message_text=message_text,
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=portal_link,
+            admin_username=ADMIN_MXID,
+        )
+
+    def test_admin_relay_active_only_with_explicit_mention_and_flag(self):
+        from src.matrix.client import _is_portal_active_request
+
+        portal_link = _make_portal_link(mention_enabled=True, relay_mode=True)
+        assert _is_portal_active_request(
+            sender=ADMIN_MXID,
+            message_text="@Meridian what do you think?",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=portal_link,
+            admin_username=ADMIN_MXID,
+        )
+
+    def test_admin_relay_blocked_when_mention_disabled(self):
+        from src.matrix.client import _is_portal_active_request
+
+        portal_link = _make_portal_link(mention_enabled=False, relay_mode=True)
+        assert not _is_portal_active_request(
+            sender=ADMIN_MXID,
+            message_text="@Meridian respond please",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=portal_link,
+            admin_username=ADMIN_MXID,
+        )
+
+    def test_non_admin_relay_unaffected(self):
+        from src.matrix.client import _is_portal_active_request
+
+        portal_link = _make_portal_link(mention_enabled=False, relay_mode=True)
+        assert not _is_portal_active_request(
+            sender=CONTACT_MXID,
+            message_text="Hey what's up",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=portal_link,
+            admin_username=ADMIN_MXID,
+        )
+
+    def test_admin_direct_room_still_bypasses(self):
+        from src.matrix.client import _is_portal_active_request
+
+        portal_link = _make_portal_link(mention_enabled=False, relay_mode=False)
+        assert _is_portal_active_request(
+            sender=ADMIN_MXID,
+            message_text="thats amazing! 😄",
+            formatted_body="",
+            room_agent_name=AGENT_NAME,
+            portal_link=portal_link,
+            admin_username=ADMIN_MXID,
+        )
