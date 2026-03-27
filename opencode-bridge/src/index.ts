@@ -190,6 +190,13 @@ async function handleOutboundMessage(
   const roomId = registration.rooms[0] || "";
   
   if (!roomId || !matrixClient) return;
+
+  // Silently discard <no-reply/> responses — posting them to Matrix
+  // causes an echo loop (bridge sees its own message as new input).
+  const trimmed = (outbound.content || "").trim();
+  if (trimmed === "<no-reply/>" || trimmed === "`<no-reply/>`") {
+    return;
+  }
   
   trackOutboundMessage(outbound.messageId);
   
