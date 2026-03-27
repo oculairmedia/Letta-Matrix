@@ -18,6 +18,7 @@ import asyncio
 import functools
 import logging
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -724,49 +725,91 @@ class LettaFileHandler:
             "HAYHOOKS_INGEST_URL",
             "http://192.168.50.90:1416/ingest_document/run"
         )
-        
-        payload = {
-            "text": text,
-            "filename": filename,
-            "room_id": room_id,
-            "sender": sender,
-        }
+
+        normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+        normalized_text = re.sub(r"[\t\f\v ]+", " ", normalized_text)
+        normalized_text = re.sub(r"\n{3,}", "\n\n", normalized_text).strip()
+
+        threshold = int(os.getenv("HAYHOOKS_INGEST_PRESPLIT_THRESHOLD_CHARS", "500000"))
+        section_chars = int(os.getenv("HAYHOOKS_INGEST_SECTION_CHARS", "200000"))
+
+        sections: list[str] = []
+        if len(normalized_text) <= threshold:
+            sections = [normalized_text]
+        else:
+            current: list[str] = []
+            current_len = 0
+            for paragraph in normalized_text.split("\n\n"):
+                para = paragraph.strip()
+                if not para:
+                    continue
+                extra_len = len(para) + (2 if current else 0)
+                if current and current_len + extra_len > section_chars:
+                    sections.append("\n\n".join(current))
+                    current = [para]
+                    current_len = len(para)
+                else:
+                    current.append(para)
+                    current_len += extra_len
+            if current:
+                sections.append("\n\n".join(current))
+
+            if not sections:
+                sections = [normalized_text]
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    hayhooks_url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=600),  # Large docs (400+ pages) need time for chunking + embedding
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(
-                            f"Hayhooks ingest failed for {filename}: "
-                            f"HTTP {response.status} - {error_text[:500]}"
-                        )
-                        return False
-                    
-                    result = await response.json()
-                    
-                    # The pipeline returns JSON-encoded string in 'result' key
-                    import json
-                    result_data = result
-                    if isinstance(result.get("result"), str):
-                        result_data = json.loads(result["result"])
-                    
-                    status = result_data.get("status", "")
-                    if status == "ok":
-                        chunks = result_data.get("chunks_stored", 0)
-                        logger.info(
-                            f"Document '{filename}' ingested successfully: "
-                            f"{chunks} chunks stored in Weaviate"
-                        )
-                        return True
-                    else:
-                        detail = result_data.get("detail", "Unknown error")
-                        logger.error(f"Hayhooks ingest error for {filename}: {detail}")
-                        return False
+                total_chunks = 0
+                total_sections = len(sections)
+
+                for idx, section in enumerate(sections, start=1):
+                    section_filename = (
+                        filename
+                        if total_sections == 1
+                        else f"{filename} (part {idx}/{total_sections})"
+                    )
+                    payload = {
+                        "text": section,
+                        "filename": section_filename,
+                        "room_id": room_id,
+                        "sender": sender,
+                    }
+
+                    async with session.post(
+                        hayhooks_url,
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=600),
+                    ) as response:
+                        if response.status != 200:
+                            error_text = await response.text()
+                            logger.error(
+                                f"Hayhooks ingest failed for {section_filename}: "
+                                f"HTTP {response.status} - {error_text[:500]}"
+                            )
+                            return False
+
+                        result = await response.json()
+
+                        import json
+                        result_data = result
+                        if isinstance(result.get("result"), str):
+                            result_data = json.loads(result["result"])
+
+                        status = result_data.get("status", "")
+                        if status != "ok":
+                            detail = result_data.get("detail", "Unknown error")
+                            logger.error(
+                                f"Hayhooks ingest error for {section_filename}: {detail}"
+                            )
+                            return False
+
+                        total_chunks += int(result_data.get("chunks_stored", 0) or 0)
+
+                logger.info(
+                    f"Document '{filename}' ingested successfully: "
+                    f"{total_chunks} chunks stored in Weaviate"
+                )
+                return True
                         
         except asyncio.TimeoutError:
             logger.error(f"Hayhooks ingest timed out for {filename} (120s)")

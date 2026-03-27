@@ -6,10 +6,12 @@ import pytest
 
 from temporal_workflows import activities
 from temporal_workflows.activities import deliver as deliver_activities
+from temporal_workflows.activities import ingest as ingest_activities
 from temporal_workflows.activities import (
     CleanupArtifactsInput,
     DeliveryAckInput,
     DeliverToLettaInput,
+    IngestInput,
     MatrixAPIError,
     MatrixStatusInput,
     NotifyAgentInput,
@@ -451,4 +453,49 @@ async def test_dead_letter_message_writes_db_and_alerts(monkeypatch):
 
     assert result.success is True
     assert len(execute_calls) == 1
+    assert len(client.post_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_to_haystack_normalizes_and_presplits(monkeypatch):
+    client = _HTTPClient(_MockResponse(200, {"result": json.dumps({"status": "ok", "chunks_stored": 3})}))
+    monkeypatch.setattr(ingest_activities.httpx, "AsyncClient", lambda timeout=600.0: client)
+    monkeypatch.setenv("HAYHOOKS_INGEST_PRESPLIT_THRESHOLD_CHARS", "40")
+    monkeypatch.setenv("HAYHOOKS_INGEST_SECTION_CHARS", "25")
+
+    text = "Alpha\t\tBeta\n\n\nGamma paragraph one.\n\nDelta paragraph two."
+    result = await ingest_activities.ingest_to_haystack(
+        IngestInput(
+            text=text,
+            filename="large.txt",
+            room_id="!room:matrix.test",
+            sender="@user:matrix.test",
+        )
+    )
+
+    assert result.success is True
+    assert len(client.post_calls) >= 2
+    for _, kwargs in client.post_calls:
+        payload = kwargs["json"]
+        assert "\t" not in payload["text"]
+        assert "\n\n\n" not in payload["text"]
+
+
+@pytest.mark.asyncio
+async def test_ingest_to_haystack_single_payload_under_threshold(monkeypatch):
+    client = _HTTPClient(_MockResponse(200, {"result": json.dumps({"status": "ok", "chunks_stored": 2})}))
+    monkeypatch.setattr(ingest_activities.httpx, "AsyncClient", lambda timeout=600.0: client)
+    monkeypatch.setenv("HAYHOOKS_INGEST_PRESPLIT_THRESHOLD_CHARS", "1000")
+    monkeypatch.setenv("HAYHOOKS_INGEST_SECTION_CHARS", "500")
+
+    result = await ingest_activities.ingest_to_haystack(
+        IngestInput(
+            text="Short text",
+            filename="small.txt",
+            room_id="!room:matrix.test",
+            sender="@user:matrix.test",
+        )
+    )
+
+    assert result.success is True
     assert len(client.post_calls) == 1
