@@ -23,7 +23,7 @@ from temporalio.common import RetryPolicy
 
 # Import activities through sandbox passthrough (same pattern as Letta/Graphiti)
 with workflow.unsafe.imports_passed_through():
-    from temporal_workflows.activities import (
+    from ..activities import (
         download_file_from_matrix,
         parse_with_markitdown,
         ingest_to_haystack,
@@ -115,6 +115,7 @@ class FileProcessingResult:
     ingest_ms: int = 0
     notify_ms: int = 0
     total_ms: int = 0
+    dominant_stage: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -543,10 +544,21 @@ class FileProcessingWorkflow:
             elapsed = int((workflow.now() - workflow_start).total_seconds() * 1000)
             result.total_ms = elapsed
 
+            stage_ms, dominant_stage, dominant_pct = self._summarize_stage_timings(result)
+            result.dominant_stage = dominant_stage
+
             workflow.logger.info(
-                f"File processing completed: {input.file_name} — "
-                f"{parse_result.char_count:,} chars, {ingest_result.chunks_stored} chunks, "
-                f"{elapsed}ms total"
+                f"[PROFILE] file={input.file_name} download_ms={result.download_ms} "
+                f"parse_ms={result.parse_ms} ingest_ms={result.ingest_ms} "
+                f"notify_ms={result.notify_ms} total_ms={elapsed} "
+                f"dominant_stage={dominant_stage} dominant_pct={dominant_pct:.1f}"
+            )
+            self._log_slow_trace(
+                input=input,
+                result=result,
+                stage_ms=stage_ms,
+                dominant_stage=dominant_stage,
+                dominant_pct=dominant_pct,
             )
 
         except Exception as e:
@@ -599,6 +611,15 @@ class FileProcessingWorkflow:
 
             elapsed = int((workflow.now() - workflow_start).total_seconds() * 1000)
             result.total_ms = elapsed
+            stage_ms, dominant_stage, dominant_pct = self._summarize_stage_timings(result)
+            result.dominant_stage = dominant_stage
+            self._log_slow_trace(
+                input=input,
+                result=result,
+                stage_ms=stage_ms,
+                dominant_stage=dominant_stage,
+                dominant_pct=dominant_pct,
+            )
 
         return result
 
@@ -731,3 +752,51 @@ class FileProcessingWorkflow:
         elapsed = int((workflow.now() - workflow_start).total_seconds() * 1000)
         result.total_ms = elapsed
         return result
+
+    @staticmethod
+    def _summarize_stage_timings(result: FileProcessingResult) -> tuple[Dict[str, int], str, float]:
+        stage_ms = {
+            "download": max(0, int(result.download_ms)),
+            "parse": max(0, int(result.parse_ms)),
+            "ingest": max(0, int(result.ingest_ms)),
+            "notify": max(0, int(result.notify_ms)),
+        }
+        dominant_stage = max(stage_ms, key=lambda stage: stage_ms[stage])
+        total = sum(stage_ms.values())
+        dominant_pct = (stage_ms[dominant_stage] / total * 100.0) if total > 0 else 0.0
+        return stage_ms, dominant_stage, dominant_pct
+
+    @staticmethod
+    def _optimization_hint_for_stage(stage: str) -> str:
+        hints = {
+            "download": "investigate Matrix media throughput and cache-hit opportunities",
+            "parse": "profile OCR/MarkItDown pipeline and reduce OCR scope for text-rich PDFs",
+            "ingest": "tune splitter section size and embedding throughput in Hayhooks",
+            "notify": "reduce gateway round-trips and switch to fire-and-forget where acceptable",
+        }
+        return hints.get(stage, "collect additional traces and profile end-to-end latency")
+
+    def _log_slow_trace(
+        self,
+        *,
+        input: FileProcessingInput,
+        result: FileProcessingResult,
+        stage_ms: Dict[str, int],
+        dominant_stage: str,
+        dominant_pct: float,
+    ) -> None:
+        import os
+
+        threshold_ms = int(os.getenv("TEMPORAL_SLOW_FILE_THRESHOLD_MS", "10000"))
+
+        if result.total_ms < threshold_ms:
+            return
+
+        workflow.logger.warning(
+            f"[SLOW-FILE] file={input.file_name} total_ms={result.total_ms} "
+            f"download_ms={stage_ms['download']} parse_ms={stage_ms['parse']} "
+            f"ingest_ms={stage_ms['ingest']} notify_ms={stage_ms['notify']} "
+            f"dominant_stage={dominant_stage} dominant_pct={dominant_pct:.1f} "
+            f"char_count={result.char_count} page_count={result.page_count} was_ocr={result.was_ocr} "
+            f"optimization_hint=\"{self._optimization_hint_for_stage(dominant_stage)}\""
+        )
