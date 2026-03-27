@@ -328,6 +328,7 @@ async def identity_health(identity_type: Optional[str] = None):
     missing_letta_identities = sorted(list(expected_letta_identity_ids - letta_identity_ids))
 
     records: List[IdentityHealthRecord] = []
+    actionable_agents: List[dict[str, object]] = []
     now_ts = int(time.time())
 
     for identity in identities:
@@ -432,6 +433,16 @@ async def identity_health(identity_type: Optional[str] = None):
         else:
             degraded += 1
 
+        if issues:
+            actionable_agents.append(
+                {
+                    "agent_id": identity_id[6:] if identity_id.startswith("letta_") else None,
+                    "identity_id": identity_id,
+                    "mxid": mxid,
+                    "issues": issues,
+                }
+            )
+
         records.append(
             IdentityHealthRecord(
                 identity_id=identity_id,
@@ -462,20 +473,25 @@ async def identity_health(identity_type: Optional[str] = None):
         missing_letta_identities=missing_letta_identities,
     )
 
-    return IdentityHealthResponse(
-        success=True,
-        checked=checked,
-        healthy=healthy,
-        degraded=degraded,
-        critical=critical,
-        token_invalid=token_invalid,
-        name_mismatches=name_mismatches,
-        password_mismatches=password_mismatches,
-        invalid_mxid=invalid_mxid,
-        invalid_dm_rooms=invalid_dm_rooms,
-        coverage=coverage,
-        records=records,
-    )
+    return {
+        "success": True,
+        "checked": checked,
+        "healthy": healthy,
+        "degraded": degraded,
+        "critical": critical,
+        "coverage_percentage": (healthy / checked * 100.0) if checked else 100.0,
+        "last_reconciliation_at": now_ts,
+        "stale_token_count": token_invalid,
+        "name_mismatch_count": name_mismatches,
+        "token_invalid": token_invalid,
+        "name_mismatches": name_mismatches,
+        "password_mismatches": password_mismatches,
+        "invalid_mxid": invalid_mxid,
+        "invalid_dm_rooms": invalid_dm_rooms,
+        "coverage": coverage,
+        "actionable_agents": actionable_agents,
+        "records": records,
+    }
 
 
 @router.get("/identities/{identity_id}", response_model=IdentityResponse)

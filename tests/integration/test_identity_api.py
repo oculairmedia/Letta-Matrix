@@ -750,6 +750,11 @@ class TestIdentityHealthEndpoint:
         assert data["healthy"] == 1
         assert data["degraded"] == 0
         assert data["critical"] == 0
+        assert data["coverage_percentage"] == 100.0
+        assert data["stale_token_count"] == 0
+        assert data["name_mismatch_count"] == 0
+        assert isinstance(data["last_reconciliation_at"], int)
+        assert data["actionable_agents"] == []
         assert data["coverage"]["missing_letta_identities"] == []
         record = data["records"][0]
         assert record["identity_id"] == "letta_agent-1"
@@ -805,9 +810,13 @@ class TestIdentityHealthEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["token_invalid"] >= 1
+        assert data["stale_token_count"] >= 1
         assert data["name_mismatches"] >= 3
+        assert data["name_mismatch_count"] >= 3
         assert data["password_mismatches"] >= 1
         assert data["invalid_dm_rooms"] >= 1
+        assert len(data["actionable_agents"]) >= 1
+        assert any(a["identity_id"] == "letta_agent-2" for a in data["actionable_agents"])
 
         letta_record = next(r for r in data["records"] if r["identity_id"] == "letta_agent-2")
         assert letta_record["token_valid"] is False
@@ -837,3 +846,4 @@ class TestIdentityHealthEndpoint:
         assert data["coverage"]["letta_agents_total"] == 1
         assert data["coverage"]["letta_identities_total"] == 0
         assert data["coverage"]["missing_letta_identities"] == ["letta_agent-3"]
+        assert data["coverage_percentage"] == 100.0

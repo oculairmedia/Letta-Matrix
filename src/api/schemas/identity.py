@@ -253,16 +253,28 @@ class IdentityHealthRecord(BaseModel):
     issues: List[str] = Field(default_factory=list)
 
 
+class IdentityHealthActionableAgent(BaseModel):
+    agent_id: Optional[str] = None
+    identity_id: str
+    mxid: str
+    issues: List[str] = Field(default_factory=list)
+
+
 class IdentityHealthResponse(BaseModel):
     success: bool
     checked: int
     healthy: int
     degraded: int
     critical: int
+    coverage_percentage: float
+    last_reconciliation_at: int
+    stale_token_count: int
+    name_mismatch_count: int
     token_invalid: int
     name_mismatches: int
     password_mismatches: int
     invalid_mxid: int
     invalid_dm_rooms: int
     coverage: IdentityHealthCoverage
+    actionable_agents: List[IdentityHealthActionableAgent]
     records: List[IdentityHealthRecord]
