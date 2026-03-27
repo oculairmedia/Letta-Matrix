@@ -138,14 +138,20 @@ class LettaFileHandler:
             logger,
         )
         self._source_cache = self._source_manager._source_cache
-        
+
         # Log token status at init
         logger.info(f"LettaFileHandler initialized - matrix_access_token present: {bool(self.matrix_access_token)}, length: {len(self.matrix_access_token) if self.matrix_access_token else 0}")
         logger.info(f"Embedding config: model={embedding_model}, endpoint={embedding_endpoint}, dim={embedding_dim}")
         logger.info(f"Using Letta SDK for API calls")
         # Document parsing config (MarkItDown)
-        self.document_parsing_config = document_parsing_config or DocumentParseConfig.from_env()
+        self.document_parsing_config: DocumentParseConfig = (
+            document_parsing_config or DocumentParseConfig.from_env()
+        )
         logger.info(f"Document parsing: enabled={self.document_parsing_config.enabled}, ocr={self.document_parsing_config.ocr_enabled}")
+
+    @property
+    def source_manager(self) -> LettaSourceManager:
+        return self._source_manager
     
     async def _run_sync(self, func, *args, **kwargs):
         """Run a synchronous function in a thread pool"""
@@ -293,7 +299,7 @@ class LettaFileHandler:
         finally:
             if file_path and os.path.exists(file_path):
                 try:
-                    os.unlink(file_path)
+                    os.remove(file_path)
                     logger.debug(f"Cleaned up temporary file {file_path}")
                 except OSError:
                     pass
@@ -671,10 +677,6 @@ class LettaFileHandler:
             logger.error(f"Error extracting assistant response: {e}")
             return None
     
-    def _get_embedding_config(self, agent_id: Optional[str] = None) -> dict:
-        """Backward-compatible proxy to source manager."""
-        return self._source_manager.get_embedding_config(agent_id)
-
     def _extract_file_metadata(self, event: Event, room_id: str) -> Optional[FileMetadata]:
         return self._download_service.extract_file_metadata(event, room_id)
 
@@ -684,24 +686,22 @@ class LettaFileHandler:
     async def _download_matrix_file(self, metadata: FileMetadata) -> str:
         return await self._download_service.download_file(metadata)
 
+    def _get_embedding_config(self, agent_id: Optional[str] = None) -> dict:
+        return self._source_manager.get_embedding_config(agent_id)
+
     async def _get_or_create_source(self, room_id: str, agent_id: Optional[str] = None) -> str:
-        """Backward-compatible proxy to source manager."""
         return await self._source_manager.get_or_create_source(room_id, agent_id)
 
     async def _attach_source_to_agent(self, source_id: str, agent_id: str):
-        """Backward-compatible proxy to source manager."""
         return await self._source_manager.attach_source_to_agent(source_id, agent_id)
 
     async def _upload_to_letta(self, file_path: str, source_id: str, metadata: FileMetadata) -> str:
-        """Backward-compatible proxy to source manager."""
         return await self._source_manager.upload_to_letta(file_path, source_id, metadata)
 
     async def _poll_file_status(self, source_id: str, file_id: str, timeout: int = 300, interval: int = 2) -> bool:
-        """Backward-compatible proxy to source manager."""
         return await self._source_manager.poll_file_status(source_id, file_id, timeout=timeout, interval=interval)
 
     async def _get_or_create_folder(self, room_id: str, agent_id: Optional[str] = None) -> str:
-        """Backward-compatible proxy to source manager."""
         return await self._source_manager.get_or_create_folder(room_id, agent_id)
 
     async def _ingest_to_haystack(self, text: str, filename: str, room_id: str, sender: str) -> bool:
@@ -779,5 +779,4 @@ class LettaFileHandler:
             return False
 
     async def ensure_search_tool_attached(self, agent_id: str) -> None:
-        """Backward-compatible proxy to source manager."""
         await self._source_manager.ensure_search_tool_attached(agent_id)
