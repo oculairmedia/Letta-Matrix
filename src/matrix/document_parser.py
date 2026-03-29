@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import tempfile
+from codecs import BOM_UTF16_BE, BOM_UTF16_LE, BOM_UTF32_BE, BOM_UTF32_LE, BOM_UTF8
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
@@ -83,6 +84,19 @@ PARSEABLE_EXTENSIONS = {
     ".html", ".htm", ".xhtml",
     ".json", ".epub", ".ics",
     ".rtf", ".odt", ".ods", ".odp",
+}
+
+TEXT_FALLBACK_EXTENSIONS = {
+    ".vcf",
+    ".ics",
+    ".txt",
+    ".csv",
+    ".md",
+    ".markdown",
+    ".json",
+    ".html",
+    ".htm",
+    ".xhtml",
 }
 
 
@@ -174,6 +188,54 @@ def _extract_pdf_with_fitz(file_path: str) -> tuple[str, Optional[int], Optional
         return text, page_count, None
     except Exception as e:
         return "", None, f"{type(e).__name__}: {e}"
+
+
+def _should_attempt_text_decode_fallback(filename: str, conversion_error: str) -> bool:
+    """Return True when we should bypass MarkItDown and decode file bytes directly."""
+    _, ext = os.path.splitext((filename or "").lower())
+    if ext not in TEXT_FALLBACK_EXTENSIONS:
+        return False
+
+    lowered = (conversion_error or "").lower()
+    return (
+        "unicodedecodeerror" in lowered
+        or "codec can't decode" in lowered
+        or "ascii" in lowered
+    )
+
+
+def _decode_text_file_with_fallbacks(file_path: str) -> tuple[str, Optional[str]]:
+    """Decode text-like files with resilient encoding fallbacks.
+
+    This is used when MarkItDown's PlainTextConverter fails due to strict ASCII
+    decoding on valid UTF-8/UTF-16 content.
+    """
+    try:
+        with open(file_path, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        return "", f"Could not read file bytes: {e}"
+
+    if not raw:
+        return "", "File is empty"
+
+    # BOM-guided first pass
+    if raw.startswith(BOM_UTF8):
+        return raw.decode("utf-8-sig"), None
+    if raw.startswith(BOM_UTF16_LE) or raw.startswith(BOM_UTF16_BE):
+        return raw.decode("utf-16"), None
+    if raw.startswith(BOM_UTF32_LE) or raw.startswith(BOM_UTF32_BE):
+        return raw.decode("utf-32"), None
+
+    errors: list[str] = []
+    for encoding in ("utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp1252", "latin-1"):
+        try:
+            return raw.decode(encoding), None
+        except UnicodeDecodeError as e:
+            errors.append(f"{encoding}: {e}")
+
+    # Last resort: decode lossy but do not fail hard.
+    return raw.decode("utf-8", errors="replace"), "; ".join(errors) if errors else None
 
 
 def _ocr_pdf_pages(file_path: str, dpi: int = 200) -> str:
@@ -341,6 +403,23 @@ async def parse_document(
                     logger.warning(
                         f"Document parsing attempt {attempt + 1}/{max_retries} failed for {filename}: {conv_error}"
                     )
+
+                    if _should_attempt_text_decode_fallback(filename, conv_error):
+                        fallback_text, fallback_error = _decode_text_file_with_fallbacks(file_path)
+                        fallback_text = (fallback_text or "").strip()
+                        if fallback_text:
+                            text = fallback_text
+                            page_count = None
+                            last_error = None
+                            logger.info(
+                                f"Direct text decode fallback succeeded for {filename} ({len(text)} chars)"
+                            )
+                            break
+                        if fallback_error:
+                            logger.warning(
+                                f"Direct text decode fallback failed for {filename}: {fallback_error}"
+                            )
+
                     if "not usable anymore" in conv_error.lower():
                         _get_process_pool(recreate=True)
                 else:
