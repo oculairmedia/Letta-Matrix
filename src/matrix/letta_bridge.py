@@ -17,6 +17,8 @@ from typing import Optional, Tuple, Union
 import aiohttp
 
 from src.matrix.config import Config, LettaApiError
+from src.core.retry import is_conversation_busy_error
+from src.matrix.conversations_metrics import increment_fallback, set_api_mode
 from src.matrix.agent_actions import (
     send_as_agent_with_event_id,
     delete_message_as_agent,
@@ -27,6 +29,37 @@ from src.matrix.agent_actions import (
     fetch_and_send_video,
     TypingIndicatorManager,
 )
+
+
+NO_TEXT_RESPONSE_FALLBACK = "Agent processed the request (no text response)."
+
+
+def _is_busy_error(error: Exception) -> bool:
+    if is_conversation_busy_error(error):
+        return True
+    code = str(getattr(error, "code", "")).upper()
+    message = str(error).upper()
+    return "CONVERSATION_BUSY" in code or ("409" in message and "BUSY" in message)
+
+
+def _shadow_fallback_enabled(
+    config: Config,
+    conversation_id: Optional[str],
+    error: Exception,
+) -> bool:
+    if not conversation_id:
+        return False
+    if not config.letta_conversations_enabled:
+        return False
+    if not getattr(config, "letta_conversations_shadow_mode", False):
+        return False
+    return not _is_busy_error(error)
+
+
+def _log_shadow_fallback(logger: logging.Logger, config: Config, message: str) -> None:
+    level_name = getattr(config, "letta_conversations_shadow_mode_log_level", "WARNING")
+    level = getattr(logging, str(level_name).upper(), logging.WARNING)
+    logger.log(level, message)
 
 # ── Retry Helper ─────────────────────────────────────────────────────
 
@@ -106,7 +139,7 @@ async def send_to_letta_api_streaming(
     Send a message to Letta via the WS gateway with real-time streaming.
     Tokens are delivered to Matrix via live-edit or batched progress messages.
     """
-    from src.matrix.streaming import StreamingMessageHandler, StreamEventType
+    from src.matrix.streaming import StreamingMessageHandler, StreamEventType, StreamEvent
     from src.letta.client import get_letta_client, LettaConfig
     from src.voice.directive_parser import (
         parse_directives,
@@ -130,6 +163,7 @@ async def send_to_letta_api_streaming(
     conversation_id = await _resolve_conversation_id(
         config, room_id, agent_id_to_use, sender_id, room_member_count, logger
     )
+    set_api_mode(1 if conversation_id else 0)
 
     # Gateway is REQUIRED
     gateway_client = await _get_gateway_client(config, logger)
@@ -400,6 +434,25 @@ async def send_to_letta_api_streaming(
         await handler.cleanup()
 
     except Exception as e:
+        if _shadow_fallback_enabled(config, conversation_id, e):
+            _log_shadow_fallback(
+                logger,
+                config,
+                f"[SHADOW] Streaming Conversations API failed, falling back to legacy API: {e}",
+            )
+            increment_fallback("streaming_exception")
+            set_api_mode(2)
+            try:
+                return await send_to_letta_api(
+                    message_body=message_body,
+                    sender_id=sender_id,
+                    config=config,
+                    logger=logger,
+                    room_id=room_id,
+                    room_member_count=room_member_count,
+                )
+            except Exception as fallback_error:
+                raise LettaApiError(f"Streaming shadow fallback failed: {fallback_error}") from fallback_error
         logger.error(
             f"[STREAMING] Exception during streaming: {e}", exc_info=True
         )
@@ -409,8 +462,19 @@ async def send_to_letta_api_streaming(
         if typing_manager:
             await typing_manager.stop()
 
+    if hasattr(handler, "self_delivered") and handler.self_delivered:
+        logger.info("[STREAMING] Agent self-delivered via matrix_messaging — suppressing fallback")
+        return final_response or "(self-delivered)"
+
     if not final_response:
-        final_response = "Agent processed the request (no text response)."
+        fallback_text = NO_TEXT_RESPONSE_FALLBACK
+        await handler.handle_event(
+            StreamEvent(type=StreamEventType.ASSISTANT, content=fallback_text)
+        )
+        await handler.handle_event(
+            StreamEvent(type=StreamEventType.STOP, content="end_turn")
+        )
+        final_response = fallback_text
 
     return final_response
 
@@ -461,6 +525,7 @@ async def send_to_letta_api(
     conversation_id = await _resolve_conversation_id(
         config, room_id or "", agent_id_to_use, sender_id, room_member_count, logger
     )
+    set_api_mode(1 if conversation_id else 0)
 
     typing_manager = (
         TypingIndicatorManager(room_id, config, logger)
@@ -476,20 +541,39 @@ async def send_to_letta_api(
         gateway_client = await _get_gateway_client(config, logger)
         from src.letta.gateway_stream_reader import collect_via_gateway
 
-        gateway_result = await collect_via_gateway(
-            client=gateway_client,
-            agent_id=agent_id_to_use,
-            message=message_body,
-            conversation_id=conversation_id,
-            source={"channel": "matrix", "chatId": room_id} if room_id else None,
-        )
+        try:
+            gateway_result = await collect_via_gateway(
+                client=gateway_client,
+                agent_id=agent_id_to_use,
+                message=message_body,
+                conversation_id=conversation_id,
+                source={"channel": "matrix", "chatId": room_id} if room_id else None,
+            )
+        except Exception as collect_error:
+            if _shadow_fallback_enabled(config, conversation_id, collect_error):
+                _log_shadow_fallback(
+                    logger,
+                    config,
+                    f"[SHADOW] Conversations API failed, falling back to legacy API: {collect_error}",
+                )
+                increment_fallback("non_streaming_exception")
+                set_api_mode(2)
+                gateway_result = await collect_via_gateway(
+                    client=gateway_client,
+                    agent_id=agent_id_to_use,
+                    message=message_body,
+                    conversation_id=None,
+                    source={"channel": "matrix", "chatId": room_id} if room_id else None,
+                )
+            else:
+                raise
         if gateway_result:
             logger.info(
                 f"[API] Got response via WS gateway ({len(gateway_result)} chars)"
             )
             return gateway_result
         else:
-            return "Agent processed the request (no text response)."
+            return NO_TEXT_RESPONSE_FALLBACK
 
     except aiohttp.ClientResponseError as e:
         logger.error(

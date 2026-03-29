@@ -85,6 +85,8 @@ class Config:
     letta_typing_enabled: bool = False
     # Conversations API configuration
     letta_conversations_enabled: bool = False
+    letta_conversations_shadow_mode: bool = False
+    letta_conversations_shadow_mode_log_level: str = "WARNING"
     # Gateway configuration
     letta_gateway_enabled: bool = False
     letta_gateway_url: str = "ws://192.168.50.90:8407/api/v1/agent-gateway"
@@ -98,6 +100,8 @@ class Config:
     document_parsing_ocr_enabled: bool = True
     document_parsing_ocr_dpi: int = 200
     document_parsing_max_text_length: int = 50000
+    # Temporal durable message delivery (opt-in)
+    temporal_message_delivery: bool = False
     # Group gating configuration (per-room response modes)
     matrix_groups: Dict[str, Any] = field(default_factory=dict)
 
@@ -129,6 +133,8 @@ class Config:
                 letta_code_enabled=os.getenv("LETTA_CODE_ENABLED", "true").lower() == "true",
                 letta_max_tool_calls=int(os.getenv("LETTA_MAX_TOOL_CALLS", "100")),
                 letta_conversations_enabled=os.getenv("LETTA_CONVERSATIONS_ENABLED", "false").lower() == "true",
+                letta_conversations_shadow_mode=os.getenv("LETTA_CONVERSATIONS_SHADOW_MODE", "false").lower() == "true",
+                letta_conversations_shadow_mode_log_level=os.getenv("LETTA_CONVERSATIONS_SHADOW_MODE_LOG_LEVEL", "WARNING"),
                 letta_typing_enabled=os.getenv("LETTA_TYPING_ENABLED", "false").lower() == "true",
                 letta_gateway_enabled=os.getenv("LETTA_GATEWAY_ENABLED", "false").lower() == "true",
                 letta_gateway_url=os.getenv(
@@ -143,6 +149,7 @@ class Config:
                 document_parsing_ocr_enabled=os.getenv("DOCUMENT_PARSING_OCR_ENABLED", "true").lower() == "true",
                 document_parsing_ocr_dpi=int(os.getenv("DOCUMENT_PARSING_OCR_DPI", "200")),
                 document_parsing_max_text_length=int(os.getenv("DOCUMENT_PARSING_MAX_TEXT_LENGTH", "50000")),
+                temporal_message_delivery=os.getenv("TEMPORAL_MESSAGE_DELIVERY", "false").lower() in ("true", "1", "yes"),
             )
             # Load group gating configuration
             groups_json = os.getenv("MATRIX_GROUPS_JSON", "").strip()

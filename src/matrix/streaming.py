@@ -6,6 +6,7 @@ for Matrix display with progress-then-delete pattern.
 """
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
@@ -15,6 +16,12 @@ from letta_client import Letta
 from src.matrix.formatter import is_no_reply
 
 logger = logging.getLogger("matrix_client.streaming")
+
+SELF_DELIVERY_TOOL_NAMES = frozenset({
+    "matrix_messaging",
+    "send_message",
+    "matrix-identity-bridge_matrix_messaging",
+})
 
 
 class StreamEventType(Enum):
@@ -435,11 +442,13 @@ class StepStreamReader:
 class StreamingMessageHandler:
     """
     Handles streaming events and manages Matrix message lifecycle.
-    
-    Shows progress messages for tool calls that remain visible in the room,
-    providing an activity trail of what the agent did.
+
+    Defers assistant text until STOP and detects agent self-delivery via
+    ``matrix_messaging`` to suppress duplicate messages — same semantics as
+    ``LiveEditStreamingHandler`` but using discrete send/delete instead of
+    in-place edits.
     """
-    
+
     def __init__(
         self,
         send_message: Callable[[str, str], Any],
@@ -448,36 +457,42 @@ class StreamingMessageHandler:
         delete_progress: bool = False,
         send_final_message: Optional[Callable[[str, str], Any]] = None,
     ):
-        """
-        Initialize the handler.
-        
-        Args:
-            send_message: Async function(room_id, content) -> event_id (for progress messages)
-            delete_message: Async function(room_id, event_id) -> None
-            room_id: Matrix room ID
-            delete_progress: If True, delete progress messages when next event arrives
-            send_final_message: Optional separate async function for final responses 
-                               (e.g., to include rich reply context). If not provided,
-                               uses send_message for final messages too.
-        """
         self.send_message = send_message
         self.delete_message = delete_message
         self.room_id = room_id
         self.delete_progress = delete_progress
         self.send_final_message = send_final_message or send_message
         self._progress_event_id: Optional[str] = None
-    
+
+        self._pending_final_content: Optional[str] = None
+        self._self_delivered_to_current_room: bool = False
+
+    @property
+    def self_delivered(self) -> bool:
+        return self._self_delivered_to_current_room
+
+    def _is_self_delivery_to_current_room(self, event: StreamEvent) -> bool:
+        if event.metadata.get("tool_name") not in SELF_DELIVERY_TOOL_NAMES:
+            return False
+        args_raw = event.metadata.get("arguments", "")
+        if not args_raw:
+            return False
+        try:
+            args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+        except (json.JSONDecodeError, TypeError):
+            return False
+        target_room = args.get("room_id") or args.get("chatId") or ""
+        if target_room and target_room == self.room_id:
+            return True
+        target_to = args.get("to_mxid") or ""
+        if target_to:
+            return False
+        op = args.get("operation", "")
+        if op in ("send", "talk_to_agent", "talk_to_opencode"):
+            return not target_room
+        return False
+
     async def handle_event(self, event: StreamEvent) -> Optional[str]:
-        """
-        Handle a streaming event and update Matrix accordingly.
-        
-        Args:
-            event: The streaming event to handle
-            
-        Returns:
-            Event ID of sent message (if any)
-        """
-        # Optionally delete previous progress message
         if self.delete_progress and self._progress_event_id and (event.is_progress or event.is_final or event.is_error):
             try:
                 await self.delete_message(self.room_id, self._progress_event_id)
@@ -485,14 +500,28 @@ class StreamingMessageHandler:
             except Exception as e:
                 logger.warning(f"Failed to delete progress message: {e}")
             self._progress_event_id = None
-        
-        # Handle based on event type
+
         if event.type == StreamEventType.PING:
-            # Ignore pings
             return None
-        
-        elif event.is_progress:
-            # Show tool progress as a temporary message
+
+        if event.type == StreamEventType.USAGE:
+            return None
+
+        if event.type == StreamEventType.REASONING:
+            return None
+
+        if event.type == StreamEventType.STOP:
+            return await self._handle_stop()
+
+        if event.is_progress:
+            if event.type == StreamEventType.TOOL_CALL:
+                if self._is_self_delivery_to_current_room(event):
+                    logger.info(
+                        f"[Streaming] Detected self-delivery tool call "
+                        f"({event.metadata.get('tool_name')}) targeting {self.room_id}"
+                    )
+                    self._self_delivered_to_current_room = True
+
             progress_text = event.format_progress()
             if self._progress_event_id:
                 try:
@@ -502,59 +531,68 @@ class StreamingMessageHandler:
             eid = await self.send_message(self.room_id, progress_text)
             self._progress_event_id = eid
             return eid
-        
+
         elif event.is_final:
-            # Suppress <no-reply/> responses — agent chose not to reply
             if is_no_reply(event.content):
                 logger.info(f"[Streaming] Agent chose not to reply (no-reply marker) in {self.room_id}")
+                self._pending_final_content = None
                 return None
-            # Send final assistant response (not deleted) - use send_final_message
-            # which may include rich reply context
-            return await self.send_final_message(self.room_id, event.content or "")
-        
+            self._pending_final_content = event.content or ""
+            return None
+
         elif event.is_error:
-            # Send error message
             error_text = f"⚠️ {event.content}"
             if event.metadata.get('detail'):
                 error_text += f"\n{event.metadata['detail']}"
             return await self.send_message(self.room_id, error_text)
-        
-        elif event.type in (StreamEventType.STOP, StreamEventType.USAGE):
-            # Metadata events - don't display
-            return None
-        
-        elif event.type == StreamEventType.REASONING:
-            # Reasoning - could optionally display in debug mode
-            # For now, skip
-            return None
-        
+
         elif event.is_approval_request:
-            # Send approval request message to Matrix
-            # This allows the user or connected system to approve/deny
             approval_text = event.format_progress()
             tool_calls = event.metadata.get('tool_calls', [])
-            
-            # Add details about what needs approval
+
             if tool_calls:
                 approval_text += "\n\nTools awaiting approval:"
                 for tc in tool_calls:
                     tool_name = tc.get('name', 'unknown')
                     tool_id = tc.get('tool_call_id', '')
                     args = tc.get('arguments', '')
-                    # Truncate long arguments
                     if len(args) > 200:
                         args = args[:200] + "..."
                     approval_text += f"\n- **{tool_name}** (`{tool_id[:20]}...`)"
                     if args:
                         approval_text += f"\n  ```\n  {args}\n  ```"
-            
+
             logger.info(f"[APPROVAL] Sending approval request to Matrix: {len(tool_calls)} tool(s)")
             return await self.send_message(self.room_id, approval_text)
-        
+
         return None
-    
+
+    async def _handle_stop(self) -> Optional[str]:
+        if self._self_delivered_to_current_room:
+            logger.info(
+                f"[Streaming] Suppressing duplicate final text — agent self-delivered in {self.room_id}"
+            )
+            if self.delete_progress and self._progress_event_id:
+                try:
+                    await self.delete_message(self.room_id, self._progress_event_id)
+                except Exception as e:
+                    logger.warning(f"Failed to delete progress after self-delivery: {e}")
+                self._progress_event_id = None
+            self._pending_final_content = None
+            return None
+
+        if self._pending_final_content is not None:
+            content = self._pending_final_content
+            self._pending_final_content = None
+            return await self.send_final_message(self.room_id, content)
+
+        return None
+
     async def cleanup(self):
-        """Clean up any remaining progress messages (only if delete_progress=True)"""
+        if self._pending_final_content is not None and not self._self_delivered_to_current_room:
+            await self.send_final_message(self.room_id, self._pending_final_content)
+            self._pending_final_content = None
+            return
         if self.delete_progress and self._progress_event_id:
             try:
                 await self.delete_message(self.room_id, self._progress_event_id)
@@ -577,7 +615,12 @@ class LiveEditStreamingHandler:
 
     First meaningful event creates the message.  Subsequent events append to a
     running log and edit the same message (debounced to avoid rate-limits).
-    The final assistant response replaces the entire message body.
+
+    Assistant text is deferred until STOP so that mid-chain assistant events
+    (emitted between tool calls) don't prematurely replace the progress log.
+    If the agent self-delivers via ``matrix_messaging`` targeting the current
+    room, the duplicate final text is suppressed and the progress message is
+    cleaned up instead.
     """
 
     EDIT_DEBOUNCE_S = 0.5
@@ -600,24 +643,57 @@ class LiveEditStreamingHandler:
         self._lines: List[str] = []
         self._last_edit_time: float = 0
 
+        self._pending_final_content: Optional[str] = None
+        self._self_delivered_to_current_room: bool = False
+
+    @property
+    def self_delivered(self) -> bool:
+        return self._self_delivered_to_current_room
+
+    def _is_self_delivery_to_current_room(self, event: StreamEvent) -> bool:
+        if event.metadata.get("tool_name") not in SELF_DELIVERY_TOOL_NAMES:
+            return False
+        args_raw = event.metadata.get("arguments", "")
+        if not args_raw:
+            return False
+        try:
+            args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+        except (json.JSONDecodeError, TypeError):
+            return False
+        target_room = args.get("room_id") or args.get("chatId") or ""
+        if target_room and target_room == self.room_id:
+            return True
+        target_to = args.get("to_mxid") or ""
+        if target_to:
+            return False
+        op = args.get("operation", "")
+        if op in ("send", "talk_to_agent", "talk_to_opencode"):
+            return not target_room
+        return False
+
     async def handle_event(self, event: StreamEvent) -> Optional[str]:
         import time
 
         if event.type == StreamEventType.PING:
             return None
 
-        if event.type in (StreamEventType.STOP, StreamEventType.USAGE):
+        if event.type == StreamEventType.USAGE:
             return None
 
         if event.type == StreamEventType.REASONING:
             return None
 
+        if event.type == StreamEventType.STOP:
+            return await self._handle_stop()
+
         if event.is_final:
             if is_no_reply(event.content):
                 logger.info(f"[LiveEdit] Agent chose not to reply (no-reply marker) in {self.room_id}")
+                self._pending_final_content = None
                 await self._cleanup_no_reply()
                 return None
-            return await self._send_final(event.content or "")
+            self._pending_final_content = event.content or ""
+            return None
 
         if event.is_error:
             error_text = f"⚠️ {event.content}"
@@ -644,6 +720,14 @@ class LiveEditStreamingHandler:
             return self._event_id
 
         if event.is_progress:
+            if event.type == StreamEventType.TOOL_CALL:
+                if self._is_self_delivery_to_current_room(event):
+                    logger.info(
+                        f"[LiveEdit] Detected self-delivery tool call "
+                        f"({event.metadata.get('tool_name')}) targeting {self.room_id}"
+                    )
+                    self._self_delivered_to_current_room = True
+
             line = event.format_progress()
             self._lines.append(line)
 
@@ -658,6 +742,21 @@ class LiveEditStreamingHandler:
             if now - self._last_edit_time >= self.EDIT_DEBOUNCE_S:
                 await self._do_edit()
             return self._event_id
+
+        return None
+
+    async def _handle_stop(self) -> Optional[str]:
+        if self._self_delivered_to_current_room:
+            logger.info(
+                f"[LiveEdit] Suppressing duplicate final text — agent self-delivered in {self.room_id}"
+            )
+            await self._cleanup_self_delivered()
+            return None
+
+        if self._pending_final_content is not None:
+            content = self._pending_final_content
+            self._pending_final_content = None
+            return await self._send_final(content)
 
         return None
 
@@ -717,6 +816,21 @@ class LiveEditStreamingHandler:
         self._event_id = None
         self._lines.clear()
 
+    async def _cleanup_self_delivered(self) -> None:
+        if self._event_id and self.delete_message:
+            try:
+                await self.delete_message(self.room_id, self._event_id)
+                logger.debug(f"Deleted progress message {self._event_id} after self-delivery")
+            except Exception as e:
+                logger.warning(f"Failed to delete progress after self-delivery: {e}")
+        self._event_id = None
+        self._lines.clear()
+        self._pending_final_content = None
+
     async def cleanup(self) -> None:
+        if self._pending_final_content is not None and not self._self_delivered_to_current_room:
+            await self._send_final(self._pending_final_content)
+            self._pending_final_content = None
+            return
         if self._event_id and self._lines:
             await self._do_edit()
