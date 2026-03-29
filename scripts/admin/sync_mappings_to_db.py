@@ -209,7 +209,7 @@ def main():
         # Try alternate paths
         alternate_paths = [
             'matrix_client_data/agent_user_mappings.json',
-            '/opt/stacks/matrix-synapse-deployment/matrix_client_data/agent_user_mappings.json'
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'matrix_client_data', 'agent_user_mappings.json')
         ]
         for alt_path in alternate_paths:
             if os.path.exists(alt_path):

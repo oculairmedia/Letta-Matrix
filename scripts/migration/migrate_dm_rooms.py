@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Config
-JSON_PATH = Path('/opt/stacks/matrix-synapse-deployment/mcp-servers/matrix-identity-bridge/data/dm_rooms.json')
+JSON_PATH = Path(__file__).resolve().parent.parent.parent / 'mcp-servers' / 'matrix-identity-bridge' / 'data' / 'dm_rooms.json'
 DB_CONFIG = {
     'host': '192.168.50.90',
     'port': 5432,

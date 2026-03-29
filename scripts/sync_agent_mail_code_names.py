@@ -11,14 +11,16 @@ Usage:
 """
 
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
 
 # Configuration
 AGENT_MAIL_DB = "/opt/stacks/mcp_agent_mail/storage.sqlite3"
-MAPPING_FILE = "/opt/stacks/matrix-synapse-deployment/matrix_client_data/agent_mail_mappings.json"
-PROJECT_SLUG = "opt-stacks-matrix-synapse-deployment"
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MAPPING_FILE = os.path.join(_PROJECT_ROOT, "matrix_client_data", "agent_mail_mappings.json")
+PROJECT_SLUG = os.path.basename(_PROJECT_ROOT)
 
 def main():
     print("=" * 80)

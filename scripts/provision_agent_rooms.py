@@ -18,7 +18,9 @@ import os
 import sys
 
 # Add parent directory to path for imports when running standalone
-sys.path.insert(0, '/opt/stacks/matrix-synapse-deployment')
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+sys.path.insert(0, _PROJECT_ROOT)
 
 MATRIX_HOMESERVER_URL = os.getenv("MATRIX_HOMESERVER_URL", "http://127.0.0.1:6167")
 LETTA_API_URL = os.getenv("LETTA_API_URL", "http://192.168.50.90:8289")
@@ -26,7 +28,7 @@ LETTA_TOKEN = os.getenv("LETTA_TOKEN", "lettaSecurePass123")
 MATRIX_ADMIN_USERNAME = os.getenv("MATRIX_ADMIN_USERNAME", "admin")
 MATRIX_ADMIN_PASSWORD = os.getenv("MATRIX_ADMIN_PASSWORD", "m6kvcVMWiSYzi6v")
 MATRIX_REGISTRATION_TOKEN = os.getenv("MATRIX_REGISTRATION_TOKEN", "matrix_mcp_secret_token_2024")
-AGENT_USER_MAPPINGS_PATH = os.getenv("AGENT_USER_MAPPINGS_PATH", "/opt/stacks/matrix-synapse-deployment/matrix_client_data/agent_user_mappings.json")
+AGENT_USER_MAPPINGS_PATH = os.getenv("AGENT_USER_MAPPINGS_PATH", os.path.join(_PROJECT_ROOT, "matrix_client_data", "agent_user_mappings.json"))
 
 # Try to import database module (may not be available when running standalone)
 HAS_DB = False

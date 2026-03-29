@@ -16,7 +16,7 @@
 #   0 = healthy (or recovered successfully)
 #   1 = auth failure detected and recovery failed (or --no-recover)
 #
-# Cron: */15 * * * * /opt/stacks/matrix-synapse-deployment/scripts/health-check-auth.sh \
+# Cron: */15 * * * * /opt/stacks/matrix-tuwunel-deploy/scripts/health-check-auth.sh \
 #         >> /var/log/matrix-health-check.log 2>&1
 #
 # Recovery behavior:
@@ -57,9 +57,11 @@ MAX_PARALLEL_CHECKS=10    # concurrent login checks for agent identities
 
 # Parse flags
 AUTO_RECOVER=true
+SIMULATE_AGENT_FAILURES_COUNT=0
 for arg in "$@"; do
     case "$arg" in
         --no-recover|--check-only) AUTO_RECOVER=false ;;
+        --simulate-agent-failures=*) SIMULATE_AGENT_FAILURES_COUNT="${arg#*=}" ;;
     esac
 done
 
@@ -500,6 +502,68 @@ check_agent_identities() {
     log "[Agents] Checked ${checked}/${total} — ${failed} failed"
 }
 
+apply_simulated_agent_failures() {
+    local count="$1"
+    if [[ -z "$count" ]]; then
+        return
+    fi
+
+    if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+        log "[Agents] Ignoring invalid simulated failure count: ${count}"
+        return
+    fi
+
+    if [[ "$count" -le 0 ]]; then
+        return
+    fi
+
+    log "[Agents] Simulating ${count} agent failure(s) for dry-run validation"
+
+    local injected=0
+    for agent in "${AGENT_IDENTITIES[@]}"; do
+        if [[ $injected -ge $count ]]; then
+            break
+        fi
+        if [[ ! " ${FAILED_AGENTS[*]} " =~ " ${agent} " ]]; then
+            FAILED_AGENTS+=("$agent")
+            injected=$((injected + 1))
+        fi
+    done
+
+    while [[ $injected -lt $count ]]; do
+        FAILED_AGENTS+=("simulated_agent_${injected}")
+        injected=$((injected + 1))
+    done
+}
+
+top_offenders() {
+    local limit="${1:-5}"
+    shift || true
+    local offenders=("$@")
+    local total=${#offenders[@]}
+
+    if [[ $total -eq 0 ]]; then
+        echo "none"
+        return
+    fi
+
+    local shown=$limit
+    if [[ $total -lt $limit ]]; then
+        shown=$total
+    fi
+
+    local formatted
+    formatted=$(printf "%s, " "${offenders[@]:0:$shown}")
+    formatted=${formatted%, }
+
+    if [[ $total -gt $shown ]]; then
+        local remaining=$((total - shown))
+        formatted+=" (+${remaining} more)"
+    fi
+
+    echo "$formatted"
+}
+
 # Recover failed agent identities via admin room (Tier 1 only).
 # Agent identities do NOT use Tier 2 (CLI/restart) — too disruptive for non-core users.
 # If admin room recovery fails, alert and move on.
@@ -619,6 +683,7 @@ echo "=== Matrix Auth Health Check ==="
 echo "Homeserver: $HOMESERVER_URL"
 echo "Timestamp: $(date -Iseconds)"
 echo "Auto-recover: $AUTO_RECOVER"
+echo "Simulate agent failures: $SIMULATE_AGENT_FAILURES_COUNT"
 echo ""
 
 # Check if homeserver is reachable
@@ -651,6 +716,7 @@ done
 if discover_agent_identities; then
     echo "--- Agent Identities (${#AGENT_IDENTITIES[@]} discovered) ---"
     check_agent_identities
+    apply_simulated_agent_failures "$SIMULATE_AGENT_FAILURES_COUNT"
     if [[ ${#FAILED_AGENTS[@]} -gt 0 ]]; then
         echo "AGENT FAILURES: ${#FAILED_AGENTS[@]} agent identities cannot authenticate"
         for agent in "${FAILED_AGENTS[@]}"; do
@@ -704,7 +770,9 @@ if $AUTO_RECOVER; then
         if [[ -x "$SCRIPT_DIR/alert.sh" ]]; then
             local_msg="Auth failure auto-recovered for ${#ALL_RECOVERED[@]} identity(ies)."
             [[ ${#RECOVERED_USERS[@]} -gt 0 ]] && local_msg+=" Core: ${RECOVERED_USERS[*]}."
-            [[ ${#RECOVERED_AGENTS[@]} -gt 0 ]] && local_msg+=" Agents: ${#RECOVERED_AGENTS[@]}."
+            if [[ ${#RECOVERED_AGENTS[@]} -gt 0 ]]; then
+                local_msg+=" Agents: ${#RECOVERED_AGENTS[@]} (top: $(top_offenders 5 "${RECOVERED_AGENTS[@]}"))."
+            fi
             local_msg+=" No action needed."
             "$SCRIPT_DIR/alert.sh" \
                 "$local_msg" \
@@ -724,8 +792,12 @@ if $AUTO_RECOVER; then
 
         if [[ -x "$SCRIPT_DIR/alert.sh" ]]; then
             local_msg="Auto-recovery FAILED."
-            [[ ${#RECOVERY_FAILED_USERS[@]} -gt 0 ]] && local_msg+=" Core users: ${RECOVERY_FAILED_USERS[*]}."
-            [[ ${#RECOVERY_FAILED_AGENTS[@]} -gt 0 ]] && local_msg+=" Agents: ${#RECOVERY_FAILED_AGENTS[@]}."
+            if [[ ${#RECOVERY_FAILED_USERS[@]} -gt 0 ]]; then
+                local_msg+=" Core users: ${#RECOVERY_FAILED_USERS[@]} (top: $(top_offenders 5 "${RECOVERY_FAILED_USERS[@]}"))."
+            fi
+            if [[ ${#RECOVERY_FAILED_AGENTS[@]} -gt 0 ]]; then
+                local_msg+=" Agents: ${#RECOVERY_FAILED_AGENTS[@]} (top: $(top_offenders 5 "${RECOVERY_FAILED_AGENTS[@]}"))."
+            fi
             local_msg+=" Manual intervention required."
             "$SCRIPT_DIR/alert.sh" \
                 "$local_msg" \
@@ -770,8 +842,12 @@ else
 
     if [[ -x "$SCRIPT_DIR/alert.sh" ]]; then
         local_msg="Health check FAILED."
-        [[ ${#FAILED_USERS[@]} -gt 0 ]] && local_msg+=" Core users: ${FAILED_USERS[*]}."
-        [[ ${#FAILED_AGENTS[@]} -gt 0 ]] && local_msg+=" Agents: ${#FAILED_AGENTS[@]}."
+        if [[ ${#FAILED_USERS[@]} -gt 0 ]]; then
+            local_msg+=" Core users: ${#FAILED_USERS[@]} (top: $(top_offenders 5 "${FAILED_USERS[@]}"))."
+        fi
+        if [[ ${#FAILED_AGENTS[@]} -gt 0 ]]; then
+            local_msg+=" Agents: ${#FAILED_AGENTS[@]} (top: $(top_offenders 5 "${FAILED_AGENTS[@]}"))."
+        fi
         local_msg+=" Possible RocksDB corruption. See OOM Recovery Runbook."
         "$SCRIPT_DIR/alert.sh" \
             "$local_msg" \

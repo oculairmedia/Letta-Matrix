@@ -126,7 +126,7 @@ def generate_mapping(data_dir: Path):
 
 def main():
     """Main entry point"""
-    data_dir = Path("/opt/stacks/matrix-synapse-deployment/matrix_client_data")
+    data_dir = Path(__file__).resolve().parent.parent / "matrix_client_data"
     
     print("🔧 Agent Mail Identity Mapping Generator")
     print("=" * 60)

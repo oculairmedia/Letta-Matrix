@@ -16,6 +16,7 @@ services:
       - TUWUNEL_ALLOW_FEDERATION=true
       - TUWUNEL_ALLOW_CHECK_FOR_UPDATES=true
       - TUWUNEL_TRUSTED_SERVERS=["matrix.org"]
+      - TUWUNEL_ALLOW_LEGACY_MEDIA=true
       - TUWUNEL_LOG=info
     volumes:
       - ${TUWUNEL_DATA_PATH:-./tuwunel-data}:/var/lib/tuwunel
@@ -174,7 +175,7 @@ services:
       tuwunel:
         condition: service_healthy
       matrix-api:
-        condition: service_started
+        condition: service_healthy
     labels:
       - homepage.group=Communication
       - homepage.name=Temporal File Worker
@@ -269,7 +270,7 @@ services:
       - homepage.href=http://192.168.50.90:3100
       - homepage.description=Matrix identity bridge MCP with Letta integration and cross-run tracking
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3101/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -317,8 +318,8 @@ services:
       - NTFY_URL=http://ntfy:80
       - NTFY_TOPICS=alerts,failures,deploys,errors
       - BRIDGE_URL=http://matrix-messaging-mcp:3100
-      - PM_AGENT=Huly - Matrix Synapse Deployment
-      - CALLER_DIR=/opt/stacks/matrix-synapse-deployment
+      - PM_AGENT=Huly - Matrix Tuwunel Deploy
+      - CALLER_DIR=/opt/stacks/matrix-tuwunel-deploy
     volumes:
       - ./ntfy-bridge:/app:ro
     networks:

@@ -301,8 +301,31 @@ else
     fail "health check exits 0 when all healthy" "Exit code: $default_exit"
 fi
 
+echo ""
+echo "--- Test: simulated agent failure dry-run flag ---"
+
+sim_output=$("$HEALTH_SCRIPT" --check-only --simulate-agent-failures=3 2>&1)
+sim_exit=$?
+
+if echo "$sim_output" | grep -q "Simulate agent failures: 3"; then
+    pass "simulate-agent-failures flag is parsed"
+else
+    fail "simulate-agent-failures flag is parsed" "Output missing simulation marker"
+fi
+
+if echo "$sim_output" | grep -q "AGENT FAILURES:"; then
+    pass "simulated agent failures appear in output"
+else
+    fail "simulated agent failures appear in output" "Output missing AGENT FAILURES section"
+fi
+
+if [[ $sim_exit -ne 0 ]]; then
+    pass "simulated failures return non-zero in check-only mode"
+else
+    fail "simulated failures return non-zero in check-only mode" "Exit code was 0"
+fi
+
 # ============================================================
-# Test 10: Lock file prevents concurrent recovery
 # ============================================================
 echo ""
 echo "--- Test: Lock file prevents concurrent recovery ---"
