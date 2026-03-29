@@ -3,8 +3,26 @@
  * Note: Storage uses async methods, but we test synchronous aspects here
  */
 import { describe, it, expect } from '@jest/globals';
+import { Storage } from '../src/core/storage.js';
 
 describe('Storage', () => {
+  describe('Identity API only mode', () => {
+    it('requires USE_IDENTITY_API=true', () => {
+      const original = process.env.USE_IDENTITY_API;
+      process.env.USE_IDENTITY_API = 'false';
+      expect(() => new Storage('./data-test')).toThrow('USE_IDENTITY_API must be true');
+      process.env.USE_IDENTITY_API = original;
+    });
+
+    it('removes deprecated sync getIdentityByMXID path', () => {
+      const original = process.env.USE_IDENTITY_API;
+      process.env.USE_IDENTITY_API = 'true';
+      const storage = new Storage('./data-test');
+      expect('getIdentityByMXID' in (storage as unknown as Record<string, unknown>)).toBe(false);
+      process.env.USE_IDENTITY_API = original;
+    });
+  });
+
   describe('DM Room Key Generation', () => {
     /**
      * Helper that mirrors the key generation logic in Storage

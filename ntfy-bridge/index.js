@@ -9,7 +9,7 @@ const NTFY_URL = process.env.NTFY_URL || 'http://ntfy:80';
 const NTFY_TOPICS = (process.env.NTFY_TOPICS || 'alerts,failures,deploys').split(',').map(t => t.trim());
 const BRIDGE_URL = process.env.BRIDGE_URL || 'http://matrix-messaging-mcp:3100';
 const PM_AGENT = process.env.PM_AGENT || 'Huly - Matrix Synapse Deployment';
-const CALLER_DIR = process.env.CALLER_DIR || '/opt/stacks/matrix-synapse-deployment';
+const CALLER_DIR = process.env.CALLER_DIR || '/opt/stacks/matrix-tuwunel-deploy';
 
 async function forwardToPM(notification) {
   const { topic, title, message, priority, tags } = notification;
