@@ -6,13 +6,25 @@ on:
       - main
       - develop
       - feature/sdk-migration
+    paths-ignore:
+      - '.beads/**'
+      - 'docs/bookstack/**'
+      - '**/*.md'
     tags:
       - 'v*'
   pull_request:
     branches:
       - main
       - develop
+    paths-ignore:
+      - '.beads/**'
+      - 'docs/bookstack/**'
+      - '**/*.md'
   workflow_dispatch:
+
+concurrency:
+  group: docker-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
@@ -44,10 +56,21 @@ jobs:
           mkdir -p $MATRIX_DATA_DIR
           pytest tests/unit/ -v --cov=src.core.agent_user_manager --cov-report=xml
 
+      - name: Set up Node.js for OpenCode bridge tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: opencode-bridge/package-lock.json
+
+      - name: Install OpenCode bridge dependencies
+        run: |
+          cd opencode-bridge
+          npm ci
+
       - name: Run OpenCode bridge tests
         run: |
           cd opencode-bridge
-          npm install
           npm run test
 
       - name: Upload coverage reports

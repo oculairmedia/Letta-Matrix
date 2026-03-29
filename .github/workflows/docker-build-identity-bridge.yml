@@ -18,6 +18,10 @@ on:
       - 'mcp-servers/matrix-identity-bridge/**'
   workflow_dispatch:
 
+concurrency:
+  group: docker-build-identity-bridge-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/letta-matrix-identity-bridge

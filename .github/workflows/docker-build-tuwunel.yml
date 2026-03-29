@@ -5,17 +5,27 @@ on:
     branches:
       - main
       - feature/tuwunel-migration
+    paths:
+      - 'docker/Dockerfile.tuwunel-docker2010'
+      - '.github/workflows/docker-build-tuwunel.yml'
     tags:
       - 'v*'
   pull_request:
     branches:
       - main
+    paths:
+      - 'docker/Dockerfile.tuwunel-docker2010'
+      - '.github/workflows/docker-build-tuwunel.yml'
   workflow_dispatch:
     inputs:
       tuwunel_version:
         description: 'Tuwunel version/tag to build'
         required: false
         default: 'main'
+
+concurrency:
+  group: docker-build-tuwunel-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
