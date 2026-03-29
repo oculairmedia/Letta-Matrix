@@ -3,6 +3,8 @@
 .gitignore
 .gitattributes
 .github
+.beads/
+.opencode/
 
 # Python
 __pycache__
@@ -48,6 +50,9 @@ tests/
 test_*.py
 integration_test_*.py
 TEST_README.md
+opencode-bridge/node_modules/
+opencode-bridge/dist/
+opencode-bridge/coverage/
 
 # CI/CD
 .github/
