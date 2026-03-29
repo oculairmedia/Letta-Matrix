@@ -3,8 +3,20 @@ name: Lint and Code Quality
 on:
   push:
     branches: [main, develop, feature/sdk-migration]
+    paths-ignore:
+      - '.beads/**'
+      - 'docs/bookstack/**'
+      - '**/*.md'
   pull_request:
     branches: [main, develop]
+    paths-ignore:
+      - '.beads/**'
+      - 'docs/bookstack/**'
+      - '**/*.md'
+
+concurrency:
+  group: lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   python-lint:

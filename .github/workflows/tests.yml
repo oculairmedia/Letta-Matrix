@@ -3,11 +3,23 @@ name: Test Suite
 on:
   push:
     branches: [ main, develop, feature/*, claude/* ]
+    paths-ignore:
+      - '.beads/**'
+      - 'docs/bookstack/**'
+      - '**/*.md'
   pull_request:
     branches: [ main, develop ]
+    paths-ignore:
+      - '.beads/**'
+      - 'docs/bookstack/**'
+      - '**/*.md'
   schedule:
     - cron: '30 2 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke-tests:
@@ -67,10 +79,21 @@ jobs:
         mkdir -p $MATRIX_DATA_DIR
         ./run_tests.sh unit
 
+    - name: Set up Node.js for OpenCode bridge tests
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: opencode-bridge/package-lock.json
+
+    - name: Install OpenCode bridge dependencies
+      run: |
+        cd opencode-bridge
+        npm ci
+
     - name: Run OpenCode bridge tests
       run: |
         cd opencode-bridge
-        npm install
         npm run test
 
 
@@ -181,7 +204,7 @@ jobs:
           echo "❌ Coverage is below 50% threshold"
           exit 1
         else
-          echo "✅ Coverage meets 67% threshold"
+          echo "✅ Coverage meets 50% threshold"
         fi
 
   slow-integration:
