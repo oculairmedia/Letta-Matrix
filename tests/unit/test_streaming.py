@@ -17,6 +17,8 @@ from src.matrix.streaming import (
     StreamEvent,
     StepStreamReader,
     StreamingMessageHandler,
+    LiveEditStreamingHandler,
+    SELF_DELIVERY_TOOL_NAMES,
 )
 
 
@@ -546,13 +548,17 @@ class TestStreamingMessageHandler:
     
     @pytest.mark.asyncio
     async def test_handle_final_event(self, handler):
-        """Test handling final assistant message"""
+        """Test handling final assistant message (deferred until STOP)"""
         event = StreamEvent(
             type=StreamEventType.ASSISTANT,
             content="Here's my response!"
         )
         result = await handler.handle_event(event)
-        
+        assert result is None
+
+        stop = StreamEvent(type=StreamEventType.STOP, content="end_turn")
+        result = await handler.handle_event(stop)
+
         assert result == "$event_123"
         handler.send_message.assert_called_once_with(
             "!test:matrix.example.com",
@@ -702,13 +708,20 @@ class TestStreamingMessageHandler:
         )
         await handler_with_delete.handle_event(event1)
         
-        # This should not raise despite delete failure
         event2 = StreamEvent(
             type=StreamEventType.ASSISTANT,
             content="Response"
         )
-        result = await handler_with_delete.handle_event(event2)
-        assert result is not None  # Should still return event_id
+        await handler_with_delete.handle_event(event2)
+
+        handler_with_delete.delete_message.side_effect = None
+        handler_with_delete.delete_message.reset_mock()
+        handler_with_delete.send_message.reset_mock()
+        handler_with_delete.send_message.return_value = "$event_final"
+
+        stop = StreamEvent(type=StreamEventType.STOP, content="end_turn")
+        result = await handler_with_delete.handle_event(stop)
+        assert result is not None
 
 
 class TestIntegration:
@@ -792,20 +805,18 @@ class TestIntegration:
             send_final_message=mock_send_final  # Separate handler for final messages
         )
         
-        # Simulate streaming flow: progress then final
         events = [
             StreamEvent(type=StreamEventType.TOOL_CALL, metadata={"tool_name": "search"}),
             StreamEvent(type=StreamEventType.ASSISTANT, content="Here is your answer."),
+            StreamEvent(type=StreamEventType.STOP, content="end_turn"),
         ]
         
         for event in events:
             await handler.handle_event(event)
         
-        # Verify: Progress went through regular send_message
         assert len(regular_messages) == 1
         assert "🔧 search" in regular_messages[0]["content"]
         
-        # Verify: Final message went through send_final_message (for rich reply support)
         assert len(final_messages) == 1
         assert "Here is your answer." in final_messages[0]["content"]
 
@@ -874,3 +885,514 @@ class TestConversationsAPISupport:
         assert call_kwargs["input"] == "Hello"
         
         mock_client.conversations.messages.create.assert_not_called()
+
+
+class TestDeferredFinalization:
+    """Tests for deferred finalization (ASSISTANT queued until STOP)"""
+    
+    @pytest.fixture
+    def handler(self):
+        send_mock = AsyncMock(return_value="$event_123")
+        delete_mock = AsyncMock()
+        return StreamingMessageHandler(
+            send_message=send_mock,
+            delete_message=delete_mock,
+            room_id="!test:matrix.example.com",
+            delete_progress=False
+        )
+    
+    @pytest.mark.asyncio
+    async def test_assistant_text_queued_not_sent_immediately(self, handler):
+        event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Mid-chain assistant text"
+        )
+        result = await handler.handle_event(event)
+        
+        assert result is None
+        handler.send_message.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_stop_triggers_final_send(self, handler):
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Final response"
+        )
+        await handler.handle_event(assistant_event)
+        
+        stop_event = StreamEvent(type=StreamEventType.STOP, content="end_turn")
+        result = await handler.handle_event(stop_event)
+        
+        assert result == "$event_123"
+        handler.send_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "Final response"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_multiple_assistant_events_last_one_wins(self, handler):
+        event1 = StreamEvent(type=StreamEventType.ASSISTANT, content="First")
+        event2 = StreamEvent(type=StreamEventType.ASSISTANT, content="Second")
+        event3 = StreamEvent(type=StreamEventType.ASSISTANT, content="Third")
+        
+        await handler.handle_event(event1)
+        await handler.handle_event(event2)
+        await handler.handle_event(event3)
+        
+        stop_event = StreamEvent(type=StreamEventType.STOP)
+        result = await handler.handle_event(stop_event)
+        
+        assert result == "$event_123"
+        handler.send_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "Third"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_stop_with_no_pending_final_returns_none(self, handler):
+        stop_event = StreamEvent(type=StreamEventType.STOP, content="end_turn")
+        result = await handler.handle_event(stop_event)
+        
+        assert result is None
+        handler.send_message.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_cleanup_flushes_pending_final(self, handler):
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Never got STOP"
+        )
+        await handler.handle_event(assistant_event)
+        
+        await handler.cleanup()
+        
+        handler.send_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "Never got STOP"
+        )
+
+
+class TestSelfDeliveryDetection:
+    """Tests for self-delivery detection and suppression"""
+    
+    @pytest.fixture
+    def handler(self):
+        send_mock = AsyncMock(return_value="$event_123")
+        delete_mock = AsyncMock()
+        return StreamingMessageHandler(
+            send_message=send_mock,
+            delete_message=delete_mock,
+            room_id="!test:matrix.example.com",
+            delete_progress=True
+        )
+    
+    @pytest.mark.asyncio
+    async def test_matrix_messaging_targeting_current_room_sets_self_delivered(self, handler):
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "matrix_messaging",
+                "arguments": '{"operation": "send", "room_id": "!test:matrix.example.com", "message": "Hello"}'
+            }
+        )
+        await handler.handle_event(tool_call_event)
+        
+        assert handler.self_delivered is True
+    
+    @pytest.mark.asyncio
+    async def test_matrix_messaging_targeting_different_room_does_not_set_self_delivered(self, handler):
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "matrix_messaging",
+                "arguments": '{"operation": "send", "room_id": "!other:matrix.example.com", "message": "Hello"}'
+            }
+        )
+        await handler.handle_event(tool_call_event)
+        
+        assert handler.self_delivered is False
+    
+    @pytest.mark.asyncio
+    async def test_stop_after_self_delivery_suppresses_final_text(self, handler):
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "matrix_messaging",
+                "arguments": '{"operation": "send", "room_id": "!test:matrix.example.com"}'
+            }
+        )
+        await handler.handle_event(tool_call_event)
+        
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Duplicate message"
+        )
+        await handler.handle_event(assistant_event)
+        
+        stop_event = StreamEvent(type=StreamEventType.STOP)
+        result = await handler.handle_event(stop_event)
+        
+        assert result is None
+        assert handler.send_message.call_count == 1
+    
+    @pytest.mark.asyncio
+    async def test_stop_after_self_delivery_deletes_progress(self, handler):
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "matrix_messaging",
+                "arguments": '{"operation": "send", "room_id": "!test:matrix.example.com"}'
+            }
+        )
+        result = await handler.handle_event(tool_call_event)
+        assert result == "$event_123"
+        
+        handler.delete_message.reset_mock()
+        
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Duplicate"
+        )
+        await handler.handle_event(assistant_event)
+        
+        handler.delete_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "$event_123"
+        )
+        
+        handler.delete_message.reset_mock()
+        
+        stop_event = StreamEvent(type=StreamEventType.STOP)
+        await handler.handle_event(stop_event)
+        
+        handler.delete_message.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_self_delivered_property_readable(self, handler):
+        assert handler.self_delivered is False
+        
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "send_message",
+                "arguments": '{"room_id": "!test:matrix.example.com"}'
+            }
+        )
+        await handler.handle_event(tool_call_event)
+        
+        assert handler.self_delivered is True
+    
+    @pytest.mark.asyncio
+    async def test_unknown_tool_name_does_not_trigger_detection(self, handler):
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "some_other_tool",
+                "arguments": '{"room_id": "!test:matrix.example.com"}'
+            }
+        )
+        await handler.handle_event(tool_call_event)
+        
+        assert handler.self_delivered is False
+    
+    @pytest.mark.asyncio
+    async def test_all_self_delivery_tool_names_recognized(self, handler):
+        for tool_name in SELF_DELIVERY_TOOL_NAMES:
+            handler_instance = StreamingMessageHandler(
+                send_message=AsyncMock(return_value="$event"),
+                delete_message=AsyncMock(),
+                room_id="!test:matrix.example.com",
+                delete_progress=False
+            )
+            
+            tool_call_event = StreamEvent(
+                type=StreamEventType.TOOL_CALL,
+                metadata={
+                    "tool_name": tool_name,
+                    "arguments": '{"room_id": "!test:matrix.example.com"}'
+                }
+            )
+            await handler_instance.handle_event(tool_call_event)
+            
+            assert handler_instance.self_delivered is True
+
+
+class TestLiveEditDeferredFinalization:
+    """Tests for deferred finalization in LiveEditStreamingHandler"""
+    
+    @pytest.fixture
+    def handler(self):
+        send_mock = AsyncMock(return_value="$event_live")
+        edit_mock = AsyncMock()
+        delete_mock = AsyncMock()
+        return LiveEditStreamingHandler(
+            send_message=send_mock,
+            edit_message=edit_mock,
+            room_id="!test:matrix.example.com",
+            delete_message=delete_mock
+        )
+    
+    @pytest.mark.asyncio
+    async def test_assistant_text_queued_not_sent_immediately(self, handler):
+        event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Mid-chain assistant text"
+        )
+        result = await handler.handle_event(event)
+        
+        assert result is None
+        handler.send_message.assert_not_called()
+        handler.edit_message.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_stop_triggers_final_send(self, handler):
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Final response"
+        )
+        await handler.handle_event(assistant_event)
+        
+        stop_event = StreamEvent(type=StreamEventType.STOP, content="end_turn")
+        result = await handler.handle_event(stop_event)
+        
+        assert result == "$event_live"
+        handler.send_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "Final response"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_stop_replaces_progress_message_with_final(self, handler):
+        progress_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={"tool_name": "search"}
+        )
+        await handler.handle_event(progress_event)
+        
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Final answer"
+        )
+        await handler.handle_event(assistant_event)
+        
+        stop_event = StreamEvent(type=StreamEventType.STOP)
+        result = await handler.handle_event(stop_event)
+        
+        assert result == "$event_live"
+        handler.edit_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "$event_live",
+            "Final answer"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_multiple_assistant_events_last_one_wins(self, handler):
+        event1 = StreamEvent(type=StreamEventType.ASSISTANT, content="First")
+        event2 = StreamEvent(type=StreamEventType.ASSISTANT, content="Second")
+        event3 = StreamEvent(type=StreamEventType.ASSISTANT, content="Third")
+        
+        await handler.handle_event(event1)
+        await handler.handle_event(event2)
+        await handler.handle_event(event3)
+        
+        stop_event = StreamEvent(type=StreamEventType.STOP)
+        result = await handler.handle_event(stop_event)
+        
+        assert result == "$event_live"
+        handler.send_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "Third"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_cleanup_flushes_pending_final(self, handler):
+        progress_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={"tool_name": "test"}
+        )
+        await handler.handle_event(progress_event)
+        
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Never got STOP"
+        )
+        await handler.handle_event(assistant_event)
+        
+        await handler.cleanup()
+        
+        handler.edit_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "$event_live",
+            "Never got STOP"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_self_delivery_detection(self, handler):
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "matrix-identity-bridge_matrix_messaging",
+                "arguments": '{"operation": "send", "room_id": "!test:matrix.example.com"}'
+            }
+        )
+        await handler.handle_event(tool_call_event)
+        
+        assert handler.self_delivered is True
+    
+    @pytest.mark.asyncio
+    async def test_stop_after_self_delivery_suppresses_and_deletes(self, handler):
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "matrix_messaging",
+                "arguments": '{"operation": "send", "room_id": "!test:matrix.example.com"}'
+            }
+        )
+        await handler.handle_event(tool_call_event)
+        
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Duplicate"
+        )
+        await handler.handle_event(assistant_event)
+        
+        handler.delete_message.reset_mock()
+        
+        stop_event = StreamEvent(type=StreamEventType.STOP)
+        result = await handler.handle_event(stop_event)
+        
+        assert result is None
+        handler.delete_message.assert_called_once_with(
+            "!test:matrix.example.com",
+            "$event_live"
+        )
+        handler.send_message.call_count == 1
+        handler.edit_message.assert_not_called()
+
+
+class TestCleanupWithPendingFinal:
+    """Tests for cleanup behavior with pending final content"""
+    
+    @pytest.mark.asyncio
+    async def test_cleanup_sends_pending_final_when_not_self_delivered(self):
+        send_mock = AsyncMock(return_value="$event_cleanup")
+        delete_mock = AsyncMock()
+        handler = StreamingMessageHandler(
+            send_message=send_mock,
+            delete_message=delete_mock,
+            room_id="!test:matrix.example.com"
+        )
+        
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Pending final"
+        )
+        await handler.handle_event(assistant_event)
+        
+        await handler.cleanup()
+        
+        send_mock.assert_called_once_with(
+            "!test:matrix.example.com",
+            "Pending final"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_cleanup_does_not_send_pending_final_when_self_delivered(self):
+        send_mock = AsyncMock(return_value="$event")
+        delete_mock = AsyncMock()
+        handler = StreamingMessageHandler(
+            send_message=send_mock,
+            delete_message=delete_mock,
+            room_id="!test:matrix.example.com"
+        )
+        
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "matrix_messaging",
+                "arguments": '{"room_id": "!test:matrix.example.com"}'
+            }
+        )
+        await handler.handle_event(tool_call_event)
+        
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Self-delivered"
+        )
+        await handler.handle_event(assistant_event)
+        
+        send_mock.reset_mock()
+        
+        await handler.cleanup()
+        
+        send_mock.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_live_edit_cleanup_sends_pending_final_when_not_self_delivered(self):
+        send_mock = AsyncMock(return_value="$event_live")
+        edit_mock = AsyncMock()
+        delete_mock = AsyncMock()
+        handler = LiveEditStreamingHandler(
+            send_message=send_mock,
+            edit_message=edit_mock,
+            room_id="!test:matrix.example.com",
+            delete_message=delete_mock
+        )
+        
+        progress_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={"tool_name": "test"}
+        )
+        await handler.handle_event(progress_event)
+        
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Pending final"
+        )
+        await handler.handle_event(assistant_event)
+        
+        await handler.cleanup()
+        
+        edit_mock.assert_called_once_with(
+            "!test:matrix.example.com",
+            "$event_live",
+            "Pending final"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_live_edit_cleanup_does_not_send_when_self_delivered(self):
+        send_mock = AsyncMock(return_value="$event_live")
+        edit_mock = AsyncMock()
+        delete_mock = AsyncMock()
+        handler = LiveEditStreamingHandler(
+            send_message=send_mock,
+            edit_message=edit_mock,
+            room_id="!test:matrix.example.com",
+            delete_message=delete_mock
+        )
+        
+        tool_call_event = StreamEvent(
+            type=StreamEventType.TOOL_CALL,
+            metadata={
+                "tool_name": "matrix_messaging",
+                "arguments": '{"room_id": "!test:matrix.example.com"}'
+            }
+        )
+        await handler.handle_event(tool_call_event)
+        
+        assistant_event = StreamEvent(
+            type=StreamEventType.ASSISTANT,
+            content="Self-delivered"
+        )
+        await handler.handle_event(assistant_event)
+        
+        stop_event = StreamEvent(type=StreamEventType.STOP)
+        await handler.handle_event(stop_event)
+        
+        send_mock.reset_mock()
+        edit_mock.reset_mock()
+        
+        await handler.cleanup()
+        
+        send_mock.assert_not_called()
+        edit_mock.assert_not_called()

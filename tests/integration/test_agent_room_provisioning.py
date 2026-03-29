@@ -30,9 +30,10 @@ LETTA_TOKEN = os.getenv("LETTA_TOKEN", "lettaSecurePass123")
 MATRIX_ADMIN_USERNAME = os.getenv("MATRIX_ADMIN_USERNAME", "admin")
 MATRIX_ADMIN_PASSWORD = os.getenv("MATRIX_ADMIN_PASSWORD", "m6kvcVMWiSYzi6v")
 
-# Paths to data files
-AGENT_USER_MAPPINGS_PATH = "/opt/stacks/matrix-synapse-deployment/matrix_client_data/agent_user_mappings.json"
-IDENTITY_BRIDGE_DATA_PATH = "/opt/stacks/matrix-synapse-deployment/mcp-servers/matrix-identity-bridge/data/identities.json"
+# Paths to data files (derive from project root)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+AGENT_USER_MAPPINGS_PATH = os.path.join(_PROJECT_ROOT, "matrix_client_data", "agent_user_mappings.json")
+IDENTITY_BRIDGE_DATA_PATH = os.path.join(_PROJECT_ROOT, "mcp-servers", "matrix-identity-bridge", "data", "identities.json")
 
 
 class MatrixClient:

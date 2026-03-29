@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 from src.matrix.config import LettaApiError
 from src.matrix.letta_bridge import _get_gateway_client, send_to_letta_api_streaming, send_to_letta_api
+from src.matrix.conversations_metrics import reset as reset_conversation_metrics, snapshot as snapshot_conversation_metrics
+from src.matrix.streaming import StreamEvent, StreamEventType
 
 
 # ============================================================================
@@ -41,6 +43,8 @@ def mock_config():
         letta_gateway_max_connections: int = 20
         letta_typing_enabled: bool = False
         letta_conversations_enabled: bool = False
+        letta_conversations_shadow_mode: bool = False
+        letta_conversations_shadow_mode_log_level: str = "WARNING"
         letta_streaming_live_edit: bool = False
         letta_streaming_enabled: bool = False
         letta_streaming_timeout: float = 120.0
@@ -48,6 +52,13 @@ def mock_config():
         letta_max_tool_calls: int = 100
 
     return MockConfig()
+
+
+@pytest.fixture(autouse=True)
+def reset_metrics_between_tests():
+    reset_conversation_metrics()
+    yield
+    reset_conversation_metrics()
 
 
 @pytest.fixture
@@ -300,3 +311,113 @@ async def test_exception_chain_preserved_through_traceback(mock_config, mock_log
             cause = e.__cause__
             assert cause is not None
             assert isinstance(cause, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_falls_back_to_legacy_on_non_busy_error(mock_config, mock_logger):
+    mock_config.letta_conversations_enabled = True
+    mock_config.letta_conversations_shadow_mode = True
+
+    mock_gateway = AsyncMock()
+
+    with patch("src.matrix.letta_bridge._get_gateway_client") as mock_get_gw:
+        mock_get_gw.return_value = mock_gateway
+
+        with patch("src.matrix.letta_bridge._resolve_agent_for_room") as mock_resolve_agent:
+            mock_resolve_agent.return_value = ("agent-123", "TestAgent")
+
+            with patch("src.matrix.letta_bridge._resolve_conversation_id") as mock_resolve_conv:
+                mock_resolve_conv.return_value = "conv-123"
+
+                with patch("src.letta.gateway_stream_reader.collect_via_gateway") as mock_collect:
+                    mock_collect.side_effect = [RuntimeError("Error code: 500"), "legacy ok"]
+
+                    result = await send_to_letta_api(
+                        message_body="test message",
+                        sender_id="@user:matrix.test",
+                        config=mock_config,
+                        logger=mock_logger,
+                        room_id="!room:matrix.test",
+                    )
+
+                    assert result == "legacy ok"
+                    assert mock_collect.call_count == 2
+                    first_call = mock_collect.call_args_list[0].kwargs
+                    second_call = mock_collect.call_args_list[1].kwargs
+                    assert first_call["conversation_id"] == "conv-123"
+                    assert second_call["conversation_id"] is None
+
+                    metrics = snapshot_conversation_metrics()
+                    assert metrics["letta_conversations_api_fallback_total"] == 1
+                    assert metrics["letta_api_mode"] == 2
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_does_not_fallback_on_busy_error(mock_config, mock_logger):
+    mock_config.letta_conversations_enabled = True
+    mock_config.letta_conversations_shadow_mode = True
+
+    mock_gateway = AsyncMock()
+
+    with patch("src.matrix.letta_bridge._get_gateway_client") as mock_get_gw:
+        mock_get_gw.return_value = mock_gateway
+
+        with patch("src.matrix.letta_bridge._resolve_agent_for_room") as mock_resolve_agent:
+            mock_resolve_agent.return_value = ("agent-123", "TestAgent")
+
+            with patch("src.matrix.letta_bridge._resolve_conversation_id") as mock_resolve_conv:
+                mock_resolve_conv.return_value = "conv-123"
+
+                with patch("src.letta.gateway_stream_reader.collect_via_gateway") as mock_collect:
+                    mock_collect.side_effect = RuntimeError("HTTP 409 CONVERSATION_BUSY")
+
+                    with pytest.raises(LettaApiError):
+                        await send_to_letta_api(
+                            message_body="test message",
+                            sender_id="@user:matrix.test",
+                            config=mock_config,
+                            logger=mock_logger,
+                            room_id="!room:matrix.test",
+                        )
+
+                    assert mock_collect.call_count == 1
+                    metrics = snapshot_conversation_metrics()
+                    assert metrics["letta_conversations_api_fallback_total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_stop_only_sends_fallback_terminal_message(mock_config, mock_logger):
+    fallback_text = "Agent processed the request (no text response)."
+    mock_config.letta_streaming_live_edit = False
+
+    async def _stop_only_stream(*args, **kwargs):
+        yield StreamEvent(type=StreamEventType.STOP, content="done")
+
+    with patch("src.matrix.letta_bridge._resolve_agent_for_room") as mock_resolve_agent:
+        mock_resolve_agent.return_value = ("agent-123", "TestAgent")
+
+        with patch("src.matrix.letta_bridge._resolve_conversation_id") as mock_resolve_conv:
+            mock_resolve_conv.return_value = "conv-123"
+
+            with patch("src.matrix.letta_bridge._get_gateway_client") as mock_get_gateway:
+                mock_get_gateway.return_value = AsyncMock()
+
+                with patch("src.letta.gateway_stream_reader.stream_via_gateway", side_effect=_stop_only_stream):
+                    with patch("src.matrix.letta_bridge.send_as_agent_with_event_id", new_callable=AsyncMock) as mock_send:
+                        mock_send.return_value = "$evt_fallback"
+
+                        with patch("src.matrix.poll_handler.process_agent_response", new_callable=AsyncMock) as mock_poll:
+                            mock_poll.return_value = (False, fallback_text, None)
+
+                            response = await send_to_letta_api_streaming(
+                                message_body="ping",
+                                sender_id="@user:matrix.test",
+                                config=mock_config,
+                                logger=mock_logger,
+                                room_id="!room:matrix.test",
+                            )
+
+    assert response == fallback_text
+    mock_send.assert_called_once()
+    assert mock_send.call_args.args[0] == "!room:matrix.test"
+    assert mock_send.call_args.args[1] == fallback_text

@@ -382,7 +382,7 @@ async def test_new_room_would_have_required_members():
     # Import the room manager to check its constants
     try:
         import sys
-        sys.path.insert(0, '/opt/stacks/matrix-synapse-deployment')
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         from src.core.room_manager import MatrixRoomManager
         
         # Verify the constant exists and has the right members
@@ -411,7 +411,7 @@ async def test_service_user_password_generation():
         # DEV_MODE causes generate_password() to return "password" (8 chars)
         old_dev_mode = os.environ.pop('DEV_MODE', None)
         
-        sys.path.insert(0, '/opt/stacks/matrix-synapse-deployment')
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         from src.core.user_manager import MatrixUserManager
         
         # Create a mock instance (we just need the methods)

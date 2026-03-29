@@ -749,7 +749,7 @@ class TestOpenCodeRelaySkip:
         with patch('src.matrix.mention_routing.forward_to_opencode_room') as mock_forward_oc, \
              patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
             
-            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/matrix-synapse-deployment")
+            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/test-project")
             
             await handle_agent_mention_routing(
                 room=mock_room_with_users,
@@ -782,7 +782,7 @@ class TestOpenCodeRelaySkip:
         with patch('src.matrix.mention_routing.forward_to_opencode_room') as mock_forward_oc, \
              patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
             
-            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/matrix-synapse-deployment")
+            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/test-project")
             mock_forward_oc.return_value = "$forwarded_oc_123"
             
             await handle_agent_mention_routing(
@@ -819,7 +819,7 @@ class TestOpenCodeRelaySkip:
              patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
             
             mock_forward_agent.return_value = "$forwarded_agent_123"
-            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/matrix-synapse-deployment")
+            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/test-project")
             
             await handle_agent_mention_routing(
                 room=mock_room_with_users,
@@ -849,7 +849,7 @@ class TestOpenCodeRelaySkip:
         with patch('src.matrix.mention_routing.forward_to_opencode_room') as mock_forward_oc, \
              patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
             
-            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/matrix-synapse-deployment")
+            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/test-project")
             mock_forward_oc.return_value = "$forwarded_oc_123"
             
             await handle_agent_mention_routing(

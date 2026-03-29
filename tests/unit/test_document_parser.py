@@ -10,7 +10,9 @@ import pytest
 from src.matrix.document_parser import (
     DocumentParseConfig,
     DocumentParseResult,
+    _decode_text_file_with_fallbacks,
     _is_text_low_quality,
+    _should_attempt_text_decode_fallback,
     format_document_for_agent,
     is_parseable_document,
     parse_document,
@@ -296,3 +298,175 @@ class TestIsTextLowQuality:
         # Typical PDF metadata extraction
         text = "/Type /Page /Resources /Font /F1 /Encoding"
         assert _is_text_low_quality(text) is True
+
+
+# ---------------------------------------------------------------------------
+# _should_attempt_text_decode_fallback
+# ---------------------------------------------------------------------------
+
+class TestShouldAttemptTextDecodeFallback:
+    def test_vcf_with_unicode_error(self):
+        assert _should_attempt_text_decode_fallback(
+            "contacts.vcf",
+            "UnicodeDecodeError: 'ascii' codec can't decode byte 0xf0 in position 46262",
+        ) is True
+
+    def test_vcf_with_generic_error(self):
+        """Non-encoding errors should not trigger the fallback."""
+        assert _should_attempt_text_decode_fallback(
+            "contacts.vcf",
+            "FileNotFoundError: No such file",
+        ) is False
+
+    def test_pdf_with_unicode_error(self):
+        """PDFs should NOT use the text decode fallback (they're binary)."""
+        assert _should_attempt_text_decode_fallback(
+            "report.pdf",
+            "UnicodeDecodeError: 'ascii' codec can't decode byte 0xf0",
+        ) is False
+
+    def test_ics_with_codec_error(self):
+        assert _should_attempt_text_decode_fallback(
+            "calendar.ics",
+            "PlainTextConverter threw UnicodeDecodeError with message: 'ascii' codec can't decode",
+        ) is True
+
+    def test_txt_with_ascii_error(self):
+        assert _should_attempt_text_decode_fallback(
+            "notes.txt",
+            "FileConversionException: ascii codec failure",
+        ) is True
+
+    def test_empty_inputs(self):
+        assert _should_attempt_text_decode_fallback("", "") is False
+
+    def test_docx_excluded(self):
+        """Binary formats not in TEXT_FALLBACK_EXTENSIONS should be excluded."""
+        assert _should_attempt_text_decode_fallback(
+            "doc.docx",
+            "UnicodeDecodeError: 'ascii' codec can't decode",
+        ) is False
+
+
+# ---------------------------------------------------------------------------
+# _decode_text_file_with_fallbacks
+# ---------------------------------------------------------------------------
+
+class TestDecodeTextFileWithFallbacks:
+    def test_utf8_file(self, tmp_path):
+        f = tmp_path / "contacts.vcf"
+        content = "BEGIN:VCARD\nFN:José García\nEND:VCARD\n"
+        f.write_text(content, encoding="utf-8")
+        text, error = _decode_text_file_with_fallbacks(str(f))
+        assert error is None
+        assert "José García" in text
+
+    def test_utf8_with_emoji(self, tmp_path):
+        """The exact failure case: UTF-8 with 4-byte emoji (0xf0 byte)."""
+        f = tmp_path / "contacts.vcf"
+        content = "BEGIN:VCARD\nFN:Test 🎉 User\nEND:VCARD\n"
+        f.write_text(content, encoding="utf-8")
+        text, error = _decode_text_file_with_fallbacks(str(f))
+        assert error is None
+        assert "🎉" in text
+
+    def test_utf8_bom(self, tmp_path):
+        f = tmp_path / "contacts.vcf"
+        content = "BEGIN:VCARD\nFN:Test\nEND:VCARD\n"
+        f.write_bytes(b"\xef\xbb\xbf" + content.encode("utf-8"))
+        text, error = _decode_text_file_with_fallbacks(str(f))
+        assert error is None
+        assert "BEGIN:VCARD" in text
+        assert not text.startswith("\ufeff")
+
+    def test_utf16_le_bom(self, tmp_path):
+        f = tmp_path / "contacts.vcf"
+        content = "BEGIN:VCARD\nFN:Test\nEND:VCARD\n"
+        f.write_bytes(b"\xff\xfe" + content.encode("utf-16-le"))
+        text, error = _decode_text_file_with_fallbacks(str(f))
+        assert error is None
+        assert "BEGIN:VCARD" in text
+
+    def test_latin1_fallback(self, tmp_path):
+        f = tmp_path / "contacts.vcf"
+        f.write_bytes(b"BEGIN:VCARD\nFN:Ren\xe9 M\xfcller\nEND:VCARD\n")
+        text, error = _decode_text_file_with_fallbacks(str(f))
+        assert error is None
+        assert "René" in text or "Müller" in text
+
+    def test_empty_file(self, tmp_path):
+        f = tmp_path / "empty.vcf"
+        f.write_bytes(b"")
+        text, error = _decode_text_file_with_fallbacks(str(f))
+        assert text == ""
+        assert error is not None and "empty" in error.lower()
+
+    def test_nonexistent_file(self):
+        text, error = _decode_text_file_with_fallbacks("/nonexistent/path.vcf")
+        assert text == ""
+        assert error is not None
+
+
+# ---------------------------------------------------------------------------
+# parse_document — VCF text decode fallback integration
+# ---------------------------------------------------------------------------
+
+class TestParseDocumentVcfFallback:
+    @pytest.mark.asyncio
+    async def test_vcf_unicode_error_triggers_fallback(self, tmp_path):
+        """When MarkItDown fails with UnicodeDecodeError on .vcf, fallback should succeed."""
+        f = tmp_path / "contacts.vcf"
+        content = "BEGIN:VCARD\nVERSION:3.0\nFN:Test User 🎉\nTEL:+1234567890\nEND:VCARD\n"
+        f.write_text(content, encoding="utf-8")
+
+        config = DocumentParseConfig(enabled=True, timeout_seconds=10.0, max_file_size_mb=10)
+
+        unicode_error = (
+            "FileConversionException: File conversion failed after 1 attempts:\n"
+            " - PlainTextConverter threw UnicodeDecodeError with message: "
+            "'ascii' codec can't decode byte 0xf0 in position 46262: ordinal not in range(128)"
+        )
+
+        with patch("src.matrix.document_parser._process_pool", None), \
+             patch("src.matrix.document_parser._convert_with_markitdown") as mock_convert:
+            mock_convert.return_value = ("", None, unicode_error)
+            result = await parse_document(str(f), "contacts.vcf", config=config)
+
+            assert result.error is None
+            assert "Test User" in result.text
+            assert "🎉" in result.text
+            assert result.filename == "contacts.vcf"
+
+    @pytest.mark.asyncio
+    async def test_vcf_fallback_not_triggered_for_other_errors(self, tmp_path):
+        """Non-encoding errors should NOT trigger the text decode fallback."""
+        f = tmp_path / "contacts.vcf"
+        f.write_text("BEGIN:VCARD\nFN:Test\nEND:VCARD\n")
+
+        config = DocumentParseConfig(enabled=True, timeout_seconds=10.0, max_file_size_mb=10)
+
+        with patch("src.matrix.document_parser._process_pool", None), \
+             patch("src.matrix.document_parser._convert_with_markitdown") as mock_convert:
+            mock_convert.return_value = ("", None, "SomeOtherError: connection refused")
+            result = await parse_document(str(f), "contacts.vcf", config=config)
+
+            assert result.error is not None
+
+    @pytest.mark.asyncio
+    async def test_pdf_unicode_error_no_fallback(self, tmp_path):
+        """PDFs should NOT get the text decode fallback even on encoding errors."""
+        f = tmp_path / "report.pdf"
+        f.write_bytes(b"%PDF-1.4 fake content with \xf0 bytes")
+
+        config = DocumentParseConfig(
+            enabled=True, timeout_seconds=10.0, max_file_size_mb=10, ocr_enabled=False,
+        )
+
+        with patch("src.matrix.document_parser._process_pool", None), \
+             patch("src.matrix.document_parser._extract_pdf_with_fitz", return_value=("", 1, None)), \
+             patch("src.matrix.document_parser._convert_with_markitdown") as mock_convert:
+            unicode_error = "UnicodeDecodeError: 'ascii' codec can't decode byte 0xf0"
+            mock_convert.return_value = ("", None, unicode_error)
+            result = await parse_document(str(f), "report.pdf", config=config)
+
+            assert result.error is not None

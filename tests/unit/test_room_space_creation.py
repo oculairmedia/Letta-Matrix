@@ -593,6 +593,79 @@ class TestRoomCreation:
             assert mapping.invitation_status[room_manager.admin_username] == "joined"
             assert mapping.invitation_status[room_manager.config.username] == "joined"
 
+    @pytest.mark.asyncio
+    async def test_login_agent_with_recovery_recovers_after_forbidden(self, room_manager):
+        forbidden_response = MagicMock()
+        forbidden_response.status = 403
+        forbidden_response.text = AsyncMock(return_value='{"errcode":"M_FORBIDDEN"}')
+        forbidden_response.__aenter__ = AsyncMock(return_value=forbidden_response)
+        forbidden_response.__aexit__ = AsyncMock(return_value=None)
+
+        success_response = MagicMock()
+        success_response.status = 200
+        success_response.json = AsyncMock(return_value={"access_token": "agent_token_123"})
+        success_response.__aenter__ = AsyncMock(return_value=success_response)
+        success_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(side_effect=[forbidden_response, success_response])
+
+        room_manager.user_manager.generate_agent_password = MagicMock(return_value="AgentPass_recovery_123!")
+
+        with patch.object(room_manager, '_reset_agent_password_via_admin_room', new_callable=AsyncMock, return_value=True) as mock_reset:
+            with patch('src.core.room_manager.sync_agent_password_consistently', new_callable=AsyncMock, return_value=True) as mock_sync:
+                token = await room_manager._login_agent_with_recovery(
+                    mock_session,
+                    "agent-123",
+                    "agent_123",
+                    "old_password",
+                )
+
+        assert token == "agent_token_123"
+        assert room_manager._agent_auth_failures.get("agent-123") == 0
+        mock_reset.assert_called_once()
+        mock_sync.assert_called_once_with("agent-123", "AgentPass_recovery_123!")
+
+    @pytest.mark.asyncio
+    async def test_login_agent_with_recovery_suppresses_repeated_attempt(self, room_manager):
+        room_manager._agent_auth_last_password["agent-123"] = "same_password"
+        room_manager._agent_auth_next_retry_at["agent-123"] = 999.0
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock()
+
+        with patch.object(room_manager, '_current_time', return_value=100.0):
+            token = await room_manager._login_agent_with_recovery(
+                mock_session,
+                "agent-123",
+                "agent_123",
+                "same_password",
+            )
+
+        assert token is None
+        mock_session.post.assert_not_called()
+        assert room_manager._agent_auth_last_reason.get("agent-123") == "suppressed_by_cooldown"
+
+    @pytest.mark.asyncio
+    async def test_ensure_required_members_returns_failed_when_agent_auth_unavailable(self, room_manager):
+        mapping = MagicMock()
+        mapping.matrix_user_id = "@agent_123:test.com"
+        mapping.matrix_password = "password"
+
+        room_manager.get_room_members = AsyncMock(return_value=[])
+
+        with patch('src.models.agent_mapping.AgentMappingDB') as mock_db_cls:
+            mock_db_cls.return_value.get_by_agent_id.return_value = mapping
+            with patch.object(room_manager, '_login_agent_with_recovery', new_callable=AsyncMock, return_value=None):
+                with patch('src.matrix.alerting.alert_auth_failure', new_callable=AsyncMock) as mock_alert:
+                    results = await room_manager.ensure_required_members("!room:test.com", "agent-123")
+
+        assert results == {
+            "@admin:matrix.oculair.ca": "failed",
+            "@letta:matrix.oculair.ca": "failed",
+        }
+        mock_alert.assert_called_once_with("agent_123", "!room:test.com")
+
 
 class TestRoomSpaceIntegration:
     """Integration tests for room and space creation workflow"""
