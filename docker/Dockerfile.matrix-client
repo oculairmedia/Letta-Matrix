@@ -1,7 +1,12 @@
+# syntax=docker/dockerfile:1.7
+
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -18,18 +23,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 # Copy application files
 COPY src/ ./src/
 
 # Create directories for matrix store and agent mappings
 RUN mkdir -p /app/matrix_store /app/data
-
-# Ensure Python output is not buffered (for real-time logs)
-ENV PYTHONUNBUFFERED=1
 
 # Set environment variables with defaults
 ENV MATRIX_HOMESERVER_URL=http://synapse:8008
