@@ -14,6 +14,7 @@ from unittest.mock import Mock
 
 from src.matrix.client import (
     _is_streaming_progress,
+    _is_no_text_fallback_echo,
     _still_processing_last_sent,
     _STILL_PROCESSING_COOLDOWN,
 )
@@ -52,6 +53,10 @@ class TestIsStreamingProgress:
 
     def test_newline_wrapped(self):
         assert _is_streaming_progress("\n🔧 send_message...\n") is True
+
+    def test_with_leading_mxid_prefix(self):
+        text = "@oc_matrix_synapse_deployment:matrix.oculair.ca ⏳ Still processing previous message..."
+        assert _is_streaming_progress(text) is True
 
     # ── Multi-line progress blocks (live-edit) ────────────────────────
 
@@ -132,3 +137,18 @@ class TestStillProcessingRateLimiting:
         _still_processing_last_sent["!room2:test"] = time.monotonic()
         assert len(_still_processing_last_sent) == 2
         _still_processing_last_sent.clear()
+
+
+class TestNoTextFallbackEcho:
+    def test_exact_match(self):
+        assert _is_no_text_fallback_echo("Agent processed the request (no text response).") is True
+
+    def test_with_leading_mxid_prefix(self):
+        text = (
+            "@oc_matrix_synapse_deployment:matrix.oculair.ca "
+            "Agent processed the request (no text response)."
+        )
+        assert _is_no_text_fallback_echo(text) is True
+
+    def test_non_fallback_text(self):
+        assert _is_no_text_fallback_echo("Agent processed your request successfully.") is False
