@@ -623,7 +623,7 @@ class LiveEditStreamingHandler:
     cleaned up instead.
     """
 
-    EDIT_DEBOUNCE_S = 0.5
+    EDIT_DEBOUNCE_S = 0.2
 
     def __init__(
         self,
