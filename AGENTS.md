@@ -186,6 +186,13 @@ The health check script runs every 15 minutes via cron and **automatically recov
 ./scripts/health-check-auth.sh                # Check + auto-recover (default)
 ./scripts/health-check-auth.sh --no-recover   # Check only, no recovery
 ./scripts/health-check-auth.sh --check-only   # Alias for --no-recover
+./scripts/health-check-auth.sh --check-only --simulate-agent-failures=3
+```
+
+Install or refresh the cron entry with:
+
+```bash
+./scripts/install-health-check-cron.sh
 ```
 
 **How auto-recovery works:**
@@ -278,6 +285,12 @@ Run the recovery regression tests to verify the mechanism works:
 ```
 
 Tests cover: login validation, admin room resolution, message delivery, full reset cycle, flag behavior, and lock file concurrency.
+
+Dry-run failure simulation:
+
+```bash
+./scripts/health-check-auth.sh --check-only --simulate-agent-failures=3
+```
 
 ### Prevention
 
