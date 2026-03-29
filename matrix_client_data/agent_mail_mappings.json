@@ -430,13 +430,5 @@
     "agent_mail_name": "Lettacliagent8",
     "agent_mail_registered": false,
     "last_sync": "2025-12-24T17:33:04.836494+00:00"
-  },
-  "agent-fe8a9291-b49a-4fc1-94c3-1a23b86b6108": {
-    "matrix_user_id": "@agent_fe8a9291_b49a_4fc1_94c3_1a23b86b6108:matrix.oculair.ca",
-    "matrix_room_id": "!81HSgbYxQUhxEj297G:matrix.oculair.ca",
-    "matrix_name": "GraphitiExplorer",
-    "agent_mail_name": "GraphitiExplorer",
-    "agent_mail_registered": false,
-    "last_sync": "2025-12-24T17:33:04.836500+00:00"
   }
 }

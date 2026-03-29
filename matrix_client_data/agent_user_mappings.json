@@ -701,19 +701,6 @@
       "@letta:matrix.oculair.ca": "joined"
     }
   },
-  "agent-fe8a9291-b49a-4fc1-94c3-1a23b86b6108": {
-    "agent_id": "agent-fe8a9291-b49a-4fc1-94c3-1a23b86b6108",
-    "agent_name": "GraphitiExplorer",
-    "matrix_user_id": "@agent_fe8a9291_b49a_4fc1_94c3_1a23b86b6108:matrix.oculair.ca",
-    "matrix_password": "password",
-    "created": true,
-    "room_id": "!81HSgbYxQUhxEj297G:matrix.oculair.ca",
-    "room_created": true,
-    "invitation_status": {
-      "@admin:matrix.oculair.ca": "joined",
-      "@letta:matrix.oculair.ca": "joined"
-    }
-  },
   "agent-0a0867cb-09a4-4a9d-ad97-884773b7cbbc": {
     "matrix_user_id": "@agent_0a0867cb_09a4_4a9d_ad97_884773b7cbbc:matrix.oculair.ca",
     "agent_name": "Huly - Houdini MCP Server",
