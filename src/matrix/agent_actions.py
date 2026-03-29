@@ -11,10 +11,11 @@ Extracted from client.py as a standalone module.
 Re-exported by client.py for backward compatibility.
 """
 import asyncio
+from contextlib import asynccontextmanager
 import html
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 from urllib.parse import quote
 
 import aiohttp
@@ -38,6 +39,18 @@ _AGENT_SEND_TIMEOUT = aiohttp.ClientTimeout(total=15)
 _get_agent_token = get_agent_token
 _repair_agent_password = repair_agent_password
 
+
+@asynccontextmanager
+async def _session_scope(
+    session: Optional[aiohttp.ClientSession] = None,
+) -> AsyncIterator[aiohttp.ClientSession]:
+    if session is not None:
+        yield session
+        return
+
+    async with aiohttp.ClientSession() as owned_session:
+        yield owned_session
+
 # ── Send Messages ────────────────────────────────────────────────────
 
 async def send_as_agent_with_event_id(
@@ -48,6 +61,7 @@ async def send_as_agent_with_event_id(
     reply_to_event_id: Optional[str] = None,
     reply_to_sender: Optional[str] = None,
     reply_to_body: Optional[str] = None,
+    session: Optional[aiohttp.ClientSession] = None,
 ) -> Optional[str]:
     """
     Send a message as the agent user for this room and return the event ID.
@@ -75,9 +89,9 @@ async def send_as_agent_with_event_id(
             f"[SEND_AS_AGENT] Sending as agent: {agent_name} in room {room_id}"
         )
 
-        async with aiohttp.ClientSession() as session:
+        async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
-                room_id, config, logger, session, caller="SEND_AS_AGENT"
+                room_id, config, logger, active_session, caller="SEND_AS_AGENT"
             )
             if not agent_token:
                 return None
@@ -154,7 +168,7 @@ async def send_as_agent_with_event_id(
                 merged = list(dict.fromkeys(existing + _pill_mxids))
                 message_data["m.mentions"] = {"user_ids": merged}
 
-            async with session.put(
+            async with active_session.put(
                 message_url,
                 headers=headers,
                 json=message_data,
@@ -191,6 +205,7 @@ async def send_as_agent(
     logger: logging.Logger,
     reply_to_event_id: Optional[str] = None,
     reply_to_sender: Optional[str] = None,
+    session: Optional[aiohttp.ClientSession] = None,
 ) -> bool:
     """
     Send a message as the agent user for this room.
@@ -203,6 +218,7 @@ async def send_as_agent(
         logger,
         reply_to_event_id=reply_to_event_id,
         reply_to_sender=reply_to_sender,
+        session=session,
     )
     return event_id is not None
 
@@ -210,7 +226,11 @@ async def send_as_agent(
 # ── Delete / Edit / React / Receipt ─────────────────────────────────
 
 async def delete_message_as_agent(
-    room_id: str, event_id: str, config: Config, logger: logging.Logger
+    room_id: str,
+    event_id: str,
+    config: Config,
+    logger: logging.Logger,
+    session: Optional[aiohttp.ClientSession] = None,
 ) -> bool:
     """Redact (delete) a message as the agent user for this room."""
     try:
@@ -225,9 +245,9 @@ async def delete_message_as_agent(
             f"[DELETE_AS_AGENT] Attempting to delete message as agent: {agent_name} in room {room_id}"
         )
 
-        async with aiohttp.ClientSession() as session:
+        async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
-                room_id, config, logger, session, caller="DELETE_AS_AGENT"
+                room_id, config, logger, active_session, caller="DELETE_AS_AGENT"
             )
             if not agent_token:
                 return False
@@ -240,7 +260,7 @@ async def delete_message_as_agent(
             }
             redact_data = {"reason": "Progress message replaced"}
 
-            async with session.put(
+            async with active_session.put(
                 redact_url,
                 headers=headers,
                 json=redact_data,
@@ -269,12 +289,13 @@ async def edit_message_as_agent(
     new_body: str,
     config: Config,
     logger: logging.Logger,
+    session: Optional[aiohttp.ClientSession] = None,
 ) -> bool:
     """Edit a message as the agent user for this room."""
     try:
-        async with aiohttp.ClientSession() as session:
+        async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
-                room_id, config, logger, session, caller="EDIT_AS_AGENT"
+                room_id, config, logger, active_session, caller="EDIT_AS_AGENT"
             )
             if not agent_token:
                 return False
@@ -328,7 +349,7 @@ async def edit_message_as_agent(
                 mentions = {"user_ids": list(dict.fromkeys(_pill_mxids))}
                 message_data["m.new_content"]["m.mentions"] = mentions
 
-            async with session.put(
+            async with active_session.put(
                 msg_url,
                 headers=headers,
                 json=message_data,
@@ -355,12 +376,13 @@ async def send_reaction_as_agent(
     emoji: str,
     config: Config,
     logger: logging.Logger,
+    session: Optional[aiohttp.ClientSession] = None,
 ) -> Optional[str]:
     """Send a reaction (emoji) to a message as the agent user for this room."""
     try:
-        async with aiohttp.ClientSession() as session:
+        async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
-                room_id, config, logger, session, caller="REACTION"
+                room_id, config, logger, active_session, caller="REACTION"
             )
             if not agent_token:
                 return None
@@ -379,7 +401,7 @@ async def send_reaction_as_agent(
                 }
             }
 
-            async with session.put(
+            async with active_session.put(
                 url, headers=headers, json=content, timeout=_AGENT_SEND_TIMEOUT
             ) as response:
                 if response.status == 200:
@@ -406,12 +428,13 @@ async def send_read_receipt_as_agent(
     event_id: str,
     config: Config,
     logger: logging.Logger,
+    session: Optional[aiohttp.ClientSession] = None,
 ) -> bool:
     """Send a read receipt for a message as the agent user for this room."""
     try:
-        async with aiohttp.ClientSession() as session:
+        async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
-                room_id, config, logger, session, caller="READ_RECEIPT"
+                room_id, config, logger, active_session, caller="READ_RECEIPT"
             )
             if not agent_token:
                 return False
@@ -422,7 +445,7 @@ async def send_read_receipt_as_agent(
                 "Content-Type": "application/json",
             }
 
-            async with session.post(
+            async with active_session.post(
                 url, headers=headers, json={}, timeout=_AGENT_SEND_TIMEOUT
             ) as response:
                 if response.status == 200:
