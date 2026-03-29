@@ -5,7 +5,7 @@ Agent authentication and token management helpers.
 import asyncio
 import logging
 import time
-from typing import Awaitable, Callable, Dict, Optional
+from typing import Awaitable, Callable, Dict, Optional, Tuple
 
 import aiohttp
 
@@ -16,11 +16,38 @@ from src.core.password_consistency import sync_agent_password_consistently
 
 
 _AGENT_LOGIN_TIMEOUT = aiohttp.ClientTimeout(total=10)
+_TOKEN_CACHE_TTL_SECONDS = 1800
 
 
 # Cooldown tracking: agent_id -> timestamp of last repair attempt
 _REPAIR_COOLDOWN_SECONDS = 300  # 5 minutes
 _repair_last_attempt: Dict[str, float] = {}
+
+_token_cache: Dict[str, Tuple[str, float]] = {}
+
+
+def invalidate_agent_token(agent_username: str) -> None:
+    _token_cache.pop(agent_username, None)
+
+
+def _get_cached_agent_token(agent_username: str) -> Optional[str]:
+    cached = _token_cache.get(agent_username)
+    if not cached:
+        return None
+
+    token, expires_at = cached
+    if time.monotonic() >= expires_at:
+        invalidate_agent_token(agent_username)
+        return None
+
+    return token
+
+
+def _cache_agent_token(agent_username: str, token: str) -> None:
+    _token_cache[agent_username] = (
+        token,
+        time.monotonic() + _TOKEN_CACHE_TTL_SECONDS,
+    )
 
 
 
@@ -54,6 +81,10 @@ async def get_agent_token(
     agent_username = agent_mapping["matrix_user_id"].split(":")[0].replace("@", "")
     agent_password = agent_mapping["matrix_password"]
 
+    cached_token = _get_cached_agent_token(agent_username)
+    if cached_token:
+        return cached_token
+
     login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
     login_data = {
         "type": "m.login.password",
@@ -67,6 +98,7 @@ async def get_agent_token(
         ) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
+                invalidate_agent_token(agent_username)
                 logger.error(
                     f"[{caller}] Login failed for {agent_username}: {resp.status} - {error_text}"
                 )
@@ -83,6 +115,7 @@ async def get_agent_token(
                                 retry_data = await retry_resp.json()
                                 token = retry_data.get("access_token")
                                 if token:
+                                    _cache_agent_token(agent_username, token)
                                     logger.info(
                                         f"[{caller}] Password repair succeeded for {agent_username}"
                                     )
@@ -91,15 +124,19 @@ async def get_agent_token(
             auth_data = await resp.json()
             token = auth_data.get("access_token")
             if not token:
+                invalidate_agent_token(agent_username)
                 logger.error(
                     f"[{caller}] No access_token in login response for {agent_username}"
                 )
                 return None
+            _cache_agent_token(agent_username, token)
             return token
     except asyncio.TimeoutError:
+        invalidate_agent_token(agent_username)
         logger.error(f"[{caller}] Login timed out for {agent_username}")
         return None
     except Exception as e:
+        invalidate_agent_token(agent_username)
         logger.error(f"[{caller}] Login exception for {agent_username}: {e}")
         return None
 

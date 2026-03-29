@@ -19,8 +19,10 @@ def _make_async_cm(response: MagicMock) -> MagicMock:
 @pytest.fixture(autouse=True)
 def _reset_repair_attempts() -> Iterator[None]:
     agent_auth._repair_last_attempt.clear()
+    agent_auth._token_cache.clear()
     yield
     agent_auth._repair_last_attempt.clear()
+    agent_auth._token_cache.clear()
 
 
 @pytest.fixture
@@ -58,16 +60,12 @@ async def test_get_agent_token_returns_none_without_mapping(config: Config, logg
 async def test_get_agent_token_returns_cached_token_on_second_call_if_cache_exists(
     config: Config, logger: logging.Logger
 ) -> None:
-    token_cache = getattr(agent_auth, "_token_cache", None)
-    if token_cache is None:
-        pytest.skip("agent_auth has no token cache")
-
     mapping = {
         "agent_id": "agent-1",
         "matrix_user_id": "@agent_1:matrix.test",
         "matrix_password": "pass",
     }
-    token_cache.clear()
+    agent_auth._token_cache.clear()
 
     login_response = MagicMock(status=200)
     login_response.json = AsyncMock(return_value={"access_token": "token-1"})
@@ -85,6 +83,43 @@ async def test_get_agent_token_returns_cached_token_on_second_call_if_cache_exis
     assert first == "token-1"
     assert second == "token-1"
     assert session.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_agent_token_reauthenticates_after_cache_expiry(
+    config: Config, logger: logging.Logger
+) -> None:
+    mapping = {
+        "agent_id": "agent-1",
+        "matrix_user_id": "@agent_1:matrix.test",
+        "matrix_password": "pass",
+    }
+
+    first_response = MagicMock(status=200)
+    first_response.json = AsyncMock(return_value={"access_token": "token-1"})
+    second_response = MagicMock(status=200)
+    second_response.json = AsyncMock(return_value={"access_token": "token-2"})
+
+    session = MagicMock()
+    session.post = MagicMock(
+        side_effect=[
+            _make_async_cm(first_response),
+            _make_async_cm(second_response),
+        ]
+    )
+
+    with (
+        patch("src.core.mapping_service.get_mapping_by_room_id", return_value=mapping),
+        patch("src.core.mapping_service.get_portal_link_by_room_id", return_value=None),
+        patch("src.core.mapping_service.get_mapping_by_agent_id", return_value=None),
+        patch("src.matrix.agent_auth.time.monotonic", side_effect=[100.0, 1901.0, 1901.0]),
+    ):
+        first = await agent_auth.get_agent_token("!room:test", config, logger, session)
+        second = await agent_auth.get_agent_token("!room:test", config, logger, session)
+
+    assert first == "token-1"
+    assert second == "token-2"
+    assert session.post.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -110,6 +145,36 @@ async def test_get_agent_token_returns_token_on_successful_login(
         token = await agent_auth.get_agent_token("!room:test", config, logger, session)
 
     assert token == "token-abc"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_token_does_not_cache_failed_login(
+    config: Config, logger: logging.Logger
+) -> None:
+    mapping = {
+        "agent_id": "agent-1",
+        "matrix_user_id": "@agent_1:matrix.test",
+        "matrix_password": "pass",
+    }
+    login_response = MagicMock(status=403)
+    login_response.text = AsyncMock(return_value='{"errcode":"M_FORBIDDEN"}')
+
+    session = MagicMock()
+    session.post = MagicMock(return_value=_make_async_cm(login_response))
+
+    with (
+        patch("src.core.mapping_service.get_mapping_by_room_id", return_value=mapping),
+        patch("src.core.mapping_service.get_portal_link_by_room_id", return_value=None),
+        patch("src.core.mapping_service.get_mapping_by_agent_id", return_value=None),
+        patch("src.matrix.agent_auth.repair_agent_password", new=AsyncMock(return_value=None)),
+    ):
+        first = await agent_auth.get_agent_token("!room:test", config, logger, session)
+        second = await agent_auth.get_agent_token("!room:test", config, logger, session)
+
+    assert first is None
+    assert second is None
+    assert session.post.call_count == 2
+    assert agent_auth._token_cache == {}
 
 
 @pytest.mark.asyncio
