@@ -74,8 +74,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CACHEBUST=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=matrix-identity-bridge
+          cache-to: type=gha,mode=max,scope=matrix-identity-bridge
 
       - name: Generate build summary
         run: |

@@ -125,8 +125,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=matrix-client
+          cache-to: type=gha,mode=max,scope=matrix-client
 
   build-matrix-api:
     name: Build Matrix API
@@ -173,8 +173,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=matrix-api
+          cache-to: type=gha,mode=max,scope=matrix-api
 
   build-mcp-server:
     name: Build MCP Server
@@ -221,8 +221,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=mcp-server
+          cache-to: type=gha,mode=max,scope=mcp-server
 
   build-opencode-bridge:
     name: Build OpenCode Bridge
@@ -269,8 +269,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=opencode-bridge
+          cache-to: type=gha,mode=max,scope=opencode-bridge
 
   summary:
     name: Build Summary

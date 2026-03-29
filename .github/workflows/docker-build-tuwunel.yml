@@ -88,8 +88,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             TUWUNEL_VERSION=${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=tuwunel
+          cache-to: type=gha,mode=max,scope=tuwunel
           platforms: linux/amd64
 
       - name: Generate build summary
