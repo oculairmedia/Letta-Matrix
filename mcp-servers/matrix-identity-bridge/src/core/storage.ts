@@ -1,10 +1,3 @@
-/**
- * Storage Layer - JSON-based persistence for identities, DM mappings, and metadata
- * 
- * Identity operations can optionally use the Python REST API instead of local JSON.
- * Set USE_IDENTITY_API=true to enable API-backed identity storage.
- */
-
 import fs from 'fs/promises';
 import path from 'path';
 import type {
@@ -18,36 +11,34 @@ import { DMRoomApiClient } from './dm-room-api-client.js';
 
 export class Storage {
   private dataDir: string;
-  private identitiesFile: string;
   private dmRoomsFile: string;
   private metadataFile: string;
   
-  private identities: Map<string, MatrixIdentity> = new Map();
   private dmRooms: Map<string, DMRoomMapping> = new Map();
-  private mxidIndex: Map<string, string> = new Map(); // mxid -> identity.id
   private metadata: StorageMetadata = {
     version: 1,
     updatedAt: Date.now()
   };
   
   private initialized = false;
-  private useIdentityApi: boolean;
   private useDMRoomApi: boolean;
-  private identityApiClient: IdentityApiClient | null = null;
+  private identityApiClient: IdentityApiClient;
   private dmRoomApiClient: DMRoomApiClient | null = null;
 
   constructor(dataDir: string = './data') {
     this.dataDir = dataDir;
-    this.identitiesFile = path.join(dataDir, 'identities.json');
     this.dmRoomsFile = path.join(dataDir, 'dm_rooms.json');
     this.metadataFile = path.join(dataDir, 'metadata.json');
-    this.useIdentityApi = process.env.USE_IDENTITY_API === 'true';
-    this.useDMRoomApi = process.env.USE_DM_ROOM_API === 'true';
-    
-    if (this.useIdentityApi) {
-      this.identityApiClient = new IdentityApiClient();
-      console.log('[Storage] Using Python Identity API for identity operations');
+
+    if (process.env.USE_IDENTITY_API !== 'true') {
+      throw new Error('[Storage] USE_IDENTITY_API must be true; identities.json fallback has been removed');
     }
+
+    this.identityApiClient = new IdentityApiClient();
+    console.log('[Storage] Using Python Identity API for identity operations');
+
+    this.useDMRoomApi = process.env.USE_DM_ROOM_API === 'true';
+
     if (this.useDMRoomApi) {
       this.dmRoomApiClient = new DMRoomApiClient();
       console.log('[Storage] Using Python DM Room API for DM room operations');
@@ -64,40 +55,17 @@ export class Storage {
     await fs.mkdir(this.dataDir, { recursive: true });
 
     // Load existing data
-    await this.loadIdentities();
     await this.loadDMRooms();
     await this.loadMetadata();
 
+    const identityCount = (await this.getAllIdentitiesAsync()).length;
+
     this.initialized = true;
     console.log('[Storage] Initialized:', {
-      identities: this.identities.size,
+      identities: identityCount,
       dmRooms: this.dmRooms.size,
       version: this.metadata.version
     });
-  }
-
-  /**
-   * Load identities from file
-   */
-  private async loadIdentities(): Promise<void> {
-    try {
-      const data = await fs.readFile(this.identitiesFile, 'utf-8');
-      const parsed = JSON.parse(data) as Record<string, MatrixIdentity>;
-      this.identities = new Map(Object.entries(parsed));
-      // Build MXID index for O(1) lookups
-      this.mxidIndex.clear();
-      for (const [id, identity] of this.identities) {
-        if (identity.mxid) {
-          this.mxidIndex.set(identity.mxid, id);
-        }
-      }
-    } catch (error: any) {
-      if (error.code === 'ENOENT') {
-        console.log('[Storage] No existing identities file, starting fresh');
-      } else {
-        console.error('[Storage] Error loading identities:', error);
-      }
-    }
   }
 
   /**
@@ -135,18 +103,6 @@ export class Storage {
   }
 
   /**
-   * Save identities to file
-   */
-  private async saveIdentities(): Promise<void> {
-    const data = Object.fromEntries(this.identities);
-    await fs.writeFile(
-      this.identitiesFile,
-      JSON.stringify(data, null, 2),
-      'utf-8'
-    );
-  }
-
-  /**
    * Save DM room mappings to file
    */
   private async saveDMRooms(): Promise<void> {
@@ -171,81 +127,39 @@ export class Storage {
   }
 
   getIdentity(id: string): MatrixIdentity | undefined {
-    if (this.useIdentityApi && this.identityApiClient) {
-      console.warn('[Storage] Sync getIdentity called with API mode - use getIdentityAsync');
-      return undefined;
-    }
-    return this.identities.get(id);
+    console.warn('[Storage] Sync getIdentity is not supported; use getIdentityAsync');
+    return undefined;
   }
 
   async getIdentityAsync(id: string): Promise<MatrixIdentity | undefined> {
-    if (this.useIdentityApi && this.identityApiClient) {
-      return await this.identityApiClient.getIdentity(id);
-    }
-    return this.identities.get(id);
-  }
-
-  getIdentityByMXID(mxid: string): MatrixIdentity | undefined {
-    if (this.useIdentityApi && this.identityApiClient) {
-      console.warn('[Storage] Sync getIdentityByMXID called with API mode - use getIdentityByMXIDAsync');
-      return undefined;
-    }
-    const id = this.mxidIndex.get(mxid);
-    return id ? this.identities.get(id) : undefined;
+    return await this.identityApiClient.getIdentity(id);
   }
 
   async getIdentityByMXIDAsync(mxid: string): Promise<MatrixIdentity | undefined> {
-    if (this.useIdentityApi && this.identityApiClient) {
-      return await this.identityApiClient.getIdentityByMXID(mxid);
-    }
-    const id = this.mxidIndex.get(mxid);
-    return id ? this.identities.get(id) : undefined;
+    return await this.identityApiClient.getIdentityByMXID(mxid);
   }
 
   getAllIdentities(): MatrixIdentity[] {
-    if (this.useIdentityApi && this.identityApiClient) {
-      console.warn('[Storage] Sync getAllIdentities called with API mode - use getAllIdentitiesAsync');
-      return [];
-    }
-    return Array.from(this.identities.values());
+    console.warn('[Storage] Sync getAllIdentities is not supported; use getAllIdentitiesAsync');
+    return [];
   }
 
   async getAllIdentitiesAsync(type?: string): Promise<MatrixIdentity[]> {
-    if (this.useIdentityApi && this.identityApiClient) {
-      return await this.identityApiClient.getAllIdentities(type);
-    }
-    const all = Array.from(this.identities.values());
-    return type ? all.filter(i => i.type === type) : all;
+    return await this.identityApiClient.getAllIdentities(type);
   }
 
   async saveIdentity(identity: MatrixIdentity): Promise<void> {
-    if (this.useIdentityApi && this.identityApiClient) {
-      await this.identityApiClient.saveIdentity(identity);
-      console.log('[Storage] Saved identity via API:', identity.id);
-      return;
+    const saved = await this.identityApiClient.saveIdentity(identity);
+    if (!saved) {
+      throw new Error(`[Storage] Failed to save identity via API: ${identity.id}`);
     }
-    this.identities.set(identity.id, identity);
-    if (identity.mxid) {
-      this.mxidIndex.set(identity.mxid, identity.id);
-    }
-    await this.saveIdentities();
-    console.log('[Storage] Saved identity:', identity.id, '->', identity.mxid);
+    console.log('[Storage] Saved identity via API:', identity.id);
   }
 
   async deleteIdentity(id: string): Promise<boolean> {
-    if (this.useIdentityApi && this.identityApiClient) {
-      const result = await this.identityApiClient.deleteIdentity(id);
-      if (result) console.log('[Storage] Deleted identity via API:', id);
-      return result;
-    }
-    const existing = this.identities.get(id);
-    if (existing?.mxid) {
-      this.mxidIndex.delete(existing.mxid);
-    }
-    const deleted = this.identities.delete(id);
+    const deleted = await this.identityApiClient.deleteIdentity(id);
     if (deleted) {
-      await this.saveIdentities();
-      console.log('[Storage] Deleted identity:', id);
+      console.log('[Storage] Deleted identity via API:', id);
     }
     return deleted;
   }
@@ -357,8 +271,9 @@ export class Storage {
    * Export all data for backup
    */
   async exportData(): Promise<StorageData> {
+    const identities = await this.getAllIdentitiesAsync();
     return {
-      identities: Object.fromEntries(this.identities),
+      identities: Object.fromEntries(identities.map(identity => [identity.id, identity])),
       dmRooms: Object.fromEntries(this.dmRooms),
       metadata: this.metadata
     };
@@ -368,23 +283,19 @@ export class Storage {
    * Import data from backup
    */
   async importData(data: StorageData): Promise<void> {
-    this.identities = new Map(Object.entries(data.identities));
-    this.dmRooms = new Map(Object.entries(data.dmRooms));
-    this.metadata = data.metadata;
-    // Rebuild MXID index
-    this.mxidIndex.clear();
-    for (const [id, identity] of this.identities) {
-      if (identity.mxid) {
-        this.mxidIndex.set(identity.mxid, id);
-      }
+    const identityEntries = Object.values(data.identities);
+    for (const identity of identityEntries) {
+      await this.saveIdentity(identity);
     }
 
-    await this.saveIdentities();
+    this.dmRooms = new Map(Object.entries(data.dmRooms));
+    this.metadata = data.metadata;
+
     await this.saveDMRooms();
     await this.saveMetadata();
 
     console.log('[Storage] Imported data:', {
-      identities: this.identities.size,
+      identities: identityEntries.length,
       dmRooms: this.dmRooms.size
     });
   }
@@ -393,11 +304,13 @@ export class Storage {
    * Clear all data (use with caution!)
    */
   async clearAll(): Promise<void> {
-    this.identities.clear();
-    this.mxidIndex.clear();
+    const identities = await this.getAllIdentitiesAsync();
+    for (const identity of identities) {
+      await this.deleteIdentity(identity.id);
+    }
+
     this.dmRooms.clear();
-    
-    await this.saveIdentities();
+
     await this.saveDMRooms();
     
     console.log('[Storage] Cleared all data');

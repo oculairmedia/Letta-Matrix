@@ -22,7 +22,7 @@ export const MatrixOperation = z.enum([
   // Identity operations
   'identity_create', 'identity_get', 'identity_list', 'identity_derive',
   // Letta integration
-  'letta_send', 'letta_chat', 'letta_lookup', 'letta_list', 'letta_identity',
+  'letta_send', 'letta_chat', 'letta_lookup', 'letta_list', 'letta_identity', 'letta_conversations', 'parallel_dispatch', 'broadcast', 'talk_to_agent',
   // OpenCode integration
   'opencode_connect', 'opencode_send', 'opencode_status'
 ]);
@@ -78,7 +78,13 @@ export const MatrixMessagingSchema = z.object({
   explicit: z.string().optional().describe('Explicit identity ID'),
   
   // Letta parameters
-  agent_id: z.string().optional().describe('Letta agent ID')
+  agent_id: z.string().optional().describe('Letta agent ID'),
+  agent: z.string().optional().describe('Agent name or ID — simplest way to specify an agent for talk_to_agent'),
+  agent_name: z.string().optional().describe('Agent display name (supports fuzzy matching)'),
+  sender_identity_id: z.string().optional().describe('Explicit sender identity ID for talk_to_agent (overrides caller identity)'),
+  targets: z.array(z.object({ agent: z.string(), message: z.string() })).optional().describe('Array of {agent, message} pairs for parallel_dispatch'),
+  agent_names: z.array(z.string()).optional().describe('List of agent names/IDs for broadcast'),
+  conversation_id: z.string().optional().describe('Conversation/thread ID for stateful multi-turn chats')
 });
 
 export type MatrixMessagingArgs = z.infer<typeof MatrixMessagingSchema>;

@@ -218,7 +218,6 @@ export class IdentityManager {
             const resetLoginToken = await this.loginUser(localpart, password);
             return { name: localpart, displayname: displayName, access_token: resetLoginToken };
           } catch (resetErr) {
-            // Last resort: Check if user exists in identities.json with a stored password
             const allIdentities = await this.storage.getAllIdentitiesAsync();
             const existingIdentity = allIdentities.find(i => i.mxid === `@${localpart}:${this.extractDomain()}`);
             if (existingIdentity?.password) {

@@ -62,7 +62,7 @@ const readClaudeCodeTelemetry = async (): Promise<{ cwd?: string; display_name?:
   const candidates = [
     process.env.MATRIX_MCP_TELEMETRY_PATH,
     '/app/data/claude-code-telemetry.json',
-    '/opt/stacks/matrix-synapse-deployment/mcp-servers/matrix-identity-bridge/data/claude-code-telemetry.json',
+    '/opt/stacks/matrix-tuwunel-deploy/mcp-servers/matrix-identity-bridge/data/claude-code-telemetry.json',
   ].filter((value): value is string => Boolean(value));
 
   for (const telemetryPath of candidates) {

@@ -66,6 +66,10 @@ const operations: Record<MatrixOperationType, OperationHandler> = {
   letta_lookup: letta.letta_lookup,
   letta_list: letta.letta_list,
   letta_identity: letta.letta_identity,
+  letta_conversations: letta.letta_conversations,
+  parallel_dispatch: letta.parallel_dispatch,
+  broadcast: letta.broadcast,
+  talk_to_agent: letta.talk_to_agent,
 
   // OpenCode operations
   opencode_connect: opencode.opencode_connect,
@@ -93,7 +97,7 @@ export async function handleOperation(
  * Get the tool description for the unified tool
  */
 export function getToolDescription(): string {
-  return `Matrix messaging with 29 operations. Use 'operation' param to select: send, read, react, edit, redact, typing, subscribe, unsubscribe, room_join, room_leave, room_info, room_list, room_create, room_invite, room_search, room_find, room_members, identity_create, identity_get, identity_list, identity_derive, letta_send, letta_chat, letta_lookup, letta_list, letta_identity, opencode_connect, opencode_send, opencode_status`;
+  return `Matrix messaging with 33 operations. Use 'operation' param to select: send, read, react, edit, redact, typing, subscribe, unsubscribe, room_join, room_leave, room_info, room_list, room_create, room_invite, room_search, room_find, room_members, identity_create, identity_get, identity_list, identity_derive, letta_send, letta_chat, letta_lookup, letta_list, letta_identity, letta_conversations, parallel_dispatch, broadcast, talk_to_agent, opencode_connect, opencode_send, opencode_status`;
 }
 
 /**
@@ -139,7 +143,13 @@ export function getToolSchema(): Record<string, unknown> {
       directory: { type: 'string', description: 'Directory path' },
       session_id: { type: 'string', description: 'Session ID' },
       explicit: { type: 'string', description: 'Explicit identity ID' },
-      agent_id: { type: 'string', description: 'Letta agent ID' }
+      agent_id: { type: 'string', description: 'Letta agent ID' },
+      agent: { type: 'string', description: 'Agent name or ID for talk_to_agent' },
+      agent_name: { type: 'string', description: 'Agent display name (supports fuzzy matching)' },
+      sender_identity_id: { type: 'string', description: 'Explicit sender identity ID for talk_to_agent' },
+      targets: { type: 'array', items: { type: 'object', properties: { agent: { type: 'string' }, message: { type: 'string' } } }, description: 'Agent/message pairs for parallel_dispatch' },
+      agent_names: { type: 'array', items: { type: 'string' }, description: 'Agent names/IDs for broadcast' },
+      conversation_id: { type: 'string', description: 'Conversation/thread ID for stateful multi-turn chats' }
     },
     required: ['operation']
   };
