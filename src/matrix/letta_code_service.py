@@ -12,6 +12,7 @@ Dependencies:
 import json
 import logging
 import os
+import asyncio
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 import aiohttp
@@ -37,7 +38,7 @@ def _load_letta_code_state() -> None:
                 data = json.load(fh)
                 if isinstance(data, dict):
                     _letta_code_state = data
-    except Exception:
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
         _letta_code_state = {}
 
 
@@ -138,7 +139,7 @@ async def resolve_letta_project_dir(
                     "error": str(exc),
                 },
             )
-    except Exception as exc:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as exc:
         logger.debug(f"Letta Code API unreachable for session resolve: {exc}")
     return None
 
@@ -274,7 +275,7 @@ async def handle_letta_code_command(
                                 f"Auto-detected filesystem path for {agent_name}: {project_dir}"
                             )
                         break
-            except Exception as e:
+            except (LettaCodeApiError, aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as e:
                 logger.warning(f"Failed to auto-detect filesystem path: {e}")
 
         if not project_dir:

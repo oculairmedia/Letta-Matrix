@@ -1,0 +1,198 @@
+# serializer version: 1
+# name: test_agent_actions_rendering_snapshots[markdown_with_mention-**Update**: check @Meridian\n\n- item 1\n- item 2-None-None-None-!room:matrix.oculair.ca]
+  dict({
+    'body': '''
+      **Update**: check @Meridian
+      
+      - item 1
+      - item 2
+    ''',
+    'format': 'org.matrix.custom.html',
+    'formatted_body': '''
+      <p><strong>Update</strong>: check <a href="https://matrix.to/#/@agent_meridian:matrix.oculair.ca">Meridian</a></p>
+      <ul>
+      <li>item 1</li>
+      <li>item 2</li>
+      </ul>
+    ''',
+    'm.mentions': dict({
+      'user_ids': list([
+        '@agent_meridian:matrix.oculair.ca',
+      ]),
+    }),
+    'msgtype': 'm.text',
+  })
+# ---
+# name: test_agent_actions_rendering_snapshots[plain_single_line-Quick status update-None-None-None-None]
+  dict({
+    'body': 'Quick status update',
+    'msgtype': 'm.text',
+  })
+# ---
+# name: test_agent_actions_rendering_snapshots[reply_with_quote-Acknowledged \u2705-$orig-reply-@alice:matrix.oculair.ca-Please confirm deployment window-!room:matrix.oculair.ca]
+  dict({
+    'body': '''
+      > <@alice:matrix.oculair.ca> Please confirm deployment window
+      
+      Acknowledged ✅
+    ''',
+    'format': 'org.matrix.custom.html',
+    'formatted_body': '<mx-reply><blockquote><a href="https://matrix.to/#/!room:matrix.oculair.ca/$orig-reply">In reply to</a> <a href="https://matrix.to/#/@alice:matrix.oculair.ca">@alice:matrix.oculair.ca</a><br/>Please confirm deployment window</blockquote></mx-reply>Acknowledged ✅',
+    'm.mentions': dict({
+      'user_ids': list([
+        '@alice:matrix.oculair.ca',
+      ]),
+    }),
+    'm.relates_to': dict({
+      'm.in_reply_to': dict({
+        'event_id': '$orig-reply',
+      }),
+    }),
+    'msgtype': 'm.text',
+  })
+# ---
+# name: test_envelope_rendering_snapshots[group_basic-<lambda>]
+  '''
+  <system-reminder>
+  ## Message Metadata
+  - **Channel**: Matrix
+  - **Chat ID**: !room:matrix.oculair.ca
+  - **Message ID**: $event1
+  - **Sender**: Alice
+  - **Timestamp**: Friday, Mar 1, 7:00 AM EST
+  
+  ## Chat Context
+  - **Type**: Group chat
+  - **Group**: Ops Room
+  - **Mentioned**: yes
+  - **Hint**: To skip replying, respond with exactly: `<no-reply/>`
+  </system-reminder>
+  
+  Hello team
+  '''
+# ---
+# name: test_envelope_rendering_snapshots[group_with_reply-<lambda>]
+  '''
+  <system-reminder>
+  ## Message Metadata
+  - **Channel**: Matrix
+  - **Chat ID**: !room:matrix.oculair.ca
+  - **Message ID**: $event2
+  - **Sender**: Alice
+  - **Timestamp**: Friday, Mar 1, 7:00 AM EST
+  
+  ## Chat Context
+  - **Type**: Group chat
+  - **Group**: Ops Room
+  - **Hint**: To skip replying, respond with exactly: `<no-reply/>`
+  
+  ## Reply Context
+  - **Reply-To Event**: $orig1
+  - **Reply-To Sender**: bob
+  </system-reminder>
+  
+  Following up on your note
+  '''
+# ---
+# name: test_envelope_rendering_snapshots[inter_agent-<lambda>]
+  '''
+  <system-reminder>
+  ## Message Metadata
+  - **Channel**: Matrix
+  - **Chat ID**: !room:matrix.oculair.ca
+  - **Message ID**: $event3
+  - **Sender**: Meridian
+  - **Timestamp**: Friday, Mar 1, 7:00 AM EST
+  
+  ## Chat Context
+  - **Type**: Direct message
+  - **Hint**: To skip replying, respond with exactly: `<no-reply/>`
+  
+  ## Reply Context
+  - **Reply-To Event**: $orig2
+  - **Reply-To Sender**: charlie
+  
+  ## Inter-Agent Context
+  - **Sender Agent**: Meridian
+  - **Sender Agent ID**: agent-xyz
+  - **System Note**: Treat this as your MAIN task for this turn; the other agent is trying to collaborate with you.
+  </system-reminder>
+  
+  Escalate this to infra.
+  '''
+# ---
+# name: test_envelope_rendering_snapshots[opencode-<lambda>]
+  '''
+  <system-reminder>
+  ## Message Metadata
+  - **Channel**: Matrix
+  - **Chat ID**: !room:matrix.oculair.ca
+  - **Message ID**: $event4
+  - **Sender**: oc_matrix_synapse_deployment_v2
+  - **Timestamp**: Friday, Mar 1, 7:00 AM EST
+  
+  ## Chat Context
+  - **Type**: Direct message
+  - **Hint**: To skip replying, respond with exactly: `<no-reply/>`
+  
+  ## OpenCode Context
+  - **OpenCode MXID**: @oc_matrix_synapse_deployment_v2:matrix.oculair.ca
+  - **Response Routing**: Include @oc_matrix_synapse_deployment_v2:matrix.oculair.ca in your response so the OpenCode bridge can route your reply.
+  </system-reminder>
+  
+  Please run tests and summarize failures.
+  '''
+# ---
+# name: test_envelope_rendering_snapshots[reaction_routing-<lambda>]
+  '''
+  <system-reminder>
+  ## Message Metadata
+  - **Channel**: Matrix
+  - **Chat ID**: !room:matrix.oculair.ca
+  - **Message ID**: $reaction
+  - **Sender**: alice
+  - **Timestamp**: Friday, Mar 1, 7:00 AM EST
+  
+  ## Chat Context
+  - **Type**: Group chat
+  - **Hint**: Treat this as a reaction-based forwarding request.
+  
+  ## Reaction Routing Context
+  - **Reactor**: alice
+  - **Emoji**: ✅
+  - **Reacted Event**: $original
+  - **Original Sender**: bob
+  - **Target Agent**: Meridian
+  - **Target Agent ID**: agent-xyz
+  - **Instruction**: Respond directly to the original message intent, considering the reaction as an explicit routing signal.
+  </system-reminder>
+  
+  Original message:
+  Can you summarize this thread and propose next steps?
+  '''
+# ---
+# name: test_pill_html_snapshots[code_block_protection-Use @Meridian in text but not in code-<p>Use @Meridian in text</p><pre><code>@Meridian</code></pre>]
+  tuple(
+    '<p>Use <a href="https://matrix.to/#/@agent_meridian:matrix.oculair.ca">Meridian</a> in text</p><pre><code>@Meridian</code></pre>',
+    list([
+      '@agent_meridian:matrix.oculair.ca',
+    ]),
+  )
+# ---
+# name: test_pill_html_snapshots[friendly_mentions-Hey @Meridian and @BMO-<p>Hey @Meridian and @BMO</p>]
+  tuple(
+    '<p>Hey <a href="https://matrix.to/#/@agent_meridian:matrix.oculair.ca">Meridian</a> and <a href="https://matrix.to/#/@agent_bmo:matrix.oculair.ca">BMO</a></p>',
+    list([
+      '@agent_meridian:matrix.oculair.ca',
+      '@agent_bmo:matrix.oculair.ca',
+    ]),
+  )
+# ---
+# name: test_pill_html_snapshots[mxid_mention-Hello @agent_meridian:matrix.oculair.ca-<p>Hello @agent_meridian:matrix.oculair.ca</p>]
+  tuple(
+    '<p>Hello <a href="https://matrix.to/#/@agent_meridian:matrix.oculair.ca">Meridian</a></p>',
+    list([
+      '@agent_meridian:matrix.oculair.ca',
+    ]),
+  )
+# ---

@@ -10,6 +10,7 @@ Responsibilities:
 """
 
 import html
+import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
@@ -60,6 +61,29 @@ class LettaMatrixBridge:
         self.config = config or BridgeConfig()
         self._room_cache: Dict[str, tuple[str, datetime]] = {}
         self._access_token: Optional[str] = None
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is not None and not self._session.closed:
+            return self._session
+
+        async with self._session_lock:
+            if self._session is not None and not self._session.closed:
+                return self._session
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                keepalive_timeout=30,
+            )
+            self._session = aiohttp.ClientSession(connector=connector)
+            return self._session
+
+    async def close(self) -> None:
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
     
     async def _ensure_logged_in(self) -> str:
         """Login to Matrix and return access token."""
@@ -77,17 +101,17 @@ class LettaMatrixBridge:
             "initial_device_display_name": "LettaMatrixBridge"
         }
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(login_url, json=login_data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise RuntimeError(f"Matrix login failed: {resp.status} {error_text}")
-                result = await resp.json()
-                self._access_token = result.get("access_token")
-                if not self._access_token:
-                    raise RuntimeError("Login succeeded but no access_token returned")
-                logger.info(f"[Bridge] Logged in as {self.config.matrix_admin_username}")
-                return self._access_token
+        session = await self._get_session()
+        async with session.post(login_url, json=login_data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise RuntimeError(f"Matrix login failed: {resp.status} {error_text}")
+            result = await resp.json()
+            self._access_token = result.get("access_token")
+            if not self._access_token:
+                raise RuntimeError("Login succeeded but no access_token returned")
+            logger.info(f"[Bridge] Logged in as {self.config.matrix_admin_username}")
+            return self._access_token
     
     async def find_matrix_room_for_agent(self, agent_id: str) -> Optional[str]:
         """
@@ -113,26 +137,26 @@ class LettaMatrixBridge:
         
         # Query Matrix API
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.config.matrix_api_url}/agents/{agent_id}/room"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        room_id = data.get("room_id")
-                        if room_id:
-                            # Cache the result
-                            self._room_cache[agent_id] = (room_id, datetime.now())
-                            logger.info(
-                                f"[Bridge] Found room {room_id} for agent {agent_id} "
-                                f"({data.get('agent_name', 'unknown')})"
-                            )
-                            return room_id
-                    elif resp.status == 404:
-                        logger.warning(f"[Bridge] Agent {agent_id} not found in Matrix API")
-                    else:
-                        logger.error(
-                            f"[Bridge] Matrix API error: {resp.status} {resp.reason}"
+            session = await self._get_session()
+            url = f"{self.config.matrix_api_url}/agents/{agent_id}/room"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    room_id = data.get("room_id")
+                    if room_id:
+                        # Cache the result
+                        self._room_cache[agent_id] = (room_id, datetime.now())
+                        logger.info(
+                            f"[Bridge] Found room {room_id} for agent {agent_id} "
+                            f"({data.get('agent_name', 'unknown')})"
                         )
+                        return room_id
+                elif resp.status == 404:
+                    logger.warning(f"[Bridge] Agent {agent_id} not found in Matrix API")
+                else:
+                    logger.error(
+                        f"[Bridge] Matrix API error: {resp.status} {resp.reason}"
+                    )
         except Exception as e:
             logger.exception(f"[Bridge] Failed to query Matrix API: {e}")
         
@@ -301,24 +325,24 @@ class LettaMatrixBridge:
         if relates_to:
             message_content["m.relates_to"] = relates_to
         
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
-            
-            async with session.put(
-                url,
-                headers=headers,
-                json=message_content,
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise RuntimeError(f"Failed to send Matrix message: {resp.status} {error_text}")
-                
-                result = await resp.json()
-                return result.get("event_id", "")
+        session = await self._get_session()
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        async with session.put(
+            url,
+            headers=headers,
+            json=message_content,
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise RuntimeError(f"Failed to send Matrix message: {resp.status} {error_text}")
+
+            result = await resp.json()
+            return result.get("event_id", "")
     
 # ============================================================================
 # Module-level singleton

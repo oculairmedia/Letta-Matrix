@@ -340,7 +340,7 @@ class TestHandlePassivePortalMessage:
         logger.warning = Mock()
 
         mock_gateway = AsyncMock()
-        mock_collect = AsyncMock(side_effect=Exception("Gateway connection failed"))
+        mock_collect = AsyncMock(side_effect=RuntimeError("Gateway connection failed"))
 
         with patch("src.matrix.letta_bridge._get_gateway_client", new_callable=AsyncMock, return_value=mock_gateway), \
              patch("src.letta.gateway_stream_reader.collect_via_gateway", mock_collect):

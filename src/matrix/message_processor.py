@@ -23,7 +23,13 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Union
 
+import aiohttp
 from nio import AsyncClient
+
+try:
+    from letta_client import APIError as LettaClientAPIError
+except ImportError:
+    LettaClientAPIError = RuntimeError
 
 from src.matrix.config import Config, LettaApiError
 from src.matrix.agent_actions import (
@@ -53,7 +59,7 @@ async def _get_temporal_client():
                 os.getenv("TEMPORAL_HOST", "192.168.50.90:7233"),
                 namespace=os.getenv("TEMPORAL_NAMESPACE", "matrix"),
             )
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError, TimeoutError) as e:
             logging.getLogger("matrix_client.temporal").error(
                 f"Failed to connect to Temporal: {e}"
             )
@@ -112,7 +118,7 @@ async def _dispatch_via_temporal(
         )
         return True
 
-    except Exception as e:
+    except (OSError, RuntimeError, TimeoutError, TypeError, ValueError) as e:
         logger.error(
             f"[TEMPORAL] Failed to dispatch workflow: {e}. "
             f"Falling back to direct path."
@@ -418,7 +424,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
                             "Failed to send as agent, falling back to main client"
                         )
                         message_content: Dict[str, Any] = {
-                            "msgtype": "m.text",
+                            "msgtype": "m.notice",
                             "body": letta_response,
                         }
                         await client.room_send(
@@ -451,7 +457,14 @@ async def process_letta_message(ctx: MessageContext) -> None:
             client=client,
         )
 
-    except Exception as e:
+    except (
+        aiohttp.ClientError,
+        asyncio.TimeoutError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as e:
         logger.error(
             "Unexpected error in background Letta task",
             extra={"error": str(e), "sender": event_sender},
@@ -469,13 +482,13 @@ async def process_letta_message(ctx: MessageContext) -> None:
             )
             if not sent_as_agent and client:
                 error_content: Dict[str, Any] = {
-                    "msgtype": "m.text",
+                    "msgtype": "m.notice",
                     "body": error_msg,
                 }
                 await client.room_send(
                     room_id, "m.room.message", error_content
                 )
-        except Exception as send_error:
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as send_error:
             logger.error(
                 "Failed to send error message",
                 extra={"error": str(send_error)},
@@ -528,8 +541,18 @@ async def _handle_letta_api_error(
                     room_member_count=3,
                 )
             )
-        except Exception:
-            pass
+        except (
+            ImportError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            LettaClientAPIError,
+        ) as conversation_error:
+            logger.debug(
+                "[RETRY-BUFFER] Failed to resolve conversation for buffered message: %s",
+                conversation_error,
+            )
 
         async def _reply_cb(rid, text, cfg, log):
             await send_as_agent(rid, text, cfg, log)
@@ -561,8 +584,11 @@ async def _handle_letta_api_error(
                 config,
                 logger,
             )
-        except Exception:
-            pass
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as notify_error:
+            logger.debug(
+                "[RETRY-BUFFER] Failed to send queued-notice message: %s",
+                notify_error,
+            )
         return
 
     logger.error(
@@ -587,8 +613,8 @@ async def _handle_letta_api_error(
             await alert_letta_error(
                 room_agent_id or "unknown", room_id, str(e)
             )
-    except Exception:
-        pass
+    except (ImportError, RuntimeError, ValueError) as alert_error:
+        logger.debug("[ALERTING] Failed to emit Letta alert: %s", alert_error)
 
     error_message = (
         f"Sorry, I encountered an error while processing your message: {str(e)[:100]}"
@@ -604,11 +630,11 @@ async def _handle_letta_api_error(
         )
         if not sent_as_agent and client:
             error_content: Dict[str, Any] = {
-                "msgtype": "m.text",
+                "msgtype": "m.notice",
                 "body": error_message,
             }
             await client.room_send(room_id, "m.room.message", error_content)
-    except Exception as send_error:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as send_error:
         logger.error(
             "Failed to send error message",
             extra={"error": str(send_error)},

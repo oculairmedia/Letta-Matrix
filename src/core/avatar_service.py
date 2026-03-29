@@ -3,6 +3,7 @@
 
 import hashlib
 import io
+import asyncio
 import logging
 from typing import Any, Dict, Optional, Set
 
@@ -32,6 +33,27 @@ class AvatarService:
         self.mappings: Dict[str, Any] = {}
         self._avatar_resolved_users: Set[str] = set()
         self._avatar_sync_in_flight: Set[str] = set()
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is not None and not self._session.closed:
+            return self._session
+
+        async with self._session_lock:
+            if self._session is not None and not self._session.closed:
+                return self._session
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                keepalive_timeout=30,
+            )
+            self._session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._session
 
     async def set_default_avatar_for_agent(
         self,
@@ -69,16 +91,16 @@ class AvatarService:
                 check_url = (
                     f"{self.homeserver_url}/_matrix/client/v3/profile/{matrix_user_id}/avatar_url"
                 )
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(check_url, timeout=DEFAULT_TIMEOUT) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            if data.get("avatar_url"):
-                                self._avatar_resolved_users.add(matrix_user_id)
-                                self.logger.debug(
-                                    f"Agent {agent_name} already has avatar, skipping"
-                                )
-                                return True
+                session = await self._get_session()
+                async with session.get(check_url, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get("avatar_url"):
+                            self._avatar_resolved_users.add(matrix_user_id)
+                            self.logger.debug(
+                                f"Agent {agent_name} already has avatar, skipping"
+                            )
+                            return True
             except Exception as e:
                 self.logger.debug(
                     f"Could not check existing avatar for {agent_name}: {e}"
@@ -105,18 +127,18 @@ class AvatarService:
             }
 
             agent_token = None
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    login_url, json=login_data, timeout=DEFAULT_TIMEOUT
-                ) as response:
-                    if response.status == 200:
-                        login_result = await response.json()
-                        agent_token = login_result.get("access_token")
-                    else:
-                        self.logger.warning(
-                            f"Failed to login as {agent_name} for avatar upload: {response.status}"
-                        )
-                        return False
+            session = await self._get_session()
+            async with session.post(
+                login_url, json=login_data, timeout=DEFAULT_TIMEOUT
+            ) as response:
+                if response.status == 200:
+                    login_result = await response.json()
+                    agent_token = login_result.get("access_token")
+                else:
+                    self.logger.warning(
+                        f"Failed to login as {agent_name} for avatar upload: {response.status}"
+                    )
+                    return False
 
             if not agent_token:
                 self.logger.warning(f"No token obtained for {agent_name}")

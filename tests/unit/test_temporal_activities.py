@@ -1,5 +1,6 @@
 import json
 import asyncio
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -13,6 +14,7 @@ from temporal_workflows.activities import (
     DeliverToLettaInput,
     IngestInput,
     MatrixAPIError,
+    FileActivityError,
     MatrixStatusInput,
     NotifyAgentInput,
     notify_letta_agent,
@@ -67,6 +69,11 @@ class _MockGatewayWS:
 
     async def close(self):
         return None
+
+
+@pytest.fixture(autouse=True)
+def _set_gateway_url(monkeypatch):
+    monkeypatch.setattr("temporal_workflows.activities.notify.LETTA_GATEWAY_URL", "ws://gateway.test/api/v1/agent-gateway")
 
 
 @pytest.mark.asyncio
@@ -140,6 +147,20 @@ async def test_notify_letta_agent_sends_room_source_and_unique_request_id(monkey
     assert str(message_payload["request_id"]).startswith("temporal-notify-")
 
 
+@pytest.mark.asyncio
+async def test_notify_letta_agent_raises_when_gateway_url_missing(monkeypatch):
+    monkeypatch.setattr("temporal_workflows.activities.notify.LETTA_GATEWAY_URL", "")
+
+    with pytest.raises(activities.NotifyError, match="LETTA_GATEWAY_URL is not configured"):
+        await notify_letta_agent(
+            NotifyAgentInput(
+                agent_id="agent-123",
+                message="hello",
+                room_id="!room:matrix.test",
+            )
+        )
+
+
 def test_persist_file_concurrency_safe(monkeypatch, tmp_path):
     monkeypatch.setattr(activities, "PERSISTENT_DOCUMENTS_DIR", str(tmp_path))
 
@@ -204,6 +225,52 @@ async def test_cleanup_file_artifacts_removes_hash_and_files(monkeypatch, tmp_pa
     assert not persistent.exists()
     idx = json.loads((tmp_path / ".hashes.json").read_text(encoding="utf-8"))
     assert file_hash not in idx
+
+
+@pytest.mark.asyncio
+async def test_cleanup_file_artifacts_keeps_hash_if_persistent_delete_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(activities, "PERSISTENT_DOCUMENTS_DIR", str(tmp_path))
+
+    media_dir = tmp_path / "media123"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    persistent = media_dir / "doc.txt"
+    persistent.write_text("hello", encoding="utf-8")
+
+    temp_file = tmp_path / "temp.bin"
+    temp_file.write_bytes(b"data")
+
+    file_hash = "abc123"
+    index = {
+        file_hash: {
+            "filename": "doc.txt",
+            "mxc_url": "mxc://server/media123",
+            "persistent_path": str(persistent),
+            "ts": 1.0,
+        }
+    }
+    (tmp_path / ".hashes.json").write_text(json.dumps(index), encoding="utf-8")
+
+    original_unlink = os.unlink
+
+    def _failing_unlink(path, *args, **kwargs):
+        if str(path) == str(persistent):
+            raise OSError("simulated delete failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", _failing_unlink)
+
+    with pytest.raises(FileActivityError):
+        await cleanup_file_artifacts(
+            CleanupArtifactsInput(
+                temp_file_path=str(temp_file),
+                persistent_path=str(persistent),
+                file_hash=file_hash,
+                remove_persistent=True,
+            )
+        )
+
+    idx = json.loads((tmp_path / ".hashes.json").read_text(encoding="utf-8"))
+    assert file_hash in idx
 
 
 def test_should_remove_persistent_on_cancel():

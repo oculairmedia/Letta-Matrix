@@ -17,7 +17,7 @@ from typing import Optional, Tuple, Union
 import aiohttp
 
 from src.matrix.config import Config, LettaApiError
-from src.core.retry import is_conversation_busy_error
+from src.core.retry import is_conversation_busy_error, retry_async
 from src.matrix.conversations_metrics import increment_fallback, set_api_mode
 from src.matrix.agent_actions import (
     send_as_agent_with_event_id,
@@ -70,29 +70,15 @@ async def retry_with_backoff(
     max_delay: float = 60.0,
     logger: Optional[logging.Logger] = None,
 ):
-    """Retry an async callable with exponential backoff."""
-    for attempt in range(max_retries):
-        try:
-            return await func()
-        except Exception as e:
-            if attempt == max_retries - 1:
-                if logger:
-                    logger.error(
-                        "All retry attempts failed",
-                        extra={"attempts": max_retries, "error": str(e)},
-                    )
-                raise
-            delay = min(base_delay * (2**attempt), max_delay)
-            if logger:
-                logger.warning(
-                    "Retry attempt failed, waiting before next try",
-                    extra={
-                        "attempt": attempt + 1,
-                        "delay": delay,
-                        "error": str(e),
-                    },
-                )
-            await asyncio.sleep(delay)
+    return await retry_async(
+        func,
+        max_attempts=max_retries,
+        base_delay=base_delay,
+        max_delay=max_delay,
+        operation_name="letta_bridge retry",
+        logger=logger,
+        retryable_exceptions=(Exception,),
+    )
 
 
 # ── Agent Routing (moved to agent_router.py, re-exported for compat) ──
@@ -118,7 +104,7 @@ async def _get_gateway_client(config: Config, logger: logging.Logger):
         )
         logger.info("[GATEWAY] Connected")
         return gw_client
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, OSError, AssertionError) as e:
         raise LettaApiError(f"Gateway unavailable — cannot process message: {e}") from e
 
 
@@ -170,8 +156,14 @@ async def send_to_letta_api_streaming(
 
     # ── Matrix message callbacks ──────────────────────────────────
 
-    async def send_message(rid: str, content: str) -> str:
-        event_id = await send_as_agent_with_event_id(rid, content, config, logger)
+    async def send_message(rid: str, content: str, msgtype: str = "m.text") -> str:
+        event_id = await send_as_agent_with_event_id(
+            rid,
+            content,
+            config,
+            logger,
+            msgtype=msgtype,
+        )
         return event_id or ""
 
     async def send_final_message(rid: str, content: str) -> str:
@@ -433,7 +425,7 @@ async def send_to_letta_api_streaming(
 
         await handler.cleanup()
 
-    except Exception as e:
+    except (LettaApiError, aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, AssertionError) as e:
         if _shadow_fallback_enabled(config, conversation_id, e):
             _log_shadow_fallback(
                 logger,
@@ -451,7 +443,7 @@ async def send_to_letta_api_streaming(
                     room_id=room_id,
                     room_member_count=room_member_count,
                 )
-            except Exception as fallback_error:
+            except (LettaApiError, aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, AssertionError) as fallback_error:
                 raise LettaApiError(f"Streaming shadow fallback failed: {fallback_error}") from fallback_error
         logger.error(
             f"[STREAMING] Exception during streaming: {e}", exc_info=True
@@ -549,7 +541,7 @@ async def send_to_letta_api(
                 conversation_id=conversation_id,
                 source={"channel": "matrix", "chatId": room_id} if room_id else None,
             )
-        except Exception as collect_error:
+        except (LettaApiError, aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, AssertionError) as collect_error:
             if _shadow_fallback_enabled(config, conversation_id, collect_error):
                 _log_shadow_fallback(
                     logger,
@@ -583,7 +575,7 @@ async def send_to_letta_api(
         raise LettaApiError(
             f"Letta API returned error {e.status}", e.status, str(e.message)[:200]
         ) from e
-    except Exception as e:
+    except (LettaApiError, aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, AssertionError) as e:
         error_str = str(e)
         if "Error code:" in error_str:
             import re

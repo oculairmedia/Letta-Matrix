@@ -1,7 +1,8 @@
 import logging
 import os
 import inspect
-from typing import Optional
+import asyncio
+from typing import Literal, Optional
 
 import aiohttp
 from openai import AsyncOpenAI
@@ -12,8 +13,36 @@ logger = logging.getLogger("matrix_client.voice")
 _DEFAULT_TTS_PROVIDER = "elevenlabs"
 _DEFAULT_ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Sarah - Mature, Reassuring
 _DEFAULT_ELEVENLABS_MODEL_ID = "eleven_flash_v2_5"  # Fast, cost-effective
-_DEFAULT_OPENAI_TTS_VOICE = "alloy"
+_DEFAULT_OPENAI_TTS_VOICE: Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"] = "alloy"
 _DEFAULT_OPENAI_TTS_MODEL = "tts-1"
+_OPENAI_TTS_VOICES: tuple[Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"], ...] = (
+    "alloy",
+    "echo",
+    "fable",
+    "onyx",
+    "nova",
+    "shimmer",
+)
+_tts_session: Optional[aiohttp.ClientSession] = None
+_tts_session_lock = asyncio.Lock()
+
+
+async def _get_tts_session() -> aiohttp.ClientSession:
+    global _tts_session
+    if _tts_session is not None and not _tts_session.closed:
+        return _tts_session
+
+    async with _tts_session_lock:
+        if _tts_session is not None and not _tts_session.closed:
+            return _tts_session
+        connector = aiohttp.TCPConnector(
+            limit=20,
+            limit_per_host=10,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        _tts_session = aiohttp.ClientSession(connector=connector)
+        return _tts_session
 
 
 def _get_tts_provider() -> str:
@@ -66,27 +95,32 @@ async def _synthesize_with_elevenlabs(text: str) -> Optional[bytes]:
         "model_id": model_id,
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload) as response:
-            if response.status >= 400:
-                error_text = await response.text()
-                logger.warning(
-                    "ElevenLabs TTS failed with status %s: %s",
-                    response.status,
-                    error_text,
-                )
-                return None
+    session = await _get_tts_session()
+    async with session.post(url, headers=headers, json=payload) as response:
+        if response.status >= 400:
+            error_text = await response.text()
+            logger.warning(
+                "ElevenLabs TTS failed with status %s: %s",
+                response.status,
+                error_text,
+            )
+            return None
 
-            audio_data = await response.read()
-            if not audio_data:
-                logger.warning("ElevenLabs TTS returned empty audio")
-                return None
-            return audio_data
+        audio_data = await response.read()
+        if not audio_data:
+            logger.warning("ElevenLabs TTS returned empty audio")
+            return None
+        return audio_data
 
 
 async def _synthesize_with_openai(text: str) -> Optional[bytes]:
     api_key = os.getenv("OPENAI_API_KEY")
-    voice = os.getenv("OPENAI_TTS_VOICE", _DEFAULT_OPENAI_TTS_VOICE)
+    raw_voice = os.getenv("OPENAI_TTS_VOICE", _DEFAULT_OPENAI_TTS_VOICE)
+    voice: Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+    if raw_voice in _OPENAI_TTS_VOICES:
+        voice = raw_voice
+    else:
+        voice = _DEFAULT_OPENAI_TTS_VOICE
     model = os.getenv("OPENAI_TTS_MODEL", _DEFAULT_OPENAI_TTS_MODEL)
 
     client = AsyncOpenAI(api_key=api_key)

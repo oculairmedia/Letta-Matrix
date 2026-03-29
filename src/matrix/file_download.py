@@ -1,6 +1,7 @@
 import logging
 import os
 import tempfile
+import asyncio
 from dataclasses import dataclass
 from typing import Optional
 
@@ -123,6 +124,24 @@ class FileDownloadService:
         self.homeserver_url = homeserver_url
         self.matrix_access_token = matrix_access_token
         self.logger = logger
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is not None and not self._session.closed:
+            return self._session
+
+        async with self._session_lock:
+            if self._session is not None and not self._session.closed:
+                return self._session
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                keepalive_timeout=30,
+            )
+            self._session = aiohttp.ClientSession(connector=connector)
+            return self._session
 
     def extract_file_metadata(self, event: Event, room_id: str) -> Optional[FileMetadata]:
         """Extract file metadata from Matrix event"""
@@ -185,7 +204,7 @@ class FileDownloadService:
                 caption=caption,
             )
 
-        except Exception as e:
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
             self.logger.error(f"Error extracting file metadata: {e}", exc_info=True)
             return None
 
@@ -320,21 +339,28 @@ class FileDownloadService:
             self.logger.warning("No Matrix access token available for download - may fail with 403")
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(download_url, headers=headers) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise FileUploadError(f"Failed to download file: {response.status} - {error_text}")
+            session = await self._get_session()
+            async with session.get(download_url, headers=headers) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise FileUploadError(f"Failed to download file: {response.status} - {error_text}")
 
-                    # Write to temporary file
-                    with open(temp_path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(8192):
-                            f.write(chunk)
+                # Write to temporary file
+                with open(temp_path, "wb") as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        f.write(chunk)
 
             self.logger.info(f"Downloaded file to {temp_path} ({os.path.getsize(temp_path)} bytes)")
             return temp_path
 
-        except Exception as e:
+        except (
+            FileUploadError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ) as e:
             # Clean up on error
             if os.path.exists(temp_path):
                 os.unlink(temp_path)

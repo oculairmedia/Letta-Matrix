@@ -1,9 +1,14 @@
-import asyncio
 import os
 from nio import AsyncClient, LoginError, LogoutError
 import logging
 
+from src.core.retry import retry_async
+
 logger = logging.getLogger(__name__)
+
+
+class MatrixLoginRetryError(Exception):
+    pass
 
 
 class MatrixAuthManager:
@@ -56,7 +61,7 @@ class MatrixAuthManager:
                     )
                     self.client.access_token = ''
                     self.client.device_id = None
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning(f'Could not restore session: {e}')
                 self.client.access_token = ''
                 self.client.device_id = None
@@ -80,50 +85,45 @@ class MatrixAuthManager:
                         logger.warning(
                             f'Token fallback belongs to {whoami_user}, expected {expected_user_id}; skipping token'
                         )
-                    except Exception as token_error:
+                    except (RuntimeError, ValueError, TypeError, OSError) as token_error:
                         logger.warning(f'Token fallback auth failed: {token_error}')
                     self.client.access_token = ''
 
                 logger.info('No valid stored session found, attempting login...')
                 max_retries = int(os.getenv('MATRIX_LOGIN_MAX_RETRIES', '5'))
                 base_delay = float(os.getenv('MATRIX_LOGIN_RETRY_DELAY', '2.0'))
+                client = self.client
+                if client is None:
+                    return None
 
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        response = await self.client.login(
-                            password=self.password, device_name=self.device_name
-                        )
+                async def _login_once() -> None:
+                    response = await client.login(
+                        password=self.password, device_name=self.device_name
+                    )
+                    if isinstance(response, LoginError):
+                        raise MatrixLoginRetryError(response.message)
 
-                        if isinstance(response, LoginError):
-                            logger.error(
-                                f'Login failed (attempt {attempt}/{max_retries}): {response.message}'
-                            )
-                            if attempt < max_retries:
-                                delay = base_delay * (2 ** (attempt - 1))
-                                await asyncio.sleep(delay)
-                                continue
-                            await self.client.close()
-                            return None
+                try:
+                    await retry_async(
+                        _login_once,
+                        operation_name='Matrix login',
+                        max_attempts=max_retries,
+                        base_delay=base_delay,
+                        logger=logger,
+                        retryable_exceptions=(MatrixLoginRetryError, Exception),
+                    )
+                except (MatrixLoginRetryError, RuntimeError, ValueError, TypeError, OSError) as login_error:
+                    logger.error(f'Login failed after {max_retries} attempts: {login_error}')
+                    await client.close()
+                    return None
 
-                        logger.info(
-                            f'Login successful. User ID: {self.client.user_id}, Device ID: {self.client.device_id}'
-                        )
-                        break
-
-                    except Exception as login_error:
-                        logger.error(
-                            f'Login attempt failed ({attempt}/{max_retries}): {login_error}'
-                        )
-                        if attempt < max_retries:
-                            delay = base_delay * (2 ** (attempt - 1))
-                            await asyncio.sleep(delay)
-                            continue
-                        await self.client.close()
-                        return None
+                logger.info(
+                    f'Login successful. User ID: {self.client.user_id}, Device ID: {self.client.device_id}'
+                )
 
             return self.client
 
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, OSError) as e:
             logger.error(f'Authentication failed: {e}')
             if self.client:
                 await self.client.close()
@@ -161,10 +161,10 @@ class MatrixAuthManager:
                     if os.path.exists(store_file):
                         os.remove(store_file)
                         logger.info('Session store cleaned up')
-                except Exception as e:
+                except OSError as e:
                     logger.warning(f'Failed to clean up store: {e}')
 
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, OSError) as e:
                 logger.error(f'Logout failed: {e}')
             finally:
                 await self.client.close()

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from datetime import datetime
+import asyncio
 import json
 import logging
 import os
@@ -87,6 +88,29 @@ class MatrixAPIClient:
         self.access_token = None
         self.device_id = None
         self.authenticated = False
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is not None and not self._session.closed:
+            return self._session
+
+        async with self._session_lock:
+            if self._session is not None and not self._session.closed:
+                return self._session
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                keepalive_timeout=30,
+            )
+            self._session = aiohttp.ClientSession(connector=connector)
+            return self._session
+
+    async def close(self) -> None:
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
 
     async def login(
         self,
@@ -112,25 +136,25 @@ class MatrixAPIClient:
                 "initial_device_display_name": device_name,
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=login_data) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        access_token = result.get("access_token")
-                        device_id = result.get("device_id")
-                        response_user_id = result.get("user_id")
-                        self.access_token = access_token
-                        self.device_id = device_id
-                        self.authenticated = True
-                        return LoginResponse(
-                            success=True,
-                            access_token=access_token,
-                            device_id=device_id,
-                            user_id=response_user_id,
-                            message="Login successful",
-                        )
-                    error_text = await response.text()
-                    return LoginResponse(success=False, message=f"Login failed: {error_text}")
+            session = await self._get_session()
+            async with session.post(url, headers=headers, json=login_data) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    access_token = result.get("access_token")
+                    device_id = result.get("device_id")
+                    response_user_id = result.get("user_id")
+                    self.access_token = access_token
+                    self.device_id = device_id
+                    self.authenticated = True
+                    return LoginResponse(
+                        success=True,
+                        access_token=access_token,
+                        device_id=device_id,
+                        user_id=response_user_id,
+                        message="Login successful",
+                    )
+                error_text = await response.text()
+                return LoginResponse(success=False, message=f"Login failed: {error_text}")
         except Exception as e:
             return LoginResponse(success=False, message=f"Error during login: {str(e)}")
 
@@ -143,13 +167,13 @@ class MatrixAPIClient:
             headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
             message_data = {"msgtype": "m.text", "body": message}
 
-            async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json=message_data) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return SendMessageResponse(success=True, event_id=result.get("event_id"), message="Message sent successfully")
-                    error_text = await response.text()
-                    return SendMessageResponse(success=False, message=f"Failed to send message: {error_text}")
+            session = await self._get_session()
+            async with session.put(url, headers=headers, json=message_data) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return SendMessageResponse(success=True, event_id=result.get("event_id"), message="Message sent successfully")
+                error_text = await response.text()
+                return SendMessageResponse(success=False, message=f"Failed to send message: {error_text}")
         except Exception as e:
             return SendMessageResponse(success=False, message=f"Error sending message: {str(e)}")
 
@@ -159,28 +183,28 @@ class MatrixAPIClient:
             headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
             params = {"dir": "b", "limit": limit, "filter": json.dumps({"types": ["m.room.message"]})}
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, params=params) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        events = result.get("chunk", [])
-                        messages = []
-                        for event in reversed(events):
-                            if event.get("type") == "m.room.message":
-                                content = event.get("content", {})
-                                timestamp = event.get("origin_server_ts", 0)
-                                messages.append(
-                                    MatrixMessage(
-                                        sender=event.get("sender", "unknown"),
-                                        body=content.get("body", ""),
-                                        timestamp=timestamp,
-                                        formatted_time=self.format_timestamp(timestamp),
-                                        event_id=event.get("event_id", ""),
-                                    )
+            session = await self._get_session()
+            async with session.get(url, headers=headers, params=params) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    events = result.get("chunk", [])
+                    messages = []
+                    for event in reversed(events):
+                        if event.get("type") == "m.room.message":
+                            content = event.get("content", {})
+                            timestamp = event.get("origin_server_ts", 0)
+                            messages.append(
+                                MatrixMessage(
+                                    sender=event.get("sender", "unknown"),
+                                    body=content.get("body", ""),
+                                    timestamp=timestamp,
+                                    formatted_time=self.format_timestamp(timestamp),
+                                    event_id=event.get("event_id", ""),
                                 )
-                        return GetMessagesResponse(success=True, messages=messages, message=f"Retrieved {len(messages)} messages")
-                    error_text = await response.text()
-                    return GetMessagesResponse(success=False, message=f"Failed to get messages: {error_text}")
+                            )
+                    return GetMessagesResponse(success=True, messages=messages, message=f"Retrieved {len(messages)} messages")
+                error_text = await response.text()
+                return GetMessagesResponse(success=False, message=f"Failed to get messages: {error_text}")
         except Exception as e:
             return GetMessagesResponse(success=False, message=f"Error getting messages: {str(e)}")
 
@@ -189,32 +213,38 @@ class MatrixAPIClient:
             url = f"{homeserver}/_matrix/client/v3/joined_rooms"
             headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        room_ids = result.get("joined_rooms", [])
-                        rooms = []
-                        for room_id in room_ids:
-                            room_name = await self.get_room_name(homeserver, access_token, room_id)
-                            rooms.append(RoomInfo(room_id=room_id, room_name=room_name))
-                        return ListRoomsResponse(success=True, rooms=rooms, message=f"Found {len(rooms)} rooms")
-                    error_text = await response.text()
-                    return ListRoomsResponse(success=False, message=f"Failed to list rooms: {error_text}")
+            session = await self._get_session()
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    room_ids = result.get("joined_rooms", [])
+                    rooms = []
+                    for room_id in room_ids:
+                        room_name = await self.get_room_name(homeserver, access_token, room_id, session=session)
+                        rooms.append(RoomInfo(room_id=room_id, room_name=room_name))
+                    return ListRoomsResponse(success=True, rooms=rooms, message=f"Found {len(rooms)} rooms")
+                error_text = await response.text()
+                return ListRoomsResponse(success=False, message=f"Failed to list rooms: {error_text}")
         except Exception as e:
             return ListRoomsResponse(success=False, message=f"Error listing rooms: {str(e)}")
 
-    async def get_room_name(self, homeserver: str, access_token: str, room_id: str):
+    async def get_room_name(
+        self,
+        homeserver: str,
+        access_token: str,
+        room_id: str,
+        session: Optional[aiohttp.ClientSession] = None,
+    ):
         try:
             url = f"{homeserver}/_matrix/client/v3/rooms/{room_id}/state/m.room.name"
             headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return result.get("name", room_id)
-                    return room_id
+            active_session = session or await self._get_session()
+            async with active_session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result.get("name", room_id)
+                return room_id
         except Exception:
             return room_id
 
@@ -243,6 +273,9 @@ async def start_identity_token_monitor():
 
 @app.on_event("shutdown")
 async def stop_identity_token_monitor():
+    matrix_api_client = getattr(app.state, "matrix_client", None)
+    if matrix_api_client:
+        await matrix_api_client.close()
     client_pool = getattr(app.state, "identity_client_pool", None)
     if client_pool:
         await client_pool.stop()
@@ -278,23 +311,23 @@ async def auto_join_rooms(request: AutoJoinRequest, x_internal_key: str = Header
 
             check_url = f"{homeserver}/_matrix/client/v3/rooms/{room_id}/joined_members"
             headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-            async with aiohttp.ClientSession() as session:
-                async with session.get(check_url, headers=headers) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if user_id in data.get("joined", {}):
-                            joined_rooms.append({"room_id": room_id, "agent_name": mapping.get("agent_name"), "status": "already_joined"})
-                            continue
+            session = await matrix_client._get_session()
+            async with session.get(check_url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if user_id in data.get("joined", {}):
+                        joined_rooms.append({"room_id": room_id, "agent_name": mapping.get("agent_name"), "status": "already_joined"})
+                        continue
 
-                join_url = f"{homeserver}/_matrix/client/v3/rooms/{room_id}/join"
-                async with session.post(join_url, headers=headers, json={}) as join_response:
-                    if join_response.status == 200:
-                        joined_rooms.append({"room_id": room_id, "agent_name": mapping.get("agent_name"), "status": "joined"})
-                        logger.info(f"Auto-joined {user_id} to room {room_id} for agent {mapping.get('agent_name')}")
-                    else:
-                        error_text = await join_response.text()
-                        failed_rooms.append({"room_id": room_id, "agent_name": mapping.get("agent_name"), "error": error_text})
-                        logger.warning(f"Failed to join {user_id} to room {room_id}: {error_text}")
+            join_url = f"{homeserver}/_matrix/client/v3/rooms/{room_id}/join"
+            async with session.post(join_url, headers=headers, json={}) as join_response:
+                if join_response.status == 200:
+                    joined_rooms.append({"room_id": room_id, "agent_name": mapping.get("agent_name"), "status": "joined"})
+                    logger.info(f"Auto-joined {user_id} to room {room_id} for agent {mapping.get('agent_name')}")
+                else:
+                    error_text = await join_response.text()
+                    failed_rooms.append({"room_id": room_id, "agent_name": mapping.get("agent_name"), "error": error_text})
+                    logger.warning(f"Failed to join {user_id} to room {room_id}: {error_text}")
 
         return {
             "success": True,

@@ -1,4 +1,5 @@
 import asyncio
+from collections import OrderedDict
 import functools
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -15,11 +16,12 @@ if TYPE_CHECKING:
 
 try:
     from src.matrix.file_download import FileUploadError, FileMetadata  # type: ignore[assignment,no-redef]
-except Exception:
+except ImportError:
     pass
 
 
 _executor = ThreadPoolExecutor(max_workers=4)
+_executor_semaphore = asyncio.Semaphore(4)
 
 
 class LettaSourceManager:
@@ -39,13 +41,40 @@ class LettaSourceManager:
         self._source_cache: Dict[str, str] = {}
         self._cache_lock = asyncio.Lock()
         self._room_locks: Dict[str, asyncio.Lock] = {}
+        self._room_lock_lru: "OrderedDict[str, None]" = OrderedDict()
+        self._room_lock_max = int(config_defaults.get("room_lock_cache_max", 1024))
+
+    def _prune_room_locks_unlocked(self, exclude_room_id: Optional[str] = None) -> None:
+        if len(self._room_locks) <= self._room_lock_max:
+            return
+
+        attempts = len(self._room_lock_lru)
+        while len(self._room_locks) > self._room_lock_max and attempts > 0:
+            oldest_room_id, _ = self._room_lock_lru.popitem(last=False)
+            attempts -= 1
+
+            if oldest_room_id == exclude_room_id:
+                self._room_lock_lru[oldest_room_id] = None
+                continue
+
+            lock = self._room_locks.get(oldest_room_id)
+            if lock is None:
+                continue
+
+            if lock.locked():
+                self._room_lock_lru[oldest_room_id] = None
+                continue
+
+            del self._room_locks[oldest_room_id]
+            self.logger.debug("Evicted idle room lock for %s", oldest_room_id)
 
     async def _run_sync(self, func, *args, **kwargs):
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            _executor,
-            functools.partial(func, *args, **kwargs),
-        )
+        async with _executor_semaphore:
+            return await loop.run_in_executor(
+                _executor,
+                functools.partial(func, *args, **kwargs),
+            )
 
     def get_embedding_config(self, agent_id: Optional[str] = None) -> dict:
         if agent_id:
@@ -65,7 +94,7 @@ class LettaSourceManager:
                         f"Using agent's embedding config: model={config['embedding_model']}, dim={config['embedding_dim']}"
                     )
                     return config
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, OSError) as e:
                 self.logger.warning(f"Failed to fetch agent embedding config: {e}")
 
         config = {
@@ -85,6 +114,10 @@ class LettaSourceManager:
             if room_id not in self._room_locks:
                 self._room_locks[room_id] = asyncio.Lock()
             room_lock = self._room_locks[room_id]
+            if room_id in self._room_lock_lru:
+                self._room_lock_lru.pop(room_id)
+            self._room_lock_lru[room_id] = None
+            self._prune_room_locks_unlocked(exclude_room_id=room_id)
 
         async with room_lock:
             # Re-check cache under room lock
@@ -105,7 +138,7 @@ class LettaSourceManager:
                         folder_id = folders[0].id
                         self.logger.info(f"Found existing folder by name: {folder_id}")
                         return folder_id
-                except Exception as e:
+                except (RuntimeError, ValueError, TypeError, OSError) as e:
                     self.logger.debug(f"Folder not found by name: {e}")
 
                 self.logger.info(f"Creating new folder: {folder_name}")
@@ -118,7 +151,7 @@ class LettaSourceManager:
                     )
                     self.logger.info(f"Created new folder {folder_name}: {folder.id}")
                     return folder.id
-                except Exception as e:
+                except (RuntimeError, ValueError, TypeError, OSError) as e:
                     error_str = str(e)
                     if "409" in error_str or "already exists" in error_str.lower() or "unique" in error_str.lower():
                         self.logger.info(f"Folder {folder_name} already exists (conflict), fetching...")
@@ -132,7 +165,7 @@ class LettaSourceManager:
                                 folder_id = folders[0].id
                                 self.logger.info(f"Found folder after conflict: {folder_id}")
                                 return folder_id
-                        except Exception as e2:
+                        except (RuntimeError, ValueError, TypeError, OSError) as e2:
                             self.logger.error(f"Failed to get folder after 409: {e2}")
                     raise FileUploadError(f"Failed to create folder: {e}")
 
@@ -166,13 +199,16 @@ class LettaSourceManager:
             )
             self.logger.info(f"Attached folder {source_id} to agent {agent_id}")
 
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, OSError) as e:
             self.logger.warning(f"Failed to attach folder to agent: {e}")
 
     async def upload_to_letta(self, file_path: str, source_id: str, metadata: Any) -> str:
         async def _do_upload() -> str:
-            with open(file_path, "rb") as f:
-                file_content = f.read()
+            def _read_file_bytes(path: str) -> bytes:
+                with open(path, "rb") as f:
+                    return f.read()
+
+            file_content = await asyncio.to_thread(_read_file_bytes, file_path)
 
             result = await self._run_sync(
                 self.letta_client.folders.files.upload,
@@ -240,7 +276,7 @@ class LettaSourceManager:
                 await asyncio.sleep(interval)
                 elapsed += interval
 
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, OSError) as e:
                 consecutive_errors += 1
                 if consecutive_errors >= max_consecutive_errors:
                     self.logger.error(f"Error polling file status after {max_consecutive_errors} attempts: {e}")
@@ -286,5 +322,5 @@ class LettaSourceManager:
             )
             self.logger.info(f"Auto-attached search_documents tool to agent {agent_id}")
 
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, OSError) as e:
             self.logger.warning(f"Failed to auto-attach search_documents to agent {agent_id}: {e}")

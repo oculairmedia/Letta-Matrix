@@ -17,9 +17,15 @@ from codecs import BOM_UTF16_BE, BOM_UTF16_LE, BOM_UTF32_BE, BOM_UTF32_LE, BOM_U
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Any
+
+from src.core.retry import retry_async
 
 logger = logging.getLogger("matrix_client.document_parser")
+
+
+class DocumentParseRetryError(Exception):
+    pass
 
 
 @dataclass
@@ -126,14 +132,14 @@ def _get_process_pool(recreate: bool = False) -> ProcessPoolExecutor:
     if recreate or is_broken:
         try:
             _process_pool.shutdown(wait=False, cancel_futures=True)
-        except Exception:
-            pass
+        except (RuntimeError, OSError) as pool_shutdown_error:
+            logger.debug("Process pool shutdown during recreate failed: %s", pool_shutdown_error)
         _process_pool = ProcessPoolExecutor(max_workers=4)
     return _process_pool
 
 # Cached MarkItDown instance per worker process (avoids re-init per file).
 # MarkItDown() constructor initializes magika + requests.Session — reuse is safe.
-_md_instance: Optional["MarkItDown"] = None
+_md_instance: Optional[Any] = None
 
 def _convert_with_markitdown(file_path: str) -> tuple[str, Optional[int], Optional[str]]:
     """
@@ -152,7 +158,11 @@ def _convert_with_markitdown(file_path: str) -> tuple[str, Optional[int], Option
             from markitdown import MarkItDown
             _md_instance = MarkItDown()
 
-        result = _md_instance.convert(file_path)
+        md_instance = _md_instance
+        if md_instance is None:
+            raise RuntimeError("MarkItDown initialization failed")
+
+        result = md_instance.convert(file_path)
         text = (result.text_content or "").strip()
 
         # Try to get page count for PDFs
@@ -163,11 +173,11 @@ def _convert_with_markitdown(file_path: str) -> tuple[str, Optional[int], Option
                 doc = fitz.open(file_path)
                 page_count = len(doc)
                 doc.close()
-            except Exception:
-                pass
+            except (ImportError, RuntimeError, ValueError, OSError) as pdf_meta_error:
+                logger.debug("Failed to compute PDF page count for %s: %s", file_path, pdf_meta_error)
 
         return text, page_count, None
-    except Exception as e:
+    except (ImportError, RuntimeError, ValueError, TypeError, OSError) as e:
         return "", None, f"{type(e).__name__}: {e}"
 
 def _extract_pdf_with_fitz(file_path: str) -> tuple[str, Optional[int], Optional[str]]:
@@ -186,7 +196,7 @@ def _extract_pdf_with_fitz(file_path: str) -> tuple[str, Optional[int], Optional
 
         text = "\n".join(page_texts).strip()
         return text, page_count, None
-    except Exception as e:
+    except (ImportError, RuntimeError, ValueError, TypeError, OSError, AssertionError) as e:
         return "", None, f"{type(e).__name__}: {e}"
 
 
@@ -246,8 +256,8 @@ def _ocr_pdf_pages(file_path: str, dpi: int = 200) -> str:
     """
     try:
         import fitz
-        import pytesseract
         from PIL import Image
+        pytesseract = __import__("pytesseract")
     except ImportError as e:
         logger.warning(f"OCR dependencies not available: {e}")
         return ""
@@ -268,7 +278,7 @@ def _ocr_pdf_pages(file_path: str, dpi: int = 200) -> str:
                 texts.append(f"--- Page {page_num + 1} ---\n{page_text.strip()}")
 
         doc.close()
-    except Exception as e:
+    except (RuntimeError, ValueError, TypeError, OSError) as e:
         logger.error(f"OCR processing failed: {e}", exc_info=True)
         return ""
 
@@ -386,35 +396,26 @@ async def parse_document(
 
     # Run MarkItDown conversion in a process pool with timeout + retry
     loop = asyncio.get_event_loop()
-    max_retries = 3
+    max_attempts = 3
     last_error = None
 
     should_run_markitdown = (not is_pdf) or _is_text_low_quality(text, page_count)
     if should_run_markitdown:
-        for attempt in range(max_retries):
+        async def _run_markitdown_once() -> tuple[str, Optional[int]]:
             try:
-                text, page_count, conv_error = await asyncio.wait_for(
+                parsed_text, parsed_page_count, conv_error = await asyncio.wait_for(
                     loop.run_in_executor(_get_process_pool(), _convert_with_markitdown, file_path),
                     timeout=config.timeout_seconds,
                 )
                 if conv_error:
-                    # Exception occurred inside the worker process
-                    last_error = f"Conversion failed: {conv_error}"
-                    logger.warning(
-                        f"Document parsing attempt {attempt + 1}/{max_retries} failed for {filename}: {conv_error}"
-                    )
-
                     if _should_attempt_text_decode_fallback(filename, conv_error):
                         fallback_text, fallback_error = _decode_text_file_with_fallbacks(file_path)
                         fallback_text = (fallback_text or "").strip()
                         if fallback_text:
-                            text = fallback_text
-                            page_count = None
-                            last_error = None
                             logger.info(
-                                f"Direct text decode fallback succeeded for {filename} ({len(text)} chars)"
+                                f"Direct text decode fallback succeeded for {filename} ({len(fallback_text)} chars)"
                             )
-                            break
+                            return fallback_text, None
                         if fallback_error:
                             logger.warning(
                                 f"Direct text decode fallback failed for {filename}: {fallback_error}"
@@ -422,31 +423,32 @@ async def parse_document(
 
                     if "not usable anymore" in conv_error.lower():
                         _get_process_pool(recreate=True)
+                    raise DocumentParseRetryError(f"Conversion failed: {conv_error}")
                 else:
-                    break  # Success
+                    return parsed_text, parsed_page_count
             except asyncio.TimeoutError:
-                last_error = f"Parsing timed out after {config.timeout_seconds}s"
-                logger.warning(f"Document parsing attempt {attempt + 1}/{max_retries} timed out for {filename}")
+                raise DocumentParseRetryError(f"Parsing timed out after {config.timeout_seconds}s")
             except BrokenProcessPool as e:
-                last_error = f"Conversion failed: {e}"
-                logger.warning(
-                    f"Document parsing attempt {attempt + 1}/{max_retries} hit BrokenProcessPool for {filename}: {e}"
-                )
                 _get_process_pool(recreate=True)
-            except Exception as e:
-                last_error = f"Conversion failed: {e}"
-                logger.warning(f"Document parsing attempt {attempt + 1}/{max_retries} failed for {filename}: {e}")
+                raise DocumentParseRetryError(f"Conversion failed: {e}") from e
+            except (RuntimeError, ValueError, TypeError, OSError, AssertionError) as e:
                 if "not usable anymore" in str(e).lower():
                     _get_process_pool(recreate=True)
+                raise DocumentParseRetryError(f"Conversion failed: {e}") from e
 
-            if attempt < max_retries - 1:
-                delay = 1.0 * (2 ** attempt)  # 1s, 2s backoff
-                logger.info(f"Retrying document parsing in {delay}s...")
-                await asyncio.sleep(delay)
-        else:
+        try:
+            text, page_count = await retry_async(
+                _run_markitdown_once,
+                max_attempts=max_attempts,
+                base_delay=1.0,
+                operation_name=f"Document parsing for {filename}",
+                logger=logger,
+                retryable_exceptions=(DocumentParseRetryError,),
+            )
+        except DocumentParseRetryError as e:
+            last_error = str(e)
             if not text:
-                # All retries exhausted and no fallback text available
-                logger.error(f"Document parsing failed after {max_retries} attempts for {filename}: {last_error}")
+                logger.error(f"Document parsing failed after {max_attempts} attempts for {filename}: {last_error}")
                 return DocumentParseResult(
                     text="", filename=filename,
                     error=last_error or "Parsing failed after retries",
@@ -473,7 +475,7 @@ async def parse_document(
                 logger.warning(f"OCR fallback returned no text for {filename}")
         except asyncio.TimeoutError:
             logger.warning(f"OCR fallback timed out for {filename}")
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, OSError, AssertionError) as e:
             logger.warning(f"OCR fallback failed for {filename}: {e}")
 
     if not text:

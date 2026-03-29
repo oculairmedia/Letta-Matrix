@@ -486,20 +486,26 @@ class FileProcessingWorkflow:
                 f"{caption_note}"
             )
 
-            notify_result = await workflow.execute_activity(
-                notify_letta_agent,
-                NotifyAgentInput(
-                    agent_id=input.agent_id,
-                    message=agent_msg,
-                    room_id=input.room_id,
-                    conversation_id=input.conversation_id or "",
-                ),
-                start_to_close_timeout=timedelta(seconds=60),
-                retry_policy=_NOTIFY_RETRY,
-            )
-            result.notify_ms = notify_result.duration_ms
+            notify_result: Optional[NotifyAgentResult] = None
+            try:
+                notify_result = await workflow.execute_activity(
+                    notify_letta_agent,
+                    NotifyAgentInput(
+                        agent_id=input.agent_id,
+                        message=agent_msg,
+                        room_id=input.room_id,
+                        conversation_id=input.conversation_id or "",
+                    ),
+                    start_to_close_timeout=timedelta(seconds=60),
+                    retry_policy=_NOTIFY_RETRY,
+                )
+                result.notify_ms = notify_result.duration_ms
+            except Exception as notify_err:
+                workflow.logger.warning(
+                    f"Post-index notify failed for {input.file_name}; continuing workflow: {notify_err}"
+                )
 
-            if notify_result.response_text:
+            if notify_result and notify_result.response_text:
                 try:
                     await workflow.execute_activity(
                         update_matrix_status,

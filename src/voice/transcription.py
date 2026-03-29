@@ -1,4 +1,5 @@
 import io
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -15,6 +16,26 @@ _DEFAULT_WHISPER_MODEL = "Systran/faster-whisper-medium"
 _DEFAULT_WHISPER_URL = "http://whisper:8000/v1"
 _DEFAULT_MISTRAL_MODEL = "voxtral-mini-latest"
 _MISTRAL_TRANSCRIPTION_URL = "https://api.mistral.ai/v1/audio/transcriptions"
+_transcription_session: Optional[aiohttp.ClientSession] = None
+_transcription_session_lock = asyncio.Lock()
+
+
+async def _get_transcription_session() -> aiohttp.ClientSession:
+    global _transcription_session
+    if _transcription_session is not None and not _transcription_session.closed:
+        return _transcription_session
+
+    async with _transcription_session_lock:
+        if _transcription_session is not None and not _transcription_session.closed:
+            return _transcription_session
+        connector = aiohttp.TCPConnector(
+            limit=20,
+            limit_per_host=10,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        _transcription_session = aiohttp.ClientSession(connector=connector)
+        return _transcription_session
 
 
 @dataclass
@@ -130,25 +151,25 @@ async def _transcribe_with_mistral(audio_data: bytes, filename: str) -> Transcri
     )
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(_MISTRAL_TRANSCRIPTION_URL, headers=headers, data=form) as response:
-                if response.status >= 400:
-                    error_text = await response.text()
-                    logger.error(
-                        "Mistral transcription failed with status %s: %s",
-                        response.status,
-                        error_text,
-                    )
-                    return TranscriptionResult(
-                        text="",
-                        error=f"Mistral API error ({response.status}): {error_text}",
-                    )
+        session = await _get_transcription_session()
+        async with session.post(_MISTRAL_TRANSCRIPTION_URL, headers=headers, data=form) as response:
+            if response.status >= 400:
+                error_text = await response.text()
+                logger.error(
+                    "Mistral transcription failed with status %s: %s",
+                    response.status,
+                    error_text,
+                )
+                return TranscriptionResult(
+                    text="",
+                    error=f"Mistral API error ({response.status}): {error_text}",
+                )
 
-                payload = await response.json()
-                text = payload.get("text", "")
-                if not text:
-                    logger.warning("Mistral transcription returned empty text")
-                return TranscriptionResult(text=text)
+            payload = await response.json()
+            text = payload.get("text", "")
+            if not text:
+                logger.warning("Mistral transcription returned empty text")
+            return TranscriptionResult(text=text)
     except Exception as exc:
         logger.error("Mistral transcription request failed", exc_info=True)
         return TranscriptionResult(text="", error=str(exc))

@@ -393,6 +393,112 @@ class TestListRoomsEndpoint:
         assert data["success"] is True
 
 
+@pytest.mark.unit
+class TestRecentMessagesEndpoint:
+    def test_recent_messages_uses_caller_limit_per_room(self, client):
+        matrix_client = Mock()
+
+        matrix_client.list_rooms = AsyncMock(
+            return_value=ListRoomsResponse(
+                success=True,
+                rooms=[
+                    RoomInfo(room_id="!room1:matrix.test", room_name="Room 1"),
+                    RoomInfo(room_id="!room2:matrix.test", room_name="Room 2"),
+                ],
+                message="ok",
+            )
+        )
+
+        room1_messages = GetMessagesResponse(
+            success=True,
+            messages=[
+                MatrixMessage(
+                    sender="@alice:matrix.test",
+                    body="room1",
+                    timestamp=100,
+                    formatted_time="t1",
+                    event_id="$r1",
+                )
+            ],
+            message="ok",
+        )
+        room2_messages = GetMessagesResponse(
+            success=True,
+            messages=[
+                MatrixMessage(
+                    sender="@bob:matrix.test",
+                    body="room2",
+                    timestamp=200,
+                    formatted_time="t2",
+                    event_id="$r2",
+                )
+            ],
+            message="ok",
+        )
+        matrix_client.get_messages = AsyncMock(side_effect=[room1_messages, room2_messages])
+
+        original_client = app.state.matrix_client
+        app.state.matrix_client = matrix_client
+        try:
+            response = client.get(
+                "/messages/recent?homeserver=http://test:8008&limit=3",
+                headers={"X-Access-Token": "token123"},
+            )
+        finally:
+            app.state.matrix_client = original_client
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+
+        assert matrix_client.get_messages.await_count == 2
+        matrix_client.get_messages.assert_any_await(
+            "http://test:8008",
+            "token123",
+            "!room1:matrix.test",
+            limit=3,
+        )
+        matrix_client.get_messages.assert_any_await(
+            "http://test:8008",
+            "token123",
+            "!room2:matrix.test",
+            limit=3,
+        )
+
+    def test_recent_messages_uses_safe_default_when_limit_non_positive(self, client):
+        matrix_client = Mock()
+        matrix_client.list_rooms = AsyncMock(
+            return_value=ListRoomsResponse(
+                success=True,
+                rooms=[RoomInfo(room_id="!room1:matrix.test", room_name="Room 1")],
+                message="ok",
+            )
+        )
+        matrix_client.get_messages = AsyncMock(
+            return_value=GetMessagesResponse(success=True, messages=[], message="ok")
+        )
+
+        original_client = app.state.matrix_client
+        app.state.matrix_client = matrix_client
+        try:
+            response = client.get(
+                "/messages/recent?homeserver=http://test:8008&limit=0",
+                headers={"X-Access-Token": "token123"},
+            )
+        finally:
+            app.state.matrix_client = original_client
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        matrix_client.get_messages.assert_awaited_once_with(
+            "http://test:8008",
+            "token123",
+            "!room1:matrix.test",
+            limit=50,
+        )
+
+
 # ============================================================================
 # Webhook Endpoint Tests
 # ============================================================================

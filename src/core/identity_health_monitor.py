@@ -63,6 +63,28 @@ class IdentityTokenHealthMonitor:
 
         self._stop_event = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
+        self._http_session: Optional[aiohttp.ClientSession] = None
+        self._http_session_lock = asyncio.Lock()
+
+    async def _get_http_session(self) -> aiohttp.ClientSession:
+        if self._http_session is not None and not self._http_session.closed:
+            return self._http_session
+
+        async with self._http_session_lock:
+            if self._http_session is not None and not self._http_session.closed:
+                return self._http_session
+            timeout = aiohttp.ClientTimeout(total=10)
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                keepalive_timeout=30,
+            )
+            self._http_session = aiohttp.ClientSession(
+                timeout=timeout,
+                connector=connector,
+            )
+            return self._http_session
 
     async def start(self) -> None:
         if self._task and not self._task.done():
@@ -80,6 +102,9 @@ class IdentityTokenHealthMonitor:
         self._stop_event.set()
         await self._task
         self._task = None
+        if self._http_session is not None and not self._http_session.closed:
+            await self._http_session.close()
+        self._http_session = None
         logger.info("Stopped identity token health monitor")
 
     async def _run_loop(self) -> None:
@@ -208,9 +233,8 @@ class IdentityTokenHealthMonitor:
         headers = {"Authorization": f"Bearer {identity.access_token}"}
         url = f"{self.homeserver_url}/_matrix/client/v3/account/whoami"
 
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers) as response:
+        session = await self._get_http_session()
+        async with session.get(url, headers=headers) as response:
                 if response.status != 200:
                     if response.status in (401, 403):
                         try:
@@ -265,9 +289,8 @@ class IdentityTokenHealthMonitor:
             "password": password,
         }
 
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload) as response:
+        session = await self._get_http_session()
+        async with session.post(url, json=payload) as response:
                 if response.status != 200:
                     return None
                 data = await response.json()
@@ -303,9 +326,8 @@ class IdentityTokenHealthMonitor:
             "Content-Type": "application/json",
         }
 
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.put(
+        session = await self._get_http_session()
+        async with session.put(
                 url,
                 headers=headers,
                 json={"msgtype": "m.text", "body": command},

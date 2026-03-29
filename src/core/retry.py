@@ -6,6 +6,7 @@ Handles transient errors like CONVERSATION_BUSY (409) with exponential backoff.
 
 import asyncio
 import logging
+import time
 from typing import TypeVar, Callable, Awaitable, Any, Optional
 
 try:
@@ -22,25 +23,73 @@ async def retry_async(
     func: Callable[[], Awaitable[Any]],
     max_attempts: int = 3,
     base_delay: float = 1.0,
+    max_delay: Optional[float] = None,
     operation_name: str = "operation",
     logger: Optional[logging.Logger] = None,
-    retryable_exceptions: tuple = (Exception,),
+    retryable_exceptions: tuple[type[BaseException], ...] = (
+        ConnectionError,
+        TimeoutError,
+        asyncio.TimeoutError,
+    ),
+    should_retry: Optional[Callable[[BaseException], bool]] = None,
 ) -> Any:
     log = logger or logging.getLogger("matrix_client.retry")
-    last_exception: Optional[Exception] = None
+    last_exception: Optional[BaseException] = None
 
     for attempt in range(max_attempts):
         try:
             return await func()
         except retryable_exceptions as e:
+            if should_retry is not None and not should_retry(e):
+                raise
             last_exception = e
             if attempt < max_attempts - 1:
                 delay = base_delay * (2 ** attempt)
+                if max_delay is not None:
+                    delay = min(delay, max_delay)
                 log.warning(
                     f"{operation_name} failed (attempt {attempt + 1}/{max_attempts}), "
                     f"retrying in {delay}s: {e}"
                 )
                 await asyncio.sleep(delay)
+            else:
+                log.error(f"{operation_name} failed after {max_attempts} attempts: {e}")
+
+    if last_exception is not None:
+        raise last_exception
+
+    raise RuntimeError(f"{operation_name} failed with no exception")
+
+
+def retry_sync(
+    func: Callable[[], T],
+    max_attempts: int = 3,
+    base_delay: float = 1.0,
+    max_delay: Optional[float] = None,
+    operation_name: str = "operation",
+    logger: Optional[logging.Logger] = None,
+    retryable_exceptions: tuple[type[BaseException], ...] = (Exception,),
+    should_retry: Optional[Callable[[BaseException], bool]] = None,
+) -> T:
+    log = logger or logging.getLogger("matrix_client.retry")
+    last_exception: Optional[BaseException] = None
+
+    for attempt in range(max_attempts):
+        try:
+            return func()
+        except retryable_exceptions as e:
+            if should_retry is not None and not should_retry(e):
+                raise
+            last_exception = e
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                if max_delay is not None:
+                    delay = min(delay, max_delay)
+                log.warning(
+                    f"{operation_name} failed (attempt {attempt + 1}/{max_attempts}), "
+                    f"retrying in {delay}s: {e}"
+                )
+                time.sleep(delay)
             else:
                 log.error(f"{operation_name} failed after {max_attempts} attempts: {e}")
 

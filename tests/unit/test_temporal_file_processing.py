@@ -283,7 +283,7 @@ class TestStartTemporalWorkflow:
         handler = _make_file_handler(temporal_enabled=True)
 
         mock_client = AsyncMock()
-        mock_client.start_workflow = AsyncMock(side_effect=Exception("Connection refused"))
+        mock_client.start_workflow = AsyncMock(side_effect=RuntimeError("Connection refused"))
         handler._temporal_client = mock_client
         handler.ensure_search_tool_attached = AsyncMock()
 
@@ -309,7 +309,7 @@ class TestStartTemporalWorkflow:
         mock_handle.id = "wf-1"
         mock_client.start_workflow = AsyncMock(return_value=mock_handle)
         handler._temporal_client = mock_client
-        handler.ensure_search_tool_attached = AsyncMock(side_effect=Exception("Letta down"))
+        handler.ensure_search_tool_attached = AsyncMock(side_effect=RuntimeError("Letta down"))
 
         result = await handler._start_temporal_workflow(
             file_metadata,

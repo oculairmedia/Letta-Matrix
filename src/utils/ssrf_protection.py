@@ -1,7 +1,12 @@
 import ipaddress
 import logging
 import socket
+from dataclasses import dataclass
+from typing import List, cast
 from urllib.parse import urlparse
+
+import aiohttp
+from aiohttp.abc import AbstractResolver
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +20,42 @@ class SSRFError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class _ResolvedAddress:
+    family: int
+    proto: int
+    flags: int
+    host: str
+
+
+class PinnedResolver(AbstractResolver):
+    def __init__(self, addresses: List[_ResolvedAddress]):
+        self._addresses = tuple(addresses)
+
+    async def resolve(self, host: str, port: int = 0, family: int = socket.AF_UNSPEC):
+        candidates = [
+            addr
+            for addr in self._addresses
+            if family in (socket.AF_UNSPEC, addr.family)
+        ]
+        if not candidates:
+            candidates = list(self._addresses)
+        return [
+            {
+                "hostname": host,
+                "host": addr.host,
+                "port": port,
+                "family": addr.family,
+                "proto": addr.proto,
+                "flags": addr.flags,
+            }
+            for addr in candidates
+        ]
+
+    async def close(self) -> None:
+        return None
+
+
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return (
         ip.is_private
@@ -26,21 +67,7 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
-def validate_url(url: str) -> str:
-    """Validate a URL is safe for outbound requests (not targeting internal networks).
-
-    Resolves the hostname via DNS, then checks all returned IPs against
-    RFC 1918 / RFC 3927 / loopback / link-local / reserved / multicast ranges.
-
-    Args:
-        url: The URL to validate.
-
-    Returns:
-        The validated URL (unchanged).
-
-    Raises:
-        SSRFError: If the URL targets a private/internal IP or a blocked hostname.
-    """
+def _validate_and_resolve(url: str) -> tuple[str, str, list[_ResolvedAddress]]:
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
 
@@ -58,7 +85,7 @@ def validate_url(url: str) -> str:
         ip = ipaddress.ip_address(hostname)
         if _is_blocked_ip(ip):
             raise SSRFError(f"Blocked IP: {hostname} is a private/reserved address")
-        return url
+        return url, hostname, []
     except ValueError:
         pass
 
@@ -70,15 +97,61 @@ def validate_url(url: str) -> str:
     if not infos:
         raise SSRFError(f"No DNS results for {hostname}")
 
-    for info in infos:
-        ip_str = info[4][0]
+    resolved: list[_ResolvedAddress] = []
+    for family, _socktype, proto, _canonname, sockaddr in infos:
+        ip_str = sockaddr[0]
+        if not isinstance(ip_str, str):
+            continue
+        ip_text = cast(str, ip_str)
         try:
-            ip = ipaddress.ip_address(ip_str)
+            ip = ipaddress.ip_address(ip_text)
         except ValueError:
             continue
         if _is_blocked_ip(ip):
             raise SSRFError(
-                f"Blocked: {hostname} resolves to private/reserved IP {ip_str}"
+                f"Blocked: {hostname} resolves to private/reserved IP {ip_text}"
             )
+        resolved.append(
+            _ResolvedAddress(
+                family=family,
+                proto=proto or socket.IPPROTO_TCP,
+                flags=0,
+                host=ip_text,
+            )
+        )
 
+    if not resolved:
+        raise SSRFError(f"No valid DNS results for {hostname}")
+
+    return url, hostname, resolved
+
+
+def validate_url(url: str) -> str:
+    """Validate a URL is safe for outbound requests (not targeting internal networks).
+
+    Resolves the hostname via DNS, then checks all returned IPs against
+    RFC 1918 / RFC 3927 / loopback / link-local / reserved / multicast ranges.
+
+    Args:
+        url: The URL to validate.
+
+    Returns:
+        The validated URL (unchanged).
+
+    Raises:
+        SSRFError: If the URL targets a private/internal IP or a blocked hostname.
+    """
+    _validate_and_resolve(url)
     return url
+
+
+def build_pinned_connector(url: str) -> tuple[str, aiohttp.TCPConnector]:
+    validated_url, _hostname, addresses = _validate_and_resolve(url)
+    if not addresses:
+        return validated_url, aiohttp.TCPConnector(use_dns_cache=False, ttl_dns_cache=0)
+    resolver = PinnedResolver(addresses)
+    return validated_url, aiohttp.TCPConnector(
+        resolver=resolver,
+        use_dns_cache=False,
+        ttl_dns_cache=0,
+    )

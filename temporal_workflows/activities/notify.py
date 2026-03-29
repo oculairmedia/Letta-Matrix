@@ -14,7 +14,7 @@ from .common import MatrixAPIError, NotifyError
 
 MATRIX_API_URL = os.getenv("MATRIX_API_URL", "http://matrix-api:8000")
 LETTA_GATEWAY_URL = os.getenv(
-    "LETTA_GATEWAY_URL", "ws://192.168.50.90:8407/api/v1/agent-gateway"
+    "LETTA_GATEWAY_URL", ""
 )
 LETTA_GATEWAY_API_KEY = os.getenv("LETTA_GATEWAY_API_KEY", "")
 
@@ -58,6 +58,10 @@ async def notify_letta_agent(input: NotifyAgentInput) -> NotifyAgentResult:
     mode = "fire-and-forget" if not input.wait_for_result else "wait-for-result"
     activity.logger.info(f"Notifying agent {input.agent_id} via WS gateway ({mode})")
 
+    gateway_url = (LETTA_GATEWAY_URL or "").strip()
+    if not gateway_url:
+        raise NotifyError("LETTA_GATEWAY_URL is not configured")
+
     extra_headers = {}
     if LETTA_GATEWAY_API_KEY:
         extra_headers["X-Api-Key"] = LETTA_GATEWAY_API_KEY
@@ -65,7 +69,7 @@ async def notify_letta_agent(input: NotifyAgentInput) -> NotifyAgentResult:
     ws = None
     try:
         ws = await websockets.connect(
-            LETTA_GATEWAY_URL,
+            gateway_url,
             additional_headers=extra_headers,
             max_size=2**22,
             close_timeout=5,

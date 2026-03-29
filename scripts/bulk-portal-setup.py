@@ -123,6 +123,16 @@ def api_put(endpoint: str, body: dict) -> dict:
     return r.json()
 
 
+def api_patch(endpoint: str, body: dict) -> dict:
+    r = requests.patch(
+        f"{API_SERVER}{endpoint}",
+        headers={"Content-Type": "application/json"},
+        json=body,
+        timeout=30,
+    )
+    return r.json()
+
+
 def get_meridian_token() -> str:
     """Log in as Meridian and return access token."""
     resp = matrix_post("/_matrix/client/v3/login", {
@@ -145,7 +155,9 @@ def ensure_meridian_mapping() -> bool:
         "room_created": False,
     }
     resp = api_put(f"/agents/{MERIDIAN_AGENT_ID}/mapping", payload)
-    return bool(resp.get("success"))
+    if not resp.get("success"):
+        raise RuntimeError(f"Failed to upsert Meridian mapping: {resp}")
+    return True
 
 
 # ─── Phase 1: Discover portal rooms ─────────────────────────────
@@ -221,11 +233,41 @@ def classify_rooms(rooms: list[str]) -> dict[str, list[tuple[str, str]]]:
 
 # ─── Phase 2: Setup portal links ────────────────────────────────
 
-def get_existing_portal_links() -> set[str]:
-    """Get room IDs that already have portal links."""
+def get_existing_portal_links() -> list[dict]:
     resp = api_get(f"/agents/portal-links")
     links = resp.get("links", [])
-    return {link["room_id"] for link in links}
+    return links
+
+
+def backfill_relay_mode(existing_links: list[dict], dry_run: bool = False) -> tuple[int, int]:
+    updated = 0
+    failed = 0
+    for link in existing_links:
+        room_id = link.get("room_id")
+        if not room_id:
+            continue
+
+        if link.get("relay_mode") is not None:
+            continue
+
+        if dry_run:
+            print(f"  → [DRY RUN] Would set relay_mode=True for existing link {room_id}")
+            updated += 1
+            continue
+
+        encoded_room_id = encode_room_id(room_id)
+        resp = api_patch(
+            f"/agents/{MERIDIAN_AGENT_ID}/portal-links/{encoded_room_id}",
+            {"relay_mode": True},
+        )
+        if resp.get("success"):
+            print(f"  ✓ Backfilled relay_mode for {room_id}")
+            updated += 1
+        else:
+            print(f"  ⚠ Failed relay_mode backfill for {room_id}: {resp}")
+            failed += 1
+
+    return updated, failed
 
 
 def setup_room(
@@ -364,13 +406,18 @@ def main():
     # Phase 2: Check existing links
     print("\nPhase 2: Checking existing portal links...")
     existing_links = get_existing_portal_links()
+    existing_link_room_ids = {link["room_id"] for link in existing_links if "room_id" in link}
     print(f"  Found {len(existing_links)} existing portal links")
+
+    backfilled, backfill_failed = backfill_relay_mode(existing_links, dry_run=args.dry_run)
+    if backfilled > 0 or backfill_failed > 0:
+        print(f"  Relay mode backfill: {backfilled} updated, {backfill_failed} failed")
     
     # Filter out rooms that already have links
     to_setup = {}
     already_linked = 0
     for bridge, rooms in classified.items():
-        new_rooms = [(rid, rname) for rid, rname in rooms if rid not in existing_links]
+        new_rooms = [(rid, rname) for rid, rname in rooms if rid not in existing_link_room_ids]
         already = len(rooms) - len(new_rooms)
         already_linked += already
         if already > 0:
@@ -393,10 +440,13 @@ def main():
         print("  Logging in as Meridian...")
         meridian_token = get_meridian_token()
         print("  ✓ Logged in")
-        if ensure_meridian_mapping():
+        try:
+            ensure_meridian_mapping()
             print("  ✓ Meridian mapping upserted")
-        else:
-            print("  ⚠ Meridian mapping upsert failed; portal link creation may fail")
+        except RuntimeError as e:
+            print(f"  ✗ {e}")
+            print("  Aborting portal setup due to missing Meridian mapping")
+            sys.exit(1)
     else:
         meridian_token = "DRY_RUN"
     

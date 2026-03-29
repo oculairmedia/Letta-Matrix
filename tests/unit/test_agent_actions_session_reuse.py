@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.matrix.agent_actions import (
+    _build_edit_content,
+    _build_message_content,
     delete_message_as_agent,
     edit_message_as_agent,
     send_as_agent,
@@ -218,3 +220,21 @@ async def test_send_read_receipt_as_agent_uses_provided_session(
     assert token_await_args.args[3] is session
     session.post.assert_called_once()
     mock_client_session.assert_not_called()
+
+
+def test_build_message_content_does_not_swallow_keyboard_interrupt() -> None:
+    with patch(
+        "src.matrix.agent_actions.extract_and_convert_pills",
+        side_effect=KeyboardInterrupt,
+    ):
+        with pytest.raises(KeyboardInterrupt):
+            _build_message_content("hi @Meridian")
+
+
+def test_build_edit_content_does_not_swallow_keyboard_interrupt() -> None:
+    with patch(
+        "src.matrix.agent_actions.extract_and_convert_pills",
+        side_effect=KeyboardInterrupt,
+    ):
+        with pytest.raises(KeyboardInterrupt):
+            _build_edit_content("$evt", "hi @Meridian")

@@ -9,12 +9,14 @@ Command syntax:
     /poll-close $poll_event_id
 """
 
+import asyncio
+from contextlib import asynccontextmanager
 import re
 import uuid
 import logging
 import aiohttp
 import time
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, AsyncIterator
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,41 @@ POLL_RESPONSE_TYPE = "org.matrix.msc3381.poll.response"
 POLL_END_TYPE = "org.matrix.msc3381.poll.end"
 POLL_KIND_DISCLOSED = "org.matrix.msc3381.poll.disclosed"
 POLL_KIND_UNDISCLOSED = "org.matrix.msc3381.poll.undisclosed"
+POLL_QUOTED_SEGMENT_RE = re.compile(r'"([^"\\]*(?:\\.[^"\\]*)*)"')
+
+_POLL_SESSION: Optional[aiohttp.ClientSession] = None
+_POLL_SESSION_LOCK: Optional[asyncio.Lock] = None
+
+
+async def _get_poll_session() -> aiohttp.ClientSession:
+    global _POLL_SESSION, _POLL_SESSION_LOCK
+    if _POLL_SESSION_LOCK is None:
+        _POLL_SESSION_LOCK = asyncio.Lock()
+    if _POLL_SESSION is not None and not _POLL_SESSION.closed:
+        return _POLL_SESSION
+
+    async with _POLL_SESSION_LOCK:
+        if _POLL_SESSION is not None and not _POLL_SESSION.closed:
+            return _POLL_SESSION
+        connector = aiohttp.TCPConnector(
+            limit=100,
+            limit_per_host=50,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        _POLL_SESSION = aiohttp.ClientSession(connector=connector)
+        return _POLL_SESSION
+
+
+@asynccontextmanager
+async def _poll_session_scope(
+    session: Optional[aiohttp.ClientSession] = None,
+) -> AsyncIterator[aiohttp.ClientSession]:
+    if session is not None:
+        yield session
+        return
+    pooled = await _get_poll_session()
+    yield pooled
 
 
 @dataclass
@@ -51,8 +88,7 @@ def parse_poll_command(text: str) -> Optional[ParsedPoll]:
         kind = POLL_KIND_UNDISCLOSED
         remainder = remainder[12:].strip()
     
-    pattern = r'"([^"\\]*(?:\\.[^"\\]*)*)"'
-    matches = re.findall(pattern, remainder)
+    matches = POLL_QUOTED_SEGMENT_RE.findall(remainder)
     
     if len(matches) < 3:
         logger.warning(f"[POLL] Invalid poll command - need question + at least 2 options: {text[:100]}")
@@ -112,7 +148,7 @@ async def send_poll_as_agent(
         agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
         agent_password = agent_mapping["matrix_password"]
         
-        async with aiohttp.ClientSession() as session:
+        async with _poll_session_scope() as session:
             login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
             login_data = {"type": "m.login.password", "user": agent_username, "password": agent_password}
             
@@ -148,7 +184,7 @@ async def send_poll_as_agent(
                     logger_instance.error(f"[POLL] Failed to send poll: {response.status} - {response_text}")
                     return None
                     
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, KeyError, TypeError) as e:
         logger_instance.error(f"[POLL] Exception: {e}", exc_info=True)
         return None
 
@@ -162,7 +198,7 @@ async def get_agent_token(room_id: str, config: Any, logger_instance: logging.Lo
     agent_username = agent_mapping["matrix_user_id"].split(':')[0].replace('@', '')
     agent_password = agent_mapping["matrix_password"]
     
-    async with aiohttp.ClientSession() as session:
+    async with _poll_session_scope() as session:
         login_url = f"{config.homeserver_url}/_matrix/client/r0/login"
         login_data = {"type": "m.login.password", "user": agent_username, "password": agent_password}
         
@@ -357,7 +393,7 @@ async def query_poll_results(
         return None
     
     try:
-        async with aiohttp.ClientSession() as session:
+        async with _poll_session_scope() as session:
             relations_url = f"{config.homeserver_url}/_matrix/client/v1/rooms/{room_id}/relations/{poll_event_id}/{POLL_RESPONSE_TYPE}"
             headers = {"Authorization": f"Bearer {agent_token}"}
             
@@ -415,7 +451,7 @@ async def query_poll_results(
                 voters=voters
             )
             
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, KeyError, TypeError) as e:
         logger_instance.error(f"[POLL] Error querying results: {e}", exc_info=True)
         return None
 
@@ -454,7 +490,7 @@ async def send_poll_end_event(
     agent_token: str
 ) -> Optional[str]:
     try:
-        async with aiohttp.ClientSession() as session:
+        async with _poll_session_scope() as session:
             winner_id = max(results.results.items(), key=lambda x: x[1])[0]
             winner_label = results.option_labels.get(winner_id, winner_id)
             
@@ -486,7 +522,7 @@ async def send_poll_end_event(
                     logger_instance.error(f"[POLL] Failed to close poll: {response.status} - {response_text}")
                     return None
                     
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, KeyError, TypeError) as e:
         logger_instance.error(f"[POLL] Error closing poll: {e}", exc_info=True)
         return None
 

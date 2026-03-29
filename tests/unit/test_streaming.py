@@ -213,6 +213,7 @@ class TestStepStreamReader:
         chunk.message_type = 'ping'
         
         event = reader._parse_chunk(chunk)
+        assert event is not None
         assert event.type == StreamEventType.PING
     
     def test_parse_chunk_reasoning_included(self):
@@ -227,6 +228,7 @@ class TestStepStreamReader:
         chunk.run_id = 'run-456'
         
         event = reader._parse_chunk(chunk)
+        assert event is not None
         assert event.type == StreamEventType.REASONING
         assert event.content == 'Thinking about the problem'
         assert event.metadata['id'] == 'msg-123'
@@ -259,6 +261,7 @@ class TestStepStreamReader:
         chunk.run_id = 'run-012'
         
         event = reader._parse_chunk(chunk)
+        assert event is not None
         assert event.type == StreamEventType.TOOL_CALL
         assert event.metadata['tool_name'] == 'archival_memory_search'
         assert event.metadata['arguments'] == '{"query": "test"}'
@@ -289,6 +292,7 @@ class TestStepStreamReader:
         return_chunk.run_id = 'run-1'
         
         event = reader._parse_chunk(return_chunk)
+        assert event is not None
         assert event.type == StreamEventType.TOOL_RETURN
         assert event.content == 'Message sent successfully'
         assert event.metadata['tool_name'] == 'send_message'
@@ -306,6 +310,7 @@ class TestStepStreamReader:
         chunk.run_id = 'run-888'
         
         event = reader._parse_chunk(chunk)
+        assert event is not None
         assert event.type == StreamEventType.ASSISTANT
         assert event.content == 'Hello! How can I help you?'
     
@@ -319,6 +324,7 @@ class TestStepStreamReader:
         chunk.stop_reason = 'end_turn'
         
         event = reader._parse_chunk(chunk)
+        assert event is not None
         assert event.type == StreamEventType.STOP
         assert event.content == 'end_turn'
     
@@ -335,6 +341,7 @@ class TestStepStreamReader:
         chunk.step_count = 2
         
         event = reader._parse_chunk(chunk)
+        assert event is not None
         assert event.type == StreamEventType.USAGE
         assert event.metadata['completion_tokens'] == 100
         assert event.metadata['prompt_tokens'] == 50
@@ -353,6 +360,7 @@ class TestStepStreamReader:
         chunk.detail = 'Please wait 60 seconds'
         
         event = reader._parse_chunk(chunk)
+        assert event is not None
         assert event.type == StreamEventType.ERROR
         assert event.content == 'Rate limit exceeded'
         assert event.metadata['error_type'] == 'rate_limit'
@@ -505,7 +513,8 @@ class TestStreamingMessageHandler:
         assert result == "$event_123"
         handler.send_message.assert_called_once_with(
             "!test:matrix.example.com",
-            "🔧 search..."
+            "🔧 search...",
+            msgtype="m.notice",
         )
         handler.delete_message.assert_not_called()
 
@@ -699,7 +708,7 @@ class TestStreamingMessageHandler:
     @pytest.mark.asyncio
     async def test_delete_failure_handled(self, handler_with_delete):
         """Test that delete failures are handled gracefully"""
-        handler_with_delete.delete_message.side_effect = Exception("Network error")
+        handler_with_delete.delete_message.side_effect = RuntimeError("Network error")
         
         # Set up progress
         event1 = StreamEvent(
@@ -1266,7 +1275,7 @@ class TestLiveEditDeferredFinalization:
             "!test:matrix.example.com",
             "$event_live"
         )
-        handler.send_message.call_count == 1
+        assert handler.send_message.call_count == 1
         handler.edit_message.assert_not_called()
 
 
@@ -1396,3 +1405,185 @@ class TestCleanupWithPendingFinal:
         
         send_mock.assert_not_called()
         edit_mock.assert_not_called()
+
+
+class _ContractRoomState:
+
+    def __init__(self, room_id: str):
+        self.room_id = room_id
+        self._next_id = 1
+        self.messages = {}
+        self.order = []
+        self.deleted = []
+
+    async def send(self, room_id: str, body: str) -> str:
+        assert room_id == self.room_id
+        event_id = f"$evt_{self._next_id}"
+        self._next_id += 1
+        self.messages[event_id] = body
+        self.order.append(event_id)
+        return event_id
+
+    async def delete(self, room_id: str, event_id: str) -> bool:
+        assert room_id == self.room_id
+        self.deleted.append(event_id)
+        self.messages.pop(event_id, None)
+        return True
+
+    def visible_messages(self):
+        return [self.messages[eid] for eid in self.order if eid in self.messages]
+
+
+class TestStreamingPipelineContracts:
+
+    ROOM_ID = "!contract:matrix.example.com"
+
+    def _build_reader(self, chunks):
+        mock_client = MagicMock()
+        mock_client.agents.messages.stream.return_value = iter(chunks)
+        return StepStreamReader(letta_client=mock_client, include_reasoning=False, timeout=2.0)
+
+    def _tool_call_chunk(self, tool_name: str, arguments: str):
+        tool_call = MagicMock()
+        tool_call.name = tool_name
+        tool_call.arguments = arguments
+
+        chunk = MagicMock()
+        chunk.message_type = "tool_call_message"
+        chunk.tool_call = tool_call
+        chunk.id = "msg-tool-call"
+        chunk.run_id = "run-contract"
+        return chunk
+
+    def _tool_return_chunk(self, tool_return: str, status: str = "success"):
+        chunk = MagicMock()
+        chunk.message_type = "tool_return_message"
+        chunk.tool_return = tool_return
+        chunk.status = status
+        chunk.id = "msg-tool-return"
+        chunk.run_id = "run-contract"
+        return chunk
+
+    def _assistant_chunk(self, content: str):
+        chunk = MagicMock()
+        chunk.message_type = "assistant_message"
+        chunk.content = content
+        chunk.id = "msg-assistant"
+        chunk.run_id = "run-contract"
+        return chunk
+
+    def _stop_chunk(self, reason: str = "end_turn"):
+        chunk = MagicMock()
+        chunk.message_type = "stop_reason"
+        chunk.stop_reason = reason
+        return chunk
+
+    def _error_chunk(self, message: str):
+        chunk = MagicMock()
+        chunk.message_type = "error_message"
+        chunk.message = message
+        chunk.error_type = "tool_error"
+        chunk.detail = "trace"
+        return chunk
+
+    async def _run_contract_sequence(self, chunks):
+        reader = self._build_reader(chunks)
+        state = _ContractRoomState(self.ROOM_ID)
+        handler = StreamingMessageHandler(
+            send_message=state.send,
+            delete_message=state.delete,
+            room_id=self.ROOM_ID,
+            delete_progress=True,
+        )
+
+        last_result = None
+        async for event in reader.stream_message(agent_id="agent-1", message="hello"):
+            last_result = await handler.handle_event(event)
+
+        return state, handler, last_result
+
+    def _assert_no_orphan_progress_messages(self, state: _ContractRoomState):
+        for msg in state.visible_messages():
+            assert not msg.startswith(("🔧", "✅", "❌", "💭", "⏳"))
+
+    @pytest.mark.asyncio
+    async def test_contract_normal_flow_single_final_message(self):
+        state, _handler, result = await self._run_contract_sequence(
+            [
+                self._tool_call_chunk("Bash", '{"command":"ls"}'),
+                self._tool_return_chunk("ok", status="success"),
+                self._assistant_chunk("Final answer"),
+                self._stop_chunk(),
+            ]
+        )
+
+        visible = state.visible_messages()
+        assert len(visible) == 1
+        assert visible[0] == "Final answer"
+        assert result is not None
+        self._assert_no_orphan_progress_messages(state)
+
+    @pytest.mark.asyncio
+    async def test_contract_self_delivery_suppresses_duplicate_final(self):
+        state, handler, result = await self._run_contract_sequence(
+            [
+                self._tool_call_chunk(
+                    "matrix_messaging",
+                    '{"operation":"send","room_id":"!contract:matrix.example.com","message":"hi"}',
+                ),
+                self._tool_return_chunk("sent", status="success"),
+                self._assistant_chunk("This would duplicate"),
+                self._stop_chunk(),
+            ]
+        )
+
+        assert handler.self_delivered is True
+        assert result is None
+        assert state.visible_messages() == []
+
+    @pytest.mark.asyncio
+    async def test_contract_mid_chain_assistant_text_last_assistant_wins(self):
+        state, _handler, _result = await self._run_contract_sequence(
+            [
+                self._tool_call_chunk("search", '{"query":"x"}'),
+                self._assistant_chunk("Interim text"),
+                self._tool_return_chunk("found", status="success"),
+                self._assistant_chunk("Final consolidated answer"),
+                self._stop_chunk(),
+            ]
+        )
+
+        visible = state.visible_messages()
+        assert visible == ["Final consolidated answer"]
+        self._assert_no_orphan_progress_messages(state)
+
+    @pytest.mark.asyncio
+    async def test_contract_error_recovery_keeps_error_and_final(self):
+        state, _handler, _result = await self._run_contract_sequence(
+            [
+                self._tool_call_chunk("Bash", '{"command":"false"}'),
+                self._error_chunk("Tool failed"),
+                self._assistant_chunk("Recovered answer"),
+                self._stop_chunk(),
+            ]
+        )
+
+        visible = state.visible_messages()
+        assert len(visible) == 2
+        assert visible[0].startswith("⚠️ Tool failed")
+        assert "trace" in visible[0]
+        assert visible[1] == "Recovered answer"
+        self._assert_no_orphan_progress_messages(state)
+
+    @pytest.mark.asyncio
+    async def test_contract_no_reply_cleans_up_without_output(self):
+        state, _handler, result = await self._run_contract_sequence(
+            [
+                self._tool_call_chunk("search", '{"query":"silent"}'),
+                self._assistant_chunk("<no-reply/>"),
+                self._stop_chunk(),
+            ]
+        )
+
+        assert result is None
+        assert state.visible_messages() == []

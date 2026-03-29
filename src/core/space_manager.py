@@ -52,9 +52,30 @@ class MatrixSpaceManager:
 
         # Cache for admin token (to avoid repeated logins)
         self._admin_token: Optional[str] = None
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
 
         # Ensure data directory exists
         os.makedirs(os.path.dirname(self.space_config_file), exist_ok=True)
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is not None and not self._session.closed:
+            return self._session
+
+        async with self._session_lock:
+            if self._session is not None and not self._session.closed:
+                return self._session
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                keepalive_timeout=30,
+            )
+            self._session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._session
 
     async def get_admin_token(self) -> Optional[str]:
         """Get an admin access token by logging in as the admin user
@@ -78,17 +99,17 @@ class MatrixSpaceManager:
 
             logger.info(f"Attempting to get admin token for user: {username}")
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        self._admin_token = data.get("access_token")
-                        logger.info(f"Successfully obtained admin access token for user {username}")
-                        return self._admin_token
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Failed to get admin token for {username}: {response.status} - {error_text}")
-                        return None
+            session = await self._get_session()
+            async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    self._admin_token = data.get("access_token")
+                    logger.info(f"Successfully obtained admin access token for user {username}")
+                    return self._admin_token
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Failed to get admin token for {username}: {response.status} - {error_text}")
+                    return None
 
         except Exception as e:
             logger.error(f"Error getting admin token: {e}")
@@ -107,31 +128,31 @@ class MatrixSpaceManager:
                 "Content-Type": "application/json"
             }
 
-            async with aiohttp.ClientSession() as session:
-                # Basic existence check
-                state_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state"
-                async with session.get(state_url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 404:
-                        logger.info(f"Room {room_id} does not exist")
-                        return False
-                    if response.status == 403:
-                        logger.warning(f"Room {room_id} exists but access denied (treating as existing)")
-                        return True
-                    if response.status != 200:
-                        logger.warning(f"Unexpected response checking room {room_id}: {response.status}")
-                        return False
+            session = await self._get_session()
+            # Basic existence check
+            state_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state"
+            async with session.get(state_url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 404:
+                    logger.info(f"Room {room_id} does not exist")
+                    return False
+                if response.status == 403:
+                    logger.warning(f"Room {room_id} exists but access denied (treating as existing)")
+                    return True
+                if response.status != 200:
+                    logger.warning(f"Unexpected response checking room {room_id}: {response.status}")
+                    return False
 
-                # Validate create event / room version to catch corrupted rooms
-                create_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.create"
-                async with session.get(create_url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status != 200:
-                        logger.warning(f"Room {room_id} missing create event (status {response.status}), treating as invalid")
-                        return False
-                    create_data = await response.json()
-                    room_version = create_data.get("room_version")
-                    if not room_version:
-                        logger.warning(f"Room {room_id} has no room_version in create event, treating as invalid")
-                        return False
+            # Validate create event / room version to catch corrupted rooms
+            create_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.create"
+            async with session.get(create_url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status != 200:
+                    logger.warning(f"Room {room_id} missing create event (status {response.status}), treating as invalid")
+                    return False
+                create_data = await response.json()
+                room_version = create_data.get("room_version")
+                if not room_version:
+                    logger.warning(f"Room {room_id} has no room_version in create event, treating as invalid")
+                    return False
 
                 logger.info(f"Room {room_id} exists with room version {room_version}")
                 return True
@@ -196,16 +217,16 @@ class MatrixSpaceManager:
                 "password": self.admin_password
             }
 
-            async with aiohttp.ClientSession() as session:
-                # Login
-                async with session.post(admin_login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"Failed to login as admin to create space: {response.status} - {error_text}")
-                        return None
+            session = await self._get_session()
+            # Login
+            async with session.post(admin_login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"Failed to login as admin to create space: {response.status} - {error_text}")
+                    return None
 
-                    auth_data = await response.json()
-                    admin_token = auth_data.get("access_token")
+                auth_data = await response.json()
+                admin_token = auth_data.get("access_token")
 
                 if not admin_token:
                     logger.error("No token received for admin user")
@@ -307,29 +328,29 @@ class MatrixSpaceManager:
                 "order": room_name  # Use room name for alphabetical ordering
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json=child_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Added room {room_id} ({room_name}) to Letta Agents space")
+            session = await self._get_session()
+            async with session.put(url, headers=headers, json=child_data, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    logger.info(f"Added room {room_id} ({room_name}) to Letta Agents space")
 
-                        # Also add the space as a parent of the room (bidirectional relationship)
-                        parent_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.space.parent/{self.space_id}"
-                        parent_data = {
-                            "via": ["matrix.oculair.ca"],
-                            "canonical": True
-                        }
+                    # Also add the space as a parent of the room (bidirectional relationship)
+                    parent_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.space.parent/{self.space_id}"
+                    parent_data = {
+                        "via": ["matrix.oculair.ca"],
+                        "canonical": True
+                    }
 
-                        async with session.put(parent_url, headers=headers, json=parent_data, timeout=DEFAULT_TIMEOUT) as parent_response:
-                            if parent_response.status == 200:
-                                logger.info(f"Set space as parent of room {room_id}")
-                            else:
-                                logger.warning(f"Failed to set space as parent: {parent_response.status}")
+                    async with session.put(parent_url, headers=headers, json=parent_data, timeout=DEFAULT_TIMEOUT) as parent_response:
+                        if parent_response.status == 200:
+                            logger.info(f"Set space as parent of room {room_id}")
+                        else:
+                            logger.warning(f"Failed to set space as parent: {parent_response.status}")
 
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Failed to add room to space: {response.status} - {error_text}")
-                        return False
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Failed to add room to space: {response.status} - {error_text}")
+                    return False
 
         except Exception as e:
             logger.error(f"Error adding room {room_id} to space: {e}")

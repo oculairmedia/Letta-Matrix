@@ -14,8 +14,10 @@ import asyncio
 from contextlib import asynccontextmanager
 import html
 import logging
+import re
+import time
 import uuid
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 from urllib.parse import quote
 
 import aiohttp
@@ -26,12 +28,57 @@ from src.matrix.agent_auth import (
     repair_agent_password,
 )
 from src.matrix.config import Config
+from src.matrix.identity_client_pool import get_identity_client_pool
+from src.core import mapping_service
+from src.matrix.pill_formatter import extract_and_convert_pills
+
+try:
+    import markdown as _markdown
+except ImportError:
+    _markdown = None
 
 
 # ── Timeouts ─────────────────────────────────────────────────────────
 
 _AGENT_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=30)
 _AGENT_SEND_TIMEOUT = aiohttp.ClientTimeout(total=15)
+_ROOM_MAPPING_CACHE_TTL_SECONDS = 45.0
+_ROOM_AGENT_MAPPING_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_MODULE_LOGGER = logging.getLogger("matrix_client.agent_actions")
+_RECOVERABLE_AGENT_ACTION_ERRORS = (
+    aiohttp.ClientError,
+    asyncio.TimeoutError,
+    KeyError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    OSError,
+)
+
+
+# ── Markdown fast-path ───────────────────────────────────────────────
+
+# Characters that trigger actual markdown rendering.  If a short,
+# single-line message contains none of these, markdown.markdown() would
+# just wrap it in <p>…</p> and we'd discard the result anyway (the
+# ``html_body != f"<p>{message}</p>"`` guard).  Skipping the conversion
+# entirely saves ~2-4 ms per call, which adds up on progress messages.
+_MD_SIGNIFICANT = re.compile(r"[*_`#\[\]|>~]|^-\s", re.MULTILINE)
+_HAS_MENTION_CANDIDATE = re.compile(r"(^|\s)@[\w.-]+")
+_SIMPLE_MSG_MAX_LEN = 200
+
+
+def _is_simple_message(text: str) -> bool:
+    """Return True for short single-line messages with no markdown syntax."""
+    return (
+        len(text) <= _SIMPLE_MSG_MAX_LEN
+        and "\n" not in text
+        and not _MD_SIGNIFICANT.search(text)
+    )
+
+
+def _might_contain_mentions(text: str) -> bool:
+    return bool(_HAS_MENTION_CANDIDATE.search(text))
 
 
 # ── Agent Auth ───────────────────────────────────────────────────────
@@ -51,6 +98,149 @@ async def _session_scope(
     async with aiohttp.ClientSession() as owned_session:
         yield owned_session
 
+
+def _get_agent_mapping_for_room(
+    room_id: str,
+    logger: logging.Logger,
+) -> Optional[Dict[str, Any]]:
+    cached = _ROOM_AGENT_MAPPING_CACHE.get(room_id)
+    now = time.monotonic()
+    if cached and (now - cached[0]) <= _ROOM_MAPPING_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    agent_mapping = mapping_service.get_mapping_by_room_id(room_id)
+    if not agent_mapping:
+        portal_link = mapping_service.get_portal_link_by_room_id(room_id)
+        if portal_link:
+            agent_mapping = mapping_service.get_mapping_by_agent_id(portal_link["agent_id"])
+
+    if agent_mapping:
+        _ROOM_AGENT_MAPPING_CACHE[room_id] = (now, agent_mapping)
+        return agent_mapping
+
+    logger.warning(f"No agent mapping found for room {room_id}")
+    return None
+
+
+# ── Content Building Helpers ─────────────────────────────────────────
+
+
+def _build_message_content(
+    message: str,
+    msgtype: str = "m.text",
+    reply_to_event_id: Optional[str] = None,
+    reply_to_sender: Optional[str] = None,
+    reply_to_body: Optional[str] = None,
+    room_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build Matrix message content dict with markdown, pills, and reply formatting."""
+    message_data: Dict[str, Any] = {"msgtype": msgtype, "body": message}
+    _pill_mxids: list = []
+    _needs_rich_formatting = not _is_simple_message(message)
+
+    if _needs_rich_formatting:
+        if _markdown is not None:
+            html_body = _markdown.markdown(
+                message,
+                extensions=["tables", "fenced_code", "nl2br", "sane_lists"],
+            )
+            if html_body and html_body != f"<p>{message}</p>":
+                message_data["format"] = "org.matrix.custom.html"
+                message_data["formatted_body"] = html_body
+
+    if _might_contain_mentions(message):
+        try:
+            pill_html, _pill_mxids = extract_and_convert_pills(
+                message, message_data.get("formatted_body")
+            )
+            if _pill_mxids:
+                message_data["formatted_body"] = pill_html
+                message_data["format"] = "org.matrix.custom.html"
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            _MODULE_LOGGER.debug(
+                "[SEND_AS_AGENT] Mention pill conversion failed: %s", exc
+            )
+
+    if reply_to_event_id:
+        message_data["m.relates_to"] = {
+            "m.in_reply_to": {"event_id": reply_to_event_id}
+        }
+        quoted_sender = reply_to_sender or "user"
+        quoted_body = reply_to_body or ""
+        if quoted_body:
+            if len(quoted_body) > 200:
+                quoted_body = quoted_body[:200] + "..."
+            message_data[
+                "body"
+            ] = f"> <{quoted_sender}> {quoted_body}\n\n{message}"
+            mx_reply_html = (
+                f'<mx-reply><blockquote>'
+                f'<a href="https://matrix.to/#/{room_id}/{reply_to_event_id}">In reply to</a> '
+                f'<a href="https://matrix.to/#/{html.escape(quoted_sender)}">{html.escape(quoted_sender)}</a><br/>'
+                f"{html.escape(quoted_body)}"
+                f"</blockquote></mx-reply>"
+            )
+            existing_html = message_data.get("formatted_body", message)
+            message_data["format"] = "org.matrix.custom.html"
+            message_data["formatted_body"] = mx_reply_html + existing_html
+        if reply_to_sender:
+            message_data["m.mentions"] = {"user_ids": [reply_to_sender]}
+
+    if _pill_mxids:
+        existing = message_data.get("m.mentions", {}).get("user_ids", [])
+        merged = list(dict.fromkeys(existing + _pill_mxids))
+        message_data["m.mentions"] = {"user_ids": merged}
+
+    return message_data
+
+
+def _build_edit_content(
+    event_id: str,
+    new_body: str,
+    msgtype: str = "m.text",
+) -> Dict[str, Any]:
+    """Build Matrix edit message content dict with markdown and pills."""
+    message_data = {
+        "msgtype": msgtype,
+        "body": f"* {new_body}",
+        "m.new_content": {"msgtype": msgtype, "body": new_body},
+        "m.relates_to": {"rel_type": "m.replace", "event_id": event_id},
+    }
+
+    _formatted_body = None
+    _pill_mxids: list = []
+
+    if not _is_simple_message(new_body):
+        if _markdown is not None:
+            _html = _markdown.markdown(
+                new_body,
+                extensions=["tables", "fenced_code", "nl2br", "sane_lists"],
+            )
+            if _html and _html != f"<p>{new_body}</p>":
+                _formatted_body = _html
+
+    if _might_contain_mentions(new_body):
+        try:
+            pill_html, _pill_mxids = extract_and_convert_pills(new_body, _formatted_body)
+            if _pill_mxids:
+                _formatted_body = pill_html
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            _MODULE_LOGGER.debug(
+                "[EDIT_AS_AGENT] Mention pill conversion failed: %s", exc
+            )
+
+    if _formatted_body:
+        message_data["format"] = "org.matrix.custom.html"
+        message_data["formatted_body"] = f"* {_formatted_body}"
+        message_data["m.new_content"]["format"] = "org.matrix.custom.html"
+        message_data["m.new_content"]["formatted_body"] = _formatted_body
+    if _pill_mxids:
+        mentions = {"user_ids": list(dict.fromkeys(_pill_mxids))}
+        message_data["m.new_content"]["m.mentions"] = mentions
+
+    return message_data
+
+
 # ── Send Messages ────────────────────────────────────────────────────
 
 async def send_as_agent_with_event_id(
@@ -58,6 +248,7 @@ async def send_as_agent_with_event_id(
     message: str,
     config: Config,
     logger: logging.Logger,
+    msgtype: str = "m.text",
     reply_to_event_id: Optional[str] = None,
     reply_to_sender: Optional[str] = None,
     reply_to_body: Optional[str] = None,
@@ -69,25 +260,45 @@ async def send_as_agent_with_event_id(
     Returns the event_id on success, None on failure.
     """
     try:
-        from src.core.mapping_service import (
-            get_mapping_by_room_id,
-            get_mapping_by_agent_id,
-            get_portal_link_by_room_id,
-        )
-
-        agent_mapping = get_mapping_by_room_id(room_id)
+        agent_mapping = _get_agent_mapping_for_room(room_id, logger)
         if not agent_mapping:
-            portal_link = get_portal_link_by_room_id(room_id)
-            if portal_link:
-                agent_mapping = get_mapping_by_agent_id(portal_link["agent_id"])
-            if not agent_mapping:
-                logger.warning(f"No agent mapping found for room {room_id}")
-                return None
+            return None
 
+        agent_id = agent_mapping.get("agent_id")
         agent_name = agent_mapping.get("agent_name", "Unknown")
         logger.debug(
             f"[SEND_AS_AGENT] Sending as agent: {agent_name} in room {room_id}"
         )
+
+        message_data = _build_message_content(
+            message, msgtype, reply_to_event_id, reply_to_sender, reply_to_body, room_id
+        )
+
+        if reply_to_event_id:
+            logger.debug(
+                f"[SEND_AS_AGENT] Creating rich reply to event {reply_to_event_id}"
+            )
+
+        if agent_id:
+            try:
+                pool = get_identity_client_pool(config.homeserver_url)
+                event_id = await pool._send_with_recovery(
+                    f"letta_{agent_id}", room_id, message_data
+                )
+                if event_id:
+                    logger.debug(
+                        f"[SEND_AS_AGENT] Sent message via pool, event_id: {event_id}"
+                        + (
+                            f" (reply to {reply_to_event_id})"
+                            if reply_to_event_id
+                            else ""
+                        )
+                    )
+                    return event_id
+            except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
+                logger.warning(
+                    f"[SEND_AS_AGENT] Pool send failed for {agent_id}, falling back to raw HTTP: {e}"
+                )
 
         async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
@@ -102,71 +313,6 @@ async def send_as_agent_with_event_id(
                 "Authorization": f"Bearer {agent_token}",
                 "Content-Type": "application/json",
             }
-
-            message_data: Dict[str, Any] = {"msgtype": "m.text", "body": message}
-
-            # Convert markdown to HTML for rich rendering
-            try:
-                import markdown
-
-                html_body = markdown.markdown(
-                    message,
-                    extensions=["tables", "fenced_code", "nl2br", "sane_lists"],
-                )
-                if html_body and html_body != f"<p>{message}</p>":
-                    message_data["format"] = "org.matrix.custom.html"
-                    message_data["formatted_body"] = html_body
-            except ImportError:
-                pass
-
-            # Convert @mentions to Matrix pills
-            _pill_mxids: list = []
-            try:
-                from src.matrix.pill_formatter import extract_and_convert_pills
-
-                pill_html, _pill_mxids = extract_and_convert_pills(
-                    message, message_data.get("formatted_body")
-                )
-                if _pill_mxids:
-                    message_data["formatted_body"] = pill_html
-                    message_data["format"] = "org.matrix.custom.html"
-            except Exception:
-                pass
-
-            # Add rich reply relationship if replying to a specific message
-            if reply_to_event_id:
-                message_data["m.relates_to"] = {
-                    "m.in_reply_to": {"event_id": reply_to_event_id}
-                }
-                quoted_sender = reply_to_sender or "user"
-                quoted_body = reply_to_body or ""
-                if quoted_body:
-                    if len(quoted_body) > 200:
-                        quoted_body = quoted_body[:200] + "..."
-                    message_data[
-                        "body"
-                    ] = f"> <{quoted_sender}> {quoted_body}\n\n{message}"
-                    mx_reply_html = (
-                        f'<mx-reply><blockquote>'
-                        f'<a href="https://matrix.to/#/{room_id}/{reply_to_event_id}">In reply to</a> '
-                        f'<a href="https://matrix.to/#/{html.escape(quoted_sender)}">{html.escape(quoted_sender)}</a><br/>'
-                        f"{html.escape(quoted_body)}"
-                        f"</blockquote></mx-reply>"
-                    )
-                    existing_html = message_data.get("formatted_body", message)
-                    message_data["format"] = "org.matrix.custom.html"
-                    message_data["formatted_body"] = mx_reply_html + existing_html
-                if reply_to_sender:
-                    message_data["m.mentions"] = {"user_ids": [reply_to_sender]}
-                logger.debug(
-                    f"[SEND_AS_AGENT] Creating rich reply to event {reply_to_event_id}"
-                )
-
-            # Merge pill m.mentions with any reply m.mentions
-            if _pill_mxids:
-                existing = message_data.get("m.mentions", {}).get("user_ids", [])
-                merged = list(dict.fromkeys(existing + _pill_mxids))
-                message_data["m.mentions"] = {"user_ids": merged}
 
             async with active_session.put(
                 message_url,
@@ -193,7 +339,7 @@ async def send_as_agent_with_event_id(
                     )
                     return None
 
-    except Exception as e:
+    except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
         logger.error(f"[SEND_AS_AGENT] Exception occurred: {e}", exc_info=True)
         return None
 
@@ -203,6 +349,7 @@ async def send_as_agent(
     message: str,
     config: Config,
     logger: logging.Logger,
+    msgtype: str = "m.text",
     reply_to_event_id: Optional[str] = None,
     reply_to_sender: Optional[str] = None,
     session: Optional[aiohttp.ClientSession] = None,
@@ -216,6 +363,7 @@ async def send_as_agent(
         message,
         config,
         logger,
+        msgtype=msgtype,
         reply_to_event_id=reply_to_event_id,
         reply_to_sender=reply_to_sender,
         session=session,
@@ -234,16 +382,31 @@ async def delete_message_as_agent(
 ) -> bool:
     """Redact (delete) a message as the agent user for this room."""
     try:
-        from src.core.mapping_service import get_mapping_by_room_id
-
-        agent_mapping = get_mapping_by_room_id(room_id)
+        agent_mapping = _get_agent_mapping_for_room(room_id, logger)
         if not agent_mapping:
-            logger.warning(f"No agent mapping found for room {room_id}")
             return False
+
+        agent_id = agent_mapping.get("agent_id")
         agent_name = agent_mapping.get("agent_name", "Unknown")
         logger.debug(
             f"[DELETE_AS_AGENT] Attempting to delete message as agent: {agent_name} in room {room_id}"
         )
+
+        if agent_id:
+            try:
+                pool = get_identity_client_pool(config.homeserver_url)
+                success = await pool.redact_as_agent(
+                    agent_id, room_id, event_id, reason="Progress message replaced"
+                )
+                if success:
+                    logger.debug(
+                        f"[DELETE_AS_AGENT] Successfully deleted message {event_id} via pool"
+                    )
+                    return True
+            except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
+                logger.warning(
+                    f"[DELETE_AS_AGENT] Pool redact failed for {agent_id}, falling back to raw HTTP: {e}"
+                )
 
         async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
@@ -278,7 +441,7 @@ async def delete_message_as_agent(
                     )
                     return False
 
-    except Exception as e:
+    except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
         logger.error(f"[DELETE_AS_AGENT] Exception occurred: {e}", exc_info=True)
         return False
 
@@ -289,10 +452,32 @@ async def edit_message_as_agent(
     new_body: str,
     config: Config,
     logger: logging.Logger,
+    msgtype: str = "m.text",
     session: Optional[aiohttp.ClientSession] = None,
 ) -> bool:
     """Edit a message as the agent user for this room."""
     try:
+        agent_mapping = _get_agent_mapping_for_room(room_id, logger)
+        agent_id = agent_mapping.get("agent_id") if agent_mapping else None
+
+        message_data = _build_edit_content(event_id, new_body, msgtype)
+
+        if agent_id:
+            try:
+                pool = get_identity_client_pool(config.homeserver_url)
+                edit_event_id = await pool._send_with_recovery(
+                    f"letta_{agent_id}", room_id, message_data
+                )
+                if edit_event_id:
+                    logger.debug(
+                        f"[EDIT_AS_AGENT] Edited message {event_id} via pool"
+                    )
+                    return True
+            except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
+                logger.warning(
+                    f"[EDIT_AS_AGENT] Pool edit failed for {agent_id}, falling back to raw HTTP: {e}"
+                )
+
         async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
                 room_id, config, logger, active_session, caller="EDIT_AS_AGENT"
@@ -306,48 +491,6 @@ async def edit_message_as_agent(
                 "Authorization": f"Bearer {agent_token}",
                 "Content-Type": "application/json",
             }
-
-            message_data = {
-                "msgtype": "m.text",
-                "body": f"* {new_body}",
-                "m.new_content": {"msgtype": "m.text", "body": new_body},
-                "m.relates_to": {"rel_type": "m.replace", "event_id": event_id},
-            }
-
-            # Add markdown + pill formatting to edit
-            _formatted_body = None
-            try:
-                import markdown
-
-                _html = markdown.markdown(
-                    new_body,
-                    extensions=["tables", "fenced_code", "nl2br", "sane_lists"],
-                )
-                if _html and _html != f"<p>{new_body}</p>":
-                    _formatted_body = _html
-            except ImportError:
-                pass
-
-            _pill_mxids: list = []
-            try:
-                from src.matrix.pill_formatter import extract_and_convert_pills
-
-                pill_html, _pill_mxids = extract_and_convert_pills(
-                    new_body, _formatted_body
-                )
-                if _pill_mxids:
-                    _formatted_body = pill_html
-            except Exception:
-                pass
-
-            if _formatted_body:
-                message_data["format"] = "org.matrix.custom.html"
-                message_data["formatted_body"] = f"* {_formatted_body}"
-                message_data["m.new_content"]["format"] = "org.matrix.custom.html"
-                message_data["m.new_content"]["formatted_body"] = _formatted_body
-            if _pill_mxids:
-                mentions = {"user_ids": list(dict.fromkeys(_pill_mxids))}
-                message_data["m.new_content"]["m.mentions"] = mentions
 
             async with active_session.put(
                 msg_url,
@@ -365,7 +508,7 @@ async def edit_message_as_agent(
                     )
                     return False
 
-    except Exception as e:
+    except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
         logger.error(f"[EDIT_AS_AGENT] Exception: {e}", exc_info=True)
         return False
 
@@ -380,6 +523,25 @@ async def send_reaction_as_agent(
 ) -> Optional[str]:
     """Send a reaction (emoji) to a message as the agent user for this room."""
     try:
+        agent_mapping = _get_agent_mapping_for_room(room_id, logger)
+        agent_id = agent_mapping.get("agent_id") if agent_mapping else None
+
+        if agent_id:
+            try:
+                pool = get_identity_client_pool(config.homeserver_url)
+                reaction_event_id = await pool.react_as_agent(
+                    agent_id, room_id, event_id, emoji
+                )
+                if reaction_event_id:
+                    logger.debug(
+                        f"[REACTION] Sent {emoji} to {event_id} via pool, event_id: {reaction_event_id}"
+                    )
+                    return reaction_event_id
+            except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
+                logger.warning(
+                    f"[REACTION] Pool react failed for {agent_id}, falling back to raw HTTP: {e}"
+                )
+
         async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
                 room_id, config, logger, active_session, caller="REACTION"
@@ -418,7 +580,7 @@ async def send_reaction_as_agent(
                     )
                     return None
 
-    except Exception as e:
+    except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
         logger.error(f"[REACTION] Exception: {e}", exc_info=True)
         return None
 
@@ -432,6 +594,23 @@ async def send_read_receipt_as_agent(
 ) -> bool:
     """Send a read receipt for a message as the agent user for this room."""
     try:
+        agent_mapping = _get_agent_mapping_for_room(room_id, logger)
+        agent_id = agent_mapping.get("agent_id") if agent_mapping else None
+
+        if agent_id:
+            try:
+                pool = get_identity_client_pool(config.homeserver_url)
+                success = await pool.read_receipt_as_agent(agent_id, room_id, event_id)
+                if success:
+                    logger.debug(
+                        f"[READ_RECEIPT] Sent for {event_id} in {room_id} via pool"
+                    )
+                    return True
+            except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
+                logger.debug(
+                    f"[READ_RECEIPT] Pool receipt failed for {agent_id}, falling back to raw HTTP: {e}"
+                )
+
         async with _session_scope(session) as active_session:
             agent_token = await get_agent_token(
                 room_id, config, logger, active_session, caller="READ_RECEIPT"
@@ -457,7 +636,7 @@ async def send_read_receipt_as_agent(
                     logger.debug(f"[READ_RECEIPT] Failed: {response.status}")
                     return False
 
-    except Exception as e:
+    except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
         logger.debug(f"[READ_RECEIPT] Exception: {e}")
         return False
 
@@ -472,17 +651,7 @@ async def _get_agent_typing_context(
     room_id: str, config: Config, logger: logging.Logger
 ) -> Optional[Dict[str, str]]:
     """Resolve agent credentials and build reusable typing context for a room."""
-    from src.core.mapping_service import (
-        get_mapping_by_room_id,
-        get_mapping_by_agent_id,
-        get_portal_link_by_room_id,
-    )
-
-    agent_mapping = get_mapping_by_room_id(room_id)
-    if not agent_mapping:
-        portal_link = get_portal_link_by_room_id(room_id)
-        if portal_link:
-            agent_mapping = get_mapping_by_agent_id(portal_link["agent_id"])
+    agent_mapping = _get_agent_mapping_for_room(room_id, logger)
     if not agent_mapping:
         return None
 
@@ -493,7 +662,7 @@ async def _get_agent_typing_context(
             )
             if not token:
                 return None
-    except Exception as e:
+    except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
         logger.debug(f"[TYPING] Login failed: {e}")
         return None
 
@@ -542,7 +711,7 @@ async def _put_typing(
             else:
                 logger.debug(f"[TYPING] PUT failed: {response.status}")
                 return False
-    except Exception as e:
+    except _RECOVERABLE_AGENT_ACTION_ERRORS as e:
         logger.debug(f"[TYPING] PUT exception: {e}")
         return False
 

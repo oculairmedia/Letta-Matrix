@@ -207,7 +207,7 @@ async def test_api_error_chains_error_code_pattern(mock_config, mock_logger):
     Scenario: collect_via_gateway raises Exception with "Error code: 400" pattern
     Expected: LettaApiError with __cause__ = original Exception
     """
-    original_error = Exception("Error code: 400 - Bad Request")
+    original_error = RuntimeError("Error code: 400 - Bad Request")
     
     # Mock the gateway client
     mock_gateway = AsyncMock()

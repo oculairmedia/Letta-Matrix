@@ -57,7 +57,7 @@ class TestGetEmbeddingConfig:
 
     def test_falls_back_on_agent_retrieve_failure(self):
         mgr = _make_manager()
-        mgr.letta_client.agents.retrieve.side_effect = Exception("network error")
+        mgr.letta_client.agents.retrieve.side_effect = RuntimeError("network error")
 
         config = mgr.get_embedding_config(agent_id="agent-broken")
         assert config["embedding_model"] == "letta/letta-free"
@@ -118,6 +118,28 @@ class TestGetOrCreateSource:
 
         assert results == ["folder-once-123", "folder-once-123"]
         mgr.letta_client.folders.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_room_lock_cache_lru_evicts_idle_locks(self):
+        mgr = _make_manager(room_lock_cache_max=2)
+        mgr.letta_client.folders.list.return_value = []
+
+        create_counter = {"i": 0}
+
+        def _make_folder(*args, **kwargs):
+            create_counter["i"] += 1
+            folder = MagicMock()
+            folder.id = f"folder-{create_counter['i']}"
+            return folder
+
+        mgr.letta_client.folders.create.side_effect = _make_folder
+
+        await mgr.get_or_create_source("!room1:test")
+        await mgr.get_or_create_source("!room2:test")
+        await mgr.get_or_create_source("!room3:test")
+
+        assert len(mgr._room_locks) <= 2
+        assert "!room1:test" not in mgr._room_locks
 
 
 class TestAttachSourceToAgent:
@@ -195,3 +217,30 @@ class TestPollFileStatus:
 
         result = await mgr.poll_file_status("folder-1", "file-123", timeout=5, interval=1)
         assert result is True
+
+
+class TestUploadToLetta:
+    @pytest.mark.asyncio
+    async def test_upload_to_letta_reads_file_via_to_thread(self, tmp_path):
+        mgr = _make_manager()
+
+        file_path = tmp_path / "doc.txt"
+        file_path.write_bytes(b"hello world")
+
+        metadata = MagicMock()
+        metadata.file_name = "doc.txt"
+        metadata.file_type = "text/plain"
+
+        upload_result = MagicMock()
+        upload_result.id = "file-xyz"
+        mgr.letta_client.folders.files.upload.return_value = upload_result
+
+        async def _fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("src.matrix.letta_source_manager.asyncio.to_thread", side_effect=_fake_to_thread) as mock_to_thread:
+            file_id = await mgr.upload_to_letta(str(file_path), "folder-1", metadata)
+
+        assert file_id == "file-xyz"
+        mock_to_thread.assert_awaited_once()
+        mgr.letta_client.folders.files.upload.assert_called_once()

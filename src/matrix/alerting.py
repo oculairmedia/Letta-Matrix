@@ -15,6 +15,26 @@ logger = logging.getLogger("matrix_client.alerting")
 
 _DEDUP_WINDOW_S = 300  # 5 minutes
 _last_alert_times: Dict[str, float] = {}
+_alert_session: Optional[aiohttp.ClientSession] = None
+_alert_session_lock = asyncio.Lock()
+
+
+async def _get_alert_session() -> aiohttp.ClientSession:
+    global _alert_session
+    if _alert_session is not None and not _alert_session.closed:
+        return _alert_session
+
+    async with _alert_session_lock:
+        if _alert_session is not None and not _alert_session.closed:
+            return _alert_session
+        connector = aiohttp.TCPConnector(
+            limit=50,
+            limit_per_host=20,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        _alert_session = aiohttp.ClientSession(connector=connector)
+        return _alert_session
 
 
 def _should_send(alert_key: str) -> bool:
@@ -53,15 +73,15 @@ async def send_alert(
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=message, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    logger.info(f"[ALERT] Sent: {title} — {message[:100]}")
-                    return True
-                else:
-                    logger.warning(f"[ALERT] ntfy returned {resp.status}")
-                    return False
-    except Exception as e:
+        session = await _get_alert_session()
+        async with session.post(url, data=message, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            if resp.status == 200:
+                logger.info(f"[ALERT] Sent: {title} — {message[:100]}")
+                return True
+            else:
+                logger.warning(f"[ALERT] ntfy returned {resp.status}")
+                return False
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError) as e:
         logger.warning(f"[ALERT] Failed to send ntfy alert: {e}")
         return False
 

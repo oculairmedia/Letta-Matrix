@@ -8,11 +8,17 @@ for Matrix display with progress-then-delete pattern.
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
 
 from letta_client import Letta
+from src.core.retry import (
+    is_conversation_busy_error,
+    ConversationBusyError,
+    retry_sync,
+)
 from src.matrix.formatter import is_no_reply
 
 logger = logging.getLogger("matrix_client.streaming")
@@ -128,56 +134,38 @@ class StepStreamReader:
         background: bool = False,
         max_retries: int = 3,
     ) -> Any:
-        """
-        Create a streaming connection with retry on CONVERSATION_BUSY (409).
-        
-        Uses synchronous retry since this runs in a background thread.
-        """
-        import time
-        from src.core.retry import is_conversation_busy_error, ConversationBusyError
-        
-        last_error: Optional[Exception] = None
-        
-        for attempt in range(max_retries + 1):
-            try:
-                return self.client.conversations.messages.create(
+        total_attempts = max_retries + 1
+
+        def _create_stream() -> Any:
+            return self.client.conversations.messages.create(
+                conversation_id=conversation_id,
+                input=message,
+                streaming=True,
+                stream_tokens=False,
+                include_pings=self.include_pings,
+                background=background,
+            )
+
+        try:
+            return retry_sync(
+                _create_stream,
+                max_attempts=total_attempts,
+                base_delay=1.0,
+                max_delay=8.0,
+                operation_name=f"[STREAM-RETRY] create stream for {conversation_id}",
+                logger=logger,
+                retryable_exceptions=(Exception,),
+                should_retry=lambda error: isinstance(error, Exception)
+                and is_conversation_busy_error(error),
+            )
+        except (RuntimeError, ValueError, TypeError, AssertionError) as error:
+            if is_conversation_busy_error(error):
+                raise ConversationBusyError(
                     conversation_id=conversation_id,
-                    input=message,
-                    streaming=True,
-                    stream_tokens=False,
-                    include_pings=self.include_pings,
-                    background=background,
-                )
-            except Exception as e:
-                if is_conversation_busy_error(e):
-                    last_error = e
-                    if attempt < max_retries:
-                        delay = min(1.0 * (2 ** attempt), 8.0)
-                        logger.warning(
-                            f"[STREAM-RETRY] Conversation {conversation_id} is busy, "
-                            f"attempt {attempt + 1}/{max_retries + 1}, "
-                            f"retrying in {delay:.1f}s"
-                        )
-                        time.sleep(delay)
-                        continue
-                    else:
-                        logger.error(
-                            f"[STREAM-RETRY] Conversation {conversation_id} still busy "
-                            f"after {max_retries + 1} attempts"
-                        )
-                        raise ConversationBusyError(
-                            conversation_id=conversation_id,
-                            attempts=max_retries + 1,
-                            last_error=e
-                        ) from e
-                else:
-                    raise
-        
-        raise ConversationBusyError(
-            conversation_id=conversation_id,
-            attempts=max_retries + 1,
-            last_error=last_error
-        )
+                    attempts=total_attempts,
+                    last_error=error,
+                ) from error
+            raise
     
     async def stream_message(
         self,
@@ -204,13 +192,12 @@ class StepStreamReader:
             logger.info(f"Starting step stream for agent {agent_id}")
         
         try:
-            import queue
             import threading
-            
-            chunk_queue: queue.Queue = queue.Queue()
-            error_holder: list = []
+
+            loop = asyncio.get_running_loop()
+            chunk_queue: asyncio.Queue = asyncio.Queue()
             tool_call_count = 0
-            
+
             def _consume_stream():
                 try:
                     if conversation_id:
@@ -235,20 +222,18 @@ class StepStreamReader:
                     for chunk in stream:
                         chunk_count += 1
                         logger.debug(f"[STREAM] Got chunk {chunk_count}")
-                        chunk_queue.put(('chunk', chunk))
+                        loop.call_soon_threadsafe(chunk_queue.put_nowait, ('chunk', chunk))
                     logger.debug(f"[STREAM] Stream complete, {chunk_count} chunks")
-                    chunk_queue.put(('done', None))
-                except Exception as e:
+                    loop.call_soon_threadsafe(chunk_queue.put_nowait, ('done', None))
+                except (RuntimeError, ValueError, TypeError, AssertionError) as e:
                     logger.error(f"[STREAM] Error in stream consumption: {e}", exc_info=True)
-                    error_holder.append(e)
-                    chunk_queue.put(('error', e))
+                    loop.call_soon_threadsafe(chunk_queue.put_nowait, ('error', e))
             
             # Start background thread
             thread = threading.Thread(target=_consume_stream, daemon=True)
             thread.start()
             
             # Consume from queue asynchronously
-            loop = asyncio.get_running_loop()
             start_time = loop.time()
             last_data_time = loop.time()
             
@@ -263,13 +248,13 @@ class StepStreamReader:
                 if idle_seconds > self.idle_data_timeout:
                     logger.error(f"[STREAM] Idle data timeout: no real data for {idle_seconds:.0f}s (limit: {self.idle_data_timeout}s). Killing stale stream.")
                     raise asyncio.TimeoutError()
-                
+
                 try:
-                    item_type, item_data = await loop.run_in_executor(
-                        None,
-                        lambda: chunk_queue.get(timeout=1.0)
+                    item_type, item_data = await asyncio.wait_for(
+                        chunk_queue.get(),
+                        timeout=0.1,
                     )
-                except queue.Empty:
+                except asyncio.TimeoutError:
                     continue
                 
                 if item_type == 'done':
@@ -305,7 +290,7 @@ class StepStreamReader:
                 content=f"Request timed out after {self.timeout} seconds",
                 metadata={"error_type": "timeout"}
             )
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, AssertionError) as e:
             logger.error(f"Stream error: {e}", exc_info=True)
             yield StreamEvent(
                 type=StreamEventType.ERROR,
@@ -451,11 +436,11 @@ class StreamingMessageHandler:
 
     def __init__(
         self,
-        send_message: Callable[[str, str], Any],
+        send_message: Callable[..., Any],
         delete_message: Callable[[str, str], Any],
         room_id: str,
         delete_progress: bool = False,
-        send_final_message: Optional[Callable[[str, str], Any]] = None,
+        send_final_message: Optional[Callable[..., Any]] = None,
     ):
         self.send_message = send_message
         self.delete_message = delete_message
@@ -492,12 +477,20 @@ class StreamingMessageHandler:
             return not target_room
         return False
 
+    async def _send_with_msgtype(self, text: str, msgtype: str) -> str:
+        if msgtype == "m.text":
+            return await self.send_message(self.room_id, text)
+        try:
+            return await self.send_message(self.room_id, text, msgtype=msgtype)
+        except TypeError:
+            return await self.send_message(self.room_id, text)
+
     async def handle_event(self, event: StreamEvent) -> Optional[str]:
         if self.delete_progress and self._progress_event_id and (event.is_progress or event.is_final or event.is_error):
             try:
                 await self.delete_message(self.room_id, self._progress_event_id)
                 logger.debug(f"Deleted progress message {self._progress_event_id}")
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, AssertionError) as e:
                 logger.warning(f"Failed to delete progress message: {e}")
             self._progress_event_id = None
 
@@ -526,9 +519,13 @@ class StreamingMessageHandler:
             if self._progress_event_id:
                 try:
                     await self.delete_message(self.room_id, self._progress_event_id)
-                except Exception:
-                    pass
-            eid = await self.send_message(self.room_id, progress_text)
+                except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError) as progress_delete_error:
+                    logger.debug(
+                        "Failed to replace previous progress message %s: %s",
+                        self._progress_event_id,
+                        progress_delete_error,
+                    )
+            eid = await self._send_with_msgtype(progress_text, "m.notice")
             self._progress_event_id = eid
             return eid
 
@@ -544,7 +541,7 @@ class StreamingMessageHandler:
             error_text = f"⚠️ {event.content}"
             if event.metadata.get('detail'):
                 error_text += f"\n{event.metadata['detail']}"
-            return await self.send_message(self.room_id, error_text)
+            return await self._send_with_msgtype(error_text, "m.notice")
 
         elif event.is_approval_request:
             approval_text = event.format_progress()
@@ -563,7 +560,7 @@ class StreamingMessageHandler:
                         approval_text += f"\n  ```\n  {args}\n  ```"
 
             logger.info(f"[APPROVAL] Sending approval request to Matrix: {len(tool_calls)} tool(s)")
-            return await self.send_message(self.room_id, approval_text)
+            return await self._send_with_msgtype(approval_text, "m.text")
 
         return None
 
@@ -575,7 +572,7 @@ class StreamingMessageHandler:
             if self.delete_progress and self._progress_event_id:
                 try:
                     await self.delete_message(self.room_id, self._progress_event_id)
-                except Exception as e:
+                except (RuntimeError, ValueError, TypeError, AssertionError) as e:
                     logger.warning(f"Failed to delete progress after self-delivery: {e}")
                 self._progress_event_id = None
             self._pending_final_content = None
@@ -596,7 +593,7 @@ class StreamingMessageHandler:
         if self.delete_progress and self._progress_event_id:
             try:
                 await self.delete_message(self.room_id, self._progress_event_id)
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, AssertionError) as e:
                 logger.warning(f"Failed to cleanup progress message: {e}")
             self._progress_event_id = None
 
@@ -627,10 +624,10 @@ class LiveEditStreamingHandler:
 
     def __init__(
         self,
-        send_message: Callable[[str, str], Any],
-        edit_message: Callable[[str, str, str], Any],
+        send_message: Callable[..., Any],
+        edit_message: Callable[..., Any],
         room_id: str,
-        send_final_message: Optional[Callable[[str, str], Any]] = None,
+        send_final_message: Optional[Callable[..., Any]] = None,
         delete_message: Optional[Callable[[str, str], Any]] = None,
     ):
         self.send_message = send_message
@@ -671,9 +668,24 @@ class LiveEditStreamingHandler:
             return not target_room
         return False
 
-    async def handle_event(self, event: StreamEvent) -> Optional[str]:
-        import time
+    async def _send_with_msgtype(self, text: str, msgtype: str) -> str:
+        if msgtype == "m.text":
+            return await self.send_message(self.room_id, text)
+        try:
+            return await self.send_message(self.room_id, text, msgtype=msgtype)
+        except TypeError:
+            return await self.send_message(self.room_id, text)
 
+    async def _edit_with_msgtype(self, event_id: str, text: str, msgtype: str) -> None:
+        if msgtype == "m.text":
+            await self.edit_message(self.room_id, event_id, text)
+            return
+        try:
+            await self.edit_message(self.room_id, event_id, text, msgtype=msgtype)
+        except TypeError:
+            await self.edit_message(self.room_id, event_id, text)
+
+    async def handle_event(self, event: StreamEvent) -> Optional[str]:
         if event.type == StreamEventType.PING:
             return None
 
@@ -701,15 +713,15 @@ class LiveEditStreamingHandler:
                 self._lines.append(error_text)
                 await self._do_edit()
                 return self._event_id
-            return await self.send_message(self.room_id, error_text)
+            return await self._send_with_msgtype(error_text, "m.notice")
 
         if event.is_approval_request:
             line = event.format_progress()
-            self._lines.append(line)
+            self._append_progress_line(event, line)
 
             if self._event_id is None:
                 body = self._build_body()
-                eid = await self.send_message(self.room_id, body)
+                eid = await self._send_with_msgtype(body, "m.text")
                 self._event_id = eid
                 self._last_edit_time = time.monotonic()
                 return eid
@@ -729,11 +741,11 @@ class LiveEditStreamingHandler:
                     self._self_delivered_to_current_room = True
 
             line = event.format_progress()
-            self._lines.append(line)
+            self._append_progress_line(event, line)
 
             if self._event_id is None:
                 body = self._build_body()
-                eid = await self.send_message(self.room_id, body)
+                eid = await self._send_with_msgtype(body, "m.notice")
                 self._event_id = eid
                 self._last_edit_time = time.monotonic()
                 return eid
@@ -763,7 +775,7 @@ class LiveEditStreamingHandler:
     async def _send_final(self, content: str) -> str:
         # Replace progress message with final response (avoids redacted blocks)
         if self._event_id:
-            await self.edit_message(self.room_id, self._event_id, content)
+            await self._edit_with_msgtype(self._event_id, content, "m.text")
             eid = self._event_id
             self._event_id = None
             self._lines.clear()
@@ -774,23 +786,29 @@ class LiveEditStreamingHandler:
         return eid
 
     async def _do_edit(self) -> None:
-        import time
         if not self._event_id:
             return
         body = self._build_body()
-        await self.edit_message(self.room_id, self._event_id, body)
+        await self._edit_with_msgtype(self._event_id, body, "m.notice")
         self._last_edit_time = time.monotonic()
 
     def _build_body(self) -> str:
         return "\n".join(self._lines)
 
+    def _append_progress_line(self, event: StreamEvent, line: str) -> None:
+        if event.type == StreamEventType.TOOL_RETURN and self._lines:
+            tool_name = event.metadata.get("tool_name", "unknown")
+            if self._lines[-1] == f"🔧 {tool_name}...":
+                self._lines[-1] = line
+                return
+        self._lines.append(line)
+
     async def show_progress(self, line: str) -> Optional[str]:
         """Add a progress line and update the live-edit message."""
-        import time
         self._lines.append(line)
         if self._event_id is None:
             body = self._build_body()
-            eid = await self.send_message(self.room_id, body)
+            eid = await self._send_with_msgtype(body, "m.notice")
             self._event_id = eid
             self._last_edit_time = time.monotonic()
             return eid
@@ -811,7 +829,7 @@ class LiveEditStreamingHandler:
             try:
                 await self.delete_message(self.room_id, self._event_id)
                 logger.debug(f"Deleted live-edit progress message {self._event_id} for no-reply")
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, AssertionError) as e:
                 logger.warning(f"Failed to delete live-edit progress for no-reply: {e}")
         self._event_id = None
         self._lines.clear()
@@ -821,7 +839,7 @@ class LiveEditStreamingHandler:
             try:
                 await self.delete_message(self.room_id, self._event_id)
                 logger.debug(f"Deleted progress message {self._event_id} after self-delivery")
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, AssertionError) as e:
                 logger.warning(f"Failed to delete progress after self-delivery: {e}")
         self._event_id = None
         self._lines.clear()

@@ -41,6 +41,7 @@ from src.matrix.document_parser import (
 )
 from src.matrix.formatter import wrap_opencode_routing
 from src.matrix.letta_source_manager import LettaSourceManager  # pyright: ignore[reportMissingImports]
+from src.matrix.config import LettaApiError
 from src.core.retry import retry_async
 
 # Import Letta SDK
@@ -53,6 +54,7 @@ DEFAULT_EMBEDDING_MODEL = "letta/letta-free"
 
 # Thread pool for running sync SDK calls
 _executor = ThreadPoolExecutor(max_workers=4)
+_executor_semaphore = asyncio.Semaphore(4)
 
 
 class LettaFileHandler:
@@ -139,6 +141,8 @@ class LettaFileHandler:
             logger,
         )
         self._source_cache = self._source_manager._source_cache
+        self._http_session: Optional[aiohttp.ClientSession] = None
+        self._http_session_lock = asyncio.Lock()
 
         # Log token status at init
         logger.info(f"LettaFileHandler initialized - matrix_access_token present: {bool(self.matrix_access_token)}, length: {len(self.matrix_access_token) if self.matrix_access_token else 0}")
@@ -157,17 +161,34 @@ class LettaFileHandler:
     async def _run_sync(self, func, *args, **kwargs):
         """Run a synchronous function in a thread pool"""
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            _executor,
-            functools.partial(func, *args, **kwargs)
-        )
+        async with _executor_semaphore:
+            return await loop.run_in_executor(
+                _executor,
+                functools.partial(func, *args, **kwargs)
+            )
+
+    async def _get_http_session(self) -> aiohttp.ClientSession:
+        if self._http_session is not None and not self._http_session.closed:
+            return self._http_session
+
+        async with self._http_session_lock:
+            if self._http_session is not None and not self._http_session.closed:
+                return self._http_session
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                keepalive_timeout=30,
+            )
+            self._http_session = aiohttp.ClientSession(connector=connector)
+            return self._http_session
     
     async def _notify(self, room_id: str, message: str) -> Optional[str]:
         """Send notification to Matrix room if callback is configured. Returns event_id."""
         if self.notify_callback:
             try:
                 return await self.notify_callback(room_id, message)
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError, aiohttp.ClientError) as e:
                 logger.error(f"Failed to send notification: {e}")
         return None
 
@@ -182,7 +203,7 @@ class LettaFileHandler:
                 eid = await self._notify(room_id, message)
                 if eid:
                     self._pending_cleanup_event_ids.append(eid)
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError, aiohttp.ClientError) as e:
                 logger.debug(f"Background notification failed (non-fatal): {e}")
 
         asyncio.ensure_future(_do_notify())
@@ -281,7 +302,14 @@ class LettaFileHandler:
                     await self._notify(room_id, f"⚠️ File processing timed out for {metadata.file_name}")
                 
                 return success
-        except Exception as e:
+        except (
+            FileUploadError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            OSError,
+            ValueError,
+            RuntimeError,
+        ) as e:
             logger.error(f"Error handling file event: {e}", exc_info=True)
             raise FileUploadError(f"Failed to process file upload: {e}")
     
@@ -429,7 +457,7 @@ class LettaFileHandler:
         # Pre-attach search tool so it's available by the time the document is indexed
         try:
             await self.ensure_search_tool_attached(agent_id)
-        except Exception as e:
+        except (LettaApiError, RuntimeError, ValueError, TypeError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.warning(f"Failed to pre-attach search tool for {agent_id}: {e}")
 
         # Send immediate acknowledgement to user
@@ -454,7 +482,7 @@ class LettaFileHandler:
                 logger.info(
                     f"[CONVERSATIONS] Reusing conversation {conversation_id} for temporal workflow"
                 )
-        except Exception as conv_err:
+        except (ImportError, RuntimeError, ValueError) as conv_err:
             logger.debug(
                 f"[CONVERSATIONS] Could not resolve conversation for temporal workflow: {conv_err}"
             )
@@ -489,7 +517,7 @@ class LettaFileHandler:
                 f"Started Temporal workflow {handle.id} for {metadata.file_name} "
                 f"(queue={task_queue})"
             )
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.error(f"Failed to start Temporal workflow for {metadata.file_name}: {e}", exc_info=True)
             # Notify room of failure, fall through to return None
             await self._notify(room_id, f"\u26a0\ufe0f Failed to queue document processing: {e}")
@@ -628,7 +656,7 @@ class LettaFileHandler:
             logger.debug(f"Multimodal message response: {type(response)}")
             return response
             
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, OSError) as e:
             logger.error(f"Error sending multimodal message: {e}", exc_info=True)
             return None
     
@@ -674,7 +702,7 @@ class LettaFileHandler:
                 return '\n'.join(assistant_texts)
             return None
             
-        except Exception as e:
+        except (AttributeError, KeyError, ValueError, TypeError) as e:
             logger.error(f"Error extracting assistant response: {e}")
             return None
     
@@ -762,80 +790,80 @@ class LettaFileHandler:
                 sections = [normalized_text]
         
         try:
-            async with aiohttp.ClientSession() as session:
-                delete_enabled = os.getenv("HAYHOOKS_DELETE_BEFORE_INGEST", "true").lower() in (
-                    "true",
-                    "1",
-                    "yes",
-                )
-                if delete_enabled:
-                    async with session.post(
-                        delete_by_filename_url,
-                        json={
-                            "source_filename": filename,
-                            "room_id": room_id,
-                        },
-                        timeout=aiohttp.ClientTimeout(total=60),
-                    ) as delete_response:
-                        if delete_response.status != 200:
-                            error_text = await delete_response.text()
-                            logger.error(
-                                f"Hayhooks delete-by-filename failed for {filename}: "
-                                f"HTTP {delete_response.status} - {error_text[:500]}"
-                            )
-                            return False
-
-                total_chunks = 0
-                total_sections = len(sections)
-
-                for idx, section in enumerate(sections, start=1):
-                    section_filename = (
-                        filename
-                        if total_sections == 1
-                        else f"{filename} (part {idx}/{total_sections})"
-                    )
-                    payload = {
-                        "text": section,
-                        "filename": section_filename,
+            session = await self._get_http_session()
+            delete_enabled = os.getenv("HAYHOOKS_DELETE_BEFORE_INGEST", "true").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+            if delete_enabled:
+                async with session.post(
+                    delete_by_filename_url,
+                    json={
+                        "source_filename": filename,
                         "room_id": room_id,
-                        "sender": sender,
-                    }
+                    },
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as delete_response:
+                    if delete_response.status != 200:
+                        error_text = await delete_response.text()
+                        logger.error(
+                            f"Hayhooks delete-by-filename failed for {filename}: "
+                            f"HTTP {delete_response.status} - {error_text[:500]}"
+                        )
+                        return False
 
-                    async with session.post(
-                        hayhooks_url,
-                        json=payload,
-                        timeout=aiohttp.ClientTimeout(total=600),
-                    ) as response:
-                        if response.status != 200:
-                            error_text = await response.text()
-                            logger.error(
-                                f"Hayhooks ingest failed for {section_filename}: "
-                                f"HTTP {response.status} - {error_text[:500]}"
-                            )
-                            return False
+            total_chunks = 0
+            total_sections = len(sections)
 
-                        result = await response.json()
-
-                        import json
-                        result_data = result
-                        if isinstance(result.get("result"), str):
-                            result_data = json.loads(result["result"])
-
-                        status = result_data.get("status", "")
-                        if status != "ok":
-                            detail = result_data.get("detail", "Unknown error")
-                            logger.error(
-                                f"Hayhooks ingest error for {section_filename}: {detail}"
-                            )
-                            return False
-
-                        total_chunks += int(result_data.get("chunks_stored", 0) or 0)
-
-                logger.info(
-                    f"Document '{filename}' ingested successfully: "
-                    f"{total_chunks} chunks stored in Weaviate"
+            for idx, section in enumerate(sections, start=1):
+                section_filename = (
+                    filename
+                    if total_sections == 1
+                    else f"{filename} (part {idx}/{total_sections})"
                 )
-                return True
+                payload = {
+                    "text": section,
+                    "filename": section_filename,
+                    "room_id": room_id,
+                    "sender": sender,
+                }
+
+                async with session.post(
+                    hayhooks_url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=600),
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(
+                            f"Hayhooks ingest failed for {section_filename}: "
+                            f"HTTP {response.status} - {error_text[:500]}"
+                        )
+                        return False
+
+                    result = await response.json()
+
+                    import json
+                    result_data = result
+                    if isinstance(result.get("result"), str):
+                        result_data = json.loads(result["result"])
+
+                    status = result_data.get("status", "")
+                    if status != "ok":
+                        detail = result_data.get("detail", "Unknown error")
+                        logger.error(
+                            f"Hayhooks ingest error for {section_filename}: {detail}"
+                        )
+                        return False
+
+                    total_chunks += int(result_data.get("chunks_stored", 0) or 0)
+
+            logger.info(
+                f"Document '{filename}' ingested successfully: "
+                f"{total_chunks} chunks stored in Weaviate"
+            )
+            return True
                         
         except asyncio.TimeoutError:
             logger.error(f"Hayhooks ingest timed out for {filename} (120s)")
@@ -843,7 +871,7 @@ class LettaFileHandler:
         except aiohttp.ClientError as e:
             logger.error(f"Hayhooks connection error for {filename}: {e}")
             return False
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, RuntimeError) as e:
             logger.error(f"Unexpected error ingesting {filename} to Haystack: {e}", exc_info=True)
             return False
 

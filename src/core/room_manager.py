@@ -61,6 +61,27 @@ class MatrixRoomManager:
         self.agent_auth_retry_limit = int(os.getenv("AGENT_AUTH_RETRY_LIMIT", "3"))
         self.agent_auth_backoff_seconds = float(os.getenv("AGENT_AUTH_BACKOFF_SECONDS", "0.5"))
         self.agent_auth_cooldown_seconds = float(os.getenv("AGENT_AUTH_COOLDOWN_SECONDS", "300"))
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is not None and not self._session.closed:
+            return self._session
+
+        async with self._session_lock:
+            if self._session is not None and not self._session.closed:
+                return self._session
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                keepalive_timeout=30,
+            )
+            self._session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._session
 
     async def update_room_name(self, room_id: str, new_name: str) -> bool:
         """Update the name of an existing room"""
@@ -82,15 +103,15 @@ class MatrixRoomManager:
                 "name": f"{new_name} - Letta Agent Chat"
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json=room_name_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Successfully updated room name for {room_id} to '{new_name} - Letta Agent Chat'")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Failed to update room name: {response.status} - {error_text}")
-                        return False
+            session = await self._get_session()
+            async with session.put(url, headers=headers, json=room_name_data, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    logger.info(f"Successfully updated room name for {room_id} to '{new_name} - Letta Agent Chat'")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Failed to update room name: {response.status} - {error_text}")
+                    return False
 
         except Exception as e:
             logger.error(f"Error updating room name for {room_id}: {e}")
@@ -111,22 +132,22 @@ class MatrixRoomManager:
                 "Content-Type": "application/json"
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        members = data.get("joined", {})
-                        # Check if @admin:matrix.oculair.ca is in the room
-                        is_member = "@admin:matrix.oculair.ca" in members
-                        logger.debug(f"Admin membership check for room {room_id}: {is_member}")
-                        return is_member
-                    elif response.status == 403:
-                        # Admin not in room (forbidden access)
-                        logger.debug(f"Admin not in room {room_id} (403 forbidden)")
-                        return False
-                    else:
-                        logger.warning(f"Failed to check room members: {response.status}")
-                        return False
+            session = await self._get_session()
+            async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    members = data.get("joined", {})
+                    # Check if @admin:matrix.oculair.ca is in the room
+                    is_member = "@admin:matrix.oculair.ca" in members
+                    logger.debug(f"Admin membership check for room {room_id}: {is_member}")
+                    return is_member
+                elif response.status == 403:
+                    # Admin not in room (forbidden access)
+                    logger.debug(f"Admin not in room {room_id} (403 forbidden)")
+                    return False
+                else:
+                    logger.warning(f"Failed to check room members: {response.status}")
+                    return False
 
         except Exception as e:
             logger.error(f"Error checking admin membership in room {room_id}: {e}")
@@ -147,21 +168,21 @@ class MatrixRoomManager:
                 "Content-Type": "application/json"
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        members = data.get("joined", {})
-                        is_member = user_id in members
-                        logger.debug(f"Membership check for {user_id} in room {room_id}: {is_member}")
-                        return is_member
-                    elif response.status == 403:
-                        # Not in room (forbidden access)
-                        logger.debug(f"User {user_id} not in room {room_id} (403 forbidden)")
-                        return False
-                    else:
-                        logger.warning(f"Failed to check room members: {response.status}")
-                        return False
+            session = await self._get_session()
+            async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    members = data.get("joined", {})
+                    is_member = user_id in members
+                    logger.debug(f"Membership check for {user_id} in room {room_id}: {is_member}")
+                    return is_member
+                elif response.status == 403:
+                    # Not in room (forbidden access)
+                    logger.debug(f"User {user_id} not in room {room_id} (403 forbidden)")
+                    return False
+                else:
+                    logger.warning(f"Failed to check room members: {response.status}")
+                    return False
 
         except Exception as e:
             logger.error(f"Error checking membership for {user_id} in room {room_id}: {e}")
@@ -187,14 +208,14 @@ class MatrixRoomManager:
                 "Content-Type": "application/json"
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return list(data.get("joined", {}).keys())
-                    else:
-                        logger.warning(f"Failed to get room members: {response.status}")
-                        return []
+            session = await self._get_session()
+            async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return list(data.get("joined", {}).keys())
+                else:
+                    logger.warning(f"Failed to get room members: {response.status}")
+                    return []
 
         except Exception as e:
             logger.error(f"Error getting room members for {room_id}: {e}")
@@ -438,22 +459,22 @@ class MatrixRoomManager:
             agent_username = mapping.matrix_user_id.split(':')[0].replace('@', '')
             agent_password = str(mapping.matrix_password)
             
-            async with aiohttp.ClientSession() as session:
-                agent_token = await self._login_agent_with_recovery(
-                    session,
-                    agent_id,
-                    agent_username,
-                    agent_password,
-                )
-                if not agent_token:
-                    try:
-                        from src.matrix.alerting import alert_auth_failure
-                        await alert_auth_failure(agent_username, room_id)
-                    except Exception as alert_error:
-                        logger.warning(f"Failed to send auth-failure alert for {agent_username}: {alert_error}")
-                    return {user: "failed" for user in self.REQUIRED_ROOM_MEMBERS}
+            session = await self._get_session()
+            agent_token = await self._login_agent_with_recovery(
+                session,
+                agent_id,
+                agent_username,
+                agent_password,
+            )
+            if not agent_token:
+                try:
+                    from src.matrix.alerting import alert_auth_failure
+                    await alert_auth_failure(agent_username, room_id)
+                except Exception as alert_error:
+                    logger.warning(f"Failed to send auth-failure alert for {agent_username}: {alert_error}")
+                return {user: "failed" for user in self.REQUIRED_ROOM_MEMBERS}
                 
-                for required_user in self.REQUIRED_ROOM_MEMBERS:
+            for required_user in self.REQUIRED_ROOM_MEMBERS:
                     if required_user in current_members:
                         results[required_user] = "already_member"
                         logger.debug(f"{required_user} already in room {room_id}")
@@ -539,15 +560,15 @@ class MatrixRoomManager:
                 "password": mapping.matrix_password
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.post(agent_login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"Failed to login as agent {agent_username} to invite admin: {response.status} - {error_text}")
-                        return False
-                    
-                    agent_auth = await response.json()
-                    agent_token = agent_auth.get("access_token")
+            session = await self._get_session()
+            async with session.post(agent_login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"Failed to login as agent {agent_username} to invite admin: {response.status} - {error_text}")
+                    return False
+                
+                agent_auth = await response.json()
+                agent_token = agent_auth.get("access_token")
                 
                 if not agent_token:
                     logger.error(f"No token received for agent {agent_username}")
@@ -594,15 +615,15 @@ class MatrixRoomManager:
                 "Content-Type": "application/json"
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"✅ Admin successfully joined room {room_id}")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.warning(f"Admin could not join room {room_id}: {response.status} - {error_text}")
-                        return False
+            session = await self._get_session()
+            async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    logger.info(f"✅ Admin successfully joined room {room_id}")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.warning(f"Admin could not join room {room_id}: {response.status} - {error_text}")
+                    return False
         
         except Exception as e:
             logger.error(f"Error accepting invitation for admin: {e}")
@@ -615,24 +636,24 @@ class MatrixRoomManager:
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json"
             }
-            async with aiohttp.ClientSession() as session:
-                leave_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/leave"
-                async with session.post(leave_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Left room {room_id}")
-                    elif response.status == 403:
-                        logger.debug(f"Already not in room {room_id} (403)")
-                    else:
-                        error_text = await response.text()
-                        logger.warning(f"Failed to leave room {room_id}: {response.status} - {error_text}")
-                        return False
+            session = await self._get_session()
+            leave_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/leave"
+            async with session.post(leave_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    logger.info(f"Left room {room_id}")
+                elif response.status == 403:
+                    logger.debug(f"Already not in room {room_id} (403)")
+                else:
+                    error_text = await response.text()
+                    logger.warning(f"Failed to leave room {room_id}: {response.status} - {error_text}")
+                    return False
 
-                forget_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/forget"
-                async with session.post(forget_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Forgot room {room_id}")
-                    else:
-                        logger.debug(f"Could not forget room {room_id}: {response.status}")
+            forget_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/forget"
+            async with session.post(forget_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    logger.info(f"Forgot room {room_id}")
+                else:
+                    logger.debug(f"Could not forget room {room_id}: {response.status}")
 
             return True
         except Exception as e:
@@ -650,12 +671,12 @@ class MatrixRoomManager:
         try:
             login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
             login_data = {"type": "m.login.password", "user": username, "password": password}
-            async with aiohttp.ClientSession() as session:
-                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status != 200:
-                        logger.warning(f"Cannot login as {username} to leave room {room_id}")
-                        return False
-                    token = (await response.json()).get("access_token")
+            session = await self._get_session()
+            async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status != 200:
+                    logger.warning(f"Cannot login as {username} to leave room {room_id}")
+                    return False
+                token = (await response.json()).get("access_token")
             if not token:
                 return False
             return await self.leave_room(room_id, token)
@@ -674,15 +695,15 @@ class MatrixRoomManager:
                 "Authorization": f"Bearer {admin_token}",
                 "Content-Type": "application/json"
             }
-            async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Removed room {room_id} from space {space_id}")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.warning(f"Failed to remove room {room_id} from space: {response.status} - {error_text}")
-                        return False
+            session = await self._get_session()
+            async with session.put(url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    logger.info(f"Removed room {room_id} from space {space_id}")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.warning(f"Failed to remove room {room_id} from space: {response.status} - {error_text}")
+                    return False
         except Exception as e:
             logger.error(f"Error removing room {room_id} from space {space_id}: {e}")
             return False
@@ -703,27 +724,27 @@ class MatrixRoomManager:
                 "Content-Type": "application/json"
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status != 200:
-                        logger.error(f"Failed to get joined rooms: {response.status}")
-                        return None
+            session = await self._get_session()
+            async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status != 200:
+                    logger.error(f"Failed to get joined rooms: {response.status}")
+                    return None
 
-                    data = await response.json()
-                    room_ids = data.get("joined_rooms", [])
+                data = await response.json()
+                room_ids = data.get("joined_rooms", [])
 
-                # Check each room to see if it matches our agent
-                expected_name = f"{agent_name} - Letta Agent Chat"
-                for room_id in room_ids:
-                    # Get room state to check name
-                    state_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.name"
-                    async with session.get(state_url, headers=headers) as state_response:
-                        if state_response.status == 200:
-                            state_data = await state_response.json()
-                            room_name = state_data.get("name", "")
-                            if room_name == expected_name:
-                                logger.info(f"Found existing room for agent {agent_name}: {room_id}")
-                                return room_id
+            # Check each room to see if it matches our agent
+            expected_name = f"{agent_name} - Letta Agent Chat"
+            for room_id in room_ids:
+                # Get room state to check name
+                state_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.name"
+                async with session.get(state_url, headers=headers) as state_response:
+                    if state_response.status == 200:
+                        state_data = await state_response.json()
+                        room_name = state_data.get("name", "")
+                        if room_name == expected_name:
+                            logger.info(f"Found existing room for agent {agent_name}: {room_id}")
+                            return room_id
 
                 logger.info(f"No existing room found for agent {agent_name}")
                 return None
@@ -788,107 +809,107 @@ class MatrixRoomManager:
             }
 
             # Login as the agent user
-            async with aiohttp.ClientSession() as session:
-                async with session.post(agent_login_url, json=login_data) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"Failed to login as agent user {agent_username}: {response.status} - {error_text}")
-                        return None
-
-                    agent_auth = await response.json()
-                    agent_token = agent_auth.get("access_token")
-
-                if not agent_token:
-                    logger.error(f"No access token received for agent user {agent_username}")
+            session = await self._get_session()
+            async with session.post(agent_login_url, json=login_data) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"Failed to login as agent user {agent_username}: {response.status} - {error_text}")
                     return None
 
-                # Now create the room as the agent user (inside the session)
-                room_url = f"{self.homeserver_url}/_matrix/client/r0/createRoom"
+                agent_auth = await response.json()
+                agent_token = agent_auth.get("access_token")
 
-                invites = [
-                    "@admin:matrix.oculair.ca",  # Your actual admin account
-                    self.admin_username,  # Admin user (matrixadmin)
-                    self.config.username,  # Main Letta bot (@letta)
-                    "@oc_matrix_synapse_deployment:matrix.oculair.ca",  # OpenCode bridge bot for inter-agent messaging
+            if not agent_token:
+                logger.error(f"No access token received for agent user {agent_username}")
+                return None
+
+            # Now create the room as the agent user (inside the session)
+            room_url = f"{self.homeserver_url}/_matrix/client/r0/createRoom"
+
+            invites = [
+                "@admin:matrix.oculair.ca",  # Your actual admin account
+                self.admin_username,  # Admin user (matrixadmin)
+                self.config.username,  # Main Letta bot (@letta)
+                "@oc_matrix_synapse_deployment:matrix.oculair.ca",  # OpenCode bridge bot for inter-agent messaging
+            ]
+
+            room_data = {
+                "name": f"{mapping.agent_name} - Letta Agent Chat",
+                "topic": f"Private chat with Letta agent: {mapping.agent_name}",
+                "preset": "trusted_private_chat",  # Allows invited users to see history
+                "invite": invites,
+                "is_direct": False,
+                "initial_state": [
+                    {
+                        "type": "m.room.guest_access",
+                        "state_key": "",
+                        "content": {"guest_access": "forbidden"}
+                    },
+                    {
+                        "type": "m.room.history_visibility",
+                        "state_key": "",
+                        "content": {"history_visibility": "shared"}
+                    }
                 ]
+            }
 
-                room_data = {
-                    "name": f"{mapping.agent_name} - Letta Agent Chat",
-                    "topic": f"Private chat with Letta agent: {mapping.agent_name}",
-                    "preset": "trusted_private_chat",  # Allows invited users to see history
-                    "invite": invites,
-                    "is_direct": False,
-                    "initial_state": [
-                        {
-                            "type": "m.room.guest_access",
-                            "state_key": "",
-                            "content": {"guest_access": "forbidden"}
-                        },
-                        {
-                            "type": "m.room.history_visibility",
-                            "state_key": "",
-                            "content": {"history_visibility": "shared"}
-                        }
-                    ]
-                }
+            headers = {
+                "Authorization": f"Bearer {agent_token}",
+                "Content-Type": "application/json"
+            }
 
-                headers = {
-                    "Authorization": f"Bearer {agent_token}",
-                    "Content-Type": "application/json"
-                }
+            logger.info(f"Creating room as agent {agent_username} for {mapping.agent_name} with invites: {invites}")
 
-                logger.info(f"Creating room as agent {agent_username} for {mapping.agent_name} with invites: {invites}")
+            async with session.post(room_url, headers=headers, json=room_data, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    room_id = data.get("room_id")
+                    logger.info(f"Created room {room_id} for agent {mapping.agent_name}")
 
-                async with session.post(room_url, headers=headers, json=room_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        room_id = data.get("room_id")
-                        logger.info(f"Created room {room_id} for agent {mapping.agent_name}")
+                    # Update mapping with room info
+                    mapping.room_id = room_id
+                    mapping.room_created = True
 
-                        # Update mapping with room info
-                        mapping.room_id = room_id
-                        mapping.room_created = True
+                    # Initialize invitation status tracking
+                    mapping.invitation_status = {user_id: "invited" for user_id in invites}
 
-                        # Initialize invitation status tracking
-                        mapping.invitation_status = {user_id: "invited" for user_id in invites}
+                    # Save updated mappings
+                    await self.save_mappings()
 
-                        # Save updated mappings
-                        await self.save_mappings()
+                    # Add the room to the Letta Agents space
+                    if self.space_manager.get_space_id():
+                        logger.info(f"Adding room {room_id} to Letta Agents space")
+                        space_success = await self.space_manager.add_room_to_space(room_id, mapping.agent_name)
+                        if space_success:
+                            logger.info(f"Successfully added room to space")
+                        else:
+                            logger.warning(f"Failed to add room to space")
 
-                        # Add the room to the Letta Agents space
-                        if self.space_manager.get_space_id():
-                            logger.info(f"Adding room {room_id} to Letta Agents space")
-                            space_success = await self.space_manager.add_room_to_space(room_id, mapping.agent_name)
-                            if space_success:
-                                logger.info(f"Successfully added room to space")
-                            else:
-                                logger.warning(f"Failed to add room to space")
+                    # Now auto-accept the invitations for admin and letta users
+                    await self.auto_accept_invitations_with_tracking(room_id, mapping)
 
-                        # Now auto-accept the invitations for admin and letta users
-                        await self.auto_accept_invitations_with_tracking(room_id, mapping)
-                        
-                        # Ensure all required members have joined (not just invited)
-                        member_results = await self.ensure_required_members(room_id, agent_id)
-                        for user_id, status in member_results.items():
-                            if status == "invited":
-                                logger.info(f"✅ Invited {user_id} to new room {room_id}")
-                            elif status == "failed":
-                                logger.warning(f"⚠️  Failed to add {user_id} to new room {room_id}")
+                    # Ensure all required members have joined (not just invited)
+                    member_results = await self.ensure_required_members(room_id, agent_id)
+                    for user_id, status in member_results.items():
+                        if status == "invited":
+                            logger.info(f"✅ Invited {user_id} to new room {room_id}")
+                        elif status == "failed":
+                            logger.warning(f"⚠️  Failed to add {user_id} to new room {room_id}")
 
-                        # Import recent conversation history for UI continuity
-                        logger.info(f"Importing recent history for agent {mapping.agent_name}")
-                        await self.import_recent_history(
-                            agent_id=agent_id,
-                            agent_username=mapping.matrix_user_id,
-                            agent_password=mapping.matrix_password,
-                            room_id=room_id
-                        )
+                    # Import recent conversation history for UI continuity
+                    logger.info(f"Importing recent history for agent {mapping.agent_name}")
+                    await self.import_recent_history(
+                        agent_id=agent_id,
+                        agent_username=mapping.matrix_user_id,
+                        agent_password=mapping.matrix_password,
+                        room_id=room_id
+                    )
 
-                        return room_id
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Failed to create room for agent {mapping.agent_name}: {response.status} - {error_text}")
-                        return None
+                    return room_id
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Failed to create room for agent {mapping.agent_name}: {response.status} - {error_text}")
+                    return None
 
         except Exception as e:
             logger.error(f"Error creating room for agent {agent_id}: {e}")
@@ -934,55 +955,55 @@ class MatrixRoomManager:
                     "password": password
                 }
 
-                async with aiohttp.ClientSession() as session:
-                    # Login
-                    async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
-                        if response.status != 200:
-                            logger.error(f"Failed to login as {username} to accept invitation")
-                            if mapping.invitation_status:
-                                mapping.invitation_status[username] = "failed"
-                            continue
-
-                        auth_data = await response.json()
-                        user_token = auth_data.get("access_token")
-
-                    if not user_token:
-                        logger.error(f"No token received for {username}")
+                session = await self._get_session()
+                # Login
+                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to login as {username} to accept invitation")
                         if mapping.invitation_status:
                             mapping.invitation_status[username] = "failed"
                         continue
 
-                    # Accept the invitation
-                    join_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/join"
-                    headers = {
-                        "Authorization": f"Bearer {user_token}",
-                        "Content-Type": "application/json"
-                    }
+                    auth_data = await response.json()
+                    user_token = auth_data.get("access_token")
 
-                    async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
-                        if response.status == 200:
-                            logger.info(f"User {username} successfully joined room {room_id}")
+                if not user_token:
+                    logger.error(f"No token received for {username}")
+                    if mapping.invitation_status:
+                        mapping.invitation_status[username] = "failed"
+                    continue
+
+                # Accept the invitation
+                join_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/join"
+                headers = {
+                    "Authorization": f"Bearer {user_token}",
+                    "Content-Type": "application/json"
+                }
+
+                async with session.post(join_url, headers=headers, json={}, timeout=DEFAULT_TIMEOUT) as response:
+                    if response.status == 200:
+                        logger.info(f"User {username} successfully joined room {room_id}")
+                        if mapping.invitation_status:
+                            mapping.invitation_status[username] = "joined"
+                        # Cache the successful join
+                        self._membership_cache[cache_key] = True
+                    elif response.status == 403:
+                        error_text = await response.text()
+                        if "already in the room" in error_text or "already joined" in error_text:
+                            logger.info(f"User {username} is already in room {room_id}")
                             if mapping.invitation_status:
                                 mapping.invitation_status[username] = "joined"
-                            # Cache the successful join
+                            # Cache the membership
                             self._membership_cache[cache_key] = True
-                        elif response.status == 403:
-                            error_text = await response.text()
-                            if "already in the room" in error_text or "already joined" in error_text:
-                                logger.info(f"User {username} is already in room {room_id}")
-                                if mapping.invitation_status:
-                                    mapping.invitation_status[username] = "joined"
-                                # Cache the membership
-                                self._membership_cache[cache_key] = True
-                            else:
-                                logger.warning(f"User {username} forbidden from joining room {room_id}: {error_text}")
-                                if mapping.invitation_status:
-                                    mapping.invitation_status[username] = "failed"
                         else:
-                            error_text = await response.text()
-                            logger.warning(f"User {username} could not join room {room_id}: {response.status} - {error_text}")
+                            logger.warning(f"User {username} forbidden from joining room {room_id}: {error_text}")
                             if mapping.invitation_status:
                                 mapping.invitation_status[username] = "failed"
+                    else:
+                        error_text = await response.text()
+                        logger.warning(f"User {username} could not join room {room_id}: {response.status} - {error_text}")
+                        if mapping.invitation_status:
+                            mapping.invitation_status[username] = "failed"
 
             except Exception as e:
                 logger.error(f"Error accepting invitation for {username}: {e}")
@@ -1012,18 +1033,18 @@ class MatrixRoomManager:
             # 1. Fetch recent messages from Letta proxy
             messages_url = f"http://192.168.50.90:8289/v1/agents/{agent_id}/messages"
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(messages_url, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status != 200:
-                        logger.warning(f"Could not fetch history for agent {agent_id}: {response.status}")
-                        return
+            session = await self._get_session()
+            async with session.get(messages_url, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status != 200:
+                    logger.warning(f"Could not fetch history for agent {agent_id}: {response.status}")
+                    return
 
-                    data = await response.json()
-                    # Handle both array and object responses
-                    if isinstance(data, dict):
-                        messages = data.get("items", [])
-                    else:
-                        messages = data
+                data = await response.json()
+                # Handle both array and object responses
+                if isinstance(data, dict):
+                    messages = data.get("items", [])
+                else:
+                    messages = data
 
             if not messages:
                 logger.info(f"No history to import for agent {agent_id}")

@@ -162,7 +162,7 @@ class TestIdentityClientPool:
     ):
         with patch("src.matrix.identity_client_pool.AsyncClient") as mock_async_client:
             mock_client = MagicMock()
-            mock_client.whoami = AsyncMock(side_effect=Exception("M_UNKNOWN_TOKEN"))
+            mock_client.whoami = AsyncMock(side_effect=RuntimeError("M_UNKNOWN_TOKEN"))
             mock_client.close = AsyncMock()
             mock_async_client.return_value = mock_client
 

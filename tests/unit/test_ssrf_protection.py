@@ -1,7 +1,7 @@
 import pytest
 import socket
-from unittest.mock import patch, AsyncMock, Mock
-from src.utils.ssrf_protection import SSRFError, validate_url
+from unittest.mock import patch, Mock
+from src.utils.ssrf_protection import SSRFError, build_pinned_connector, validate_url
 
 
 class TestSSRFProtectionDirect:
@@ -104,8 +104,8 @@ class TestAgentMediaIntegration:
         mock_config.homeserver_url = "http://test-synapse:8008"
         mock_logger = Mock()
         
-        with patch('src.matrix.agent_media.validate_url') as mock_validate:
-            mock_validate.side_effect = SSRFError("Blocked IP: 10.0.0.1")
+        with patch('src.matrix.agent_media.build_pinned_connector') as mock_build:
+            mock_build.side_effect = SSRFError("Blocked IP: 10.0.0.1")
             
             result = await fetch_and_send_image(
                 room_id="!test:matrix.test",
@@ -126,8 +126,8 @@ class TestAgentMediaIntegration:
         mock_config.homeserver_url = "http://test-synapse:8008"
         mock_logger = Mock()
         
-        with patch('src.matrix.agent_media.validate_url') as mock_validate:
-            mock_validate.side_effect = SSRFError("Blocked IP: 10.0.0.1")
+        with patch('src.matrix.agent_media.build_pinned_connector') as mock_build:
+            mock_build.side_effect = SSRFError("Blocked IP: 10.0.0.1")
             
             result = await fetch_and_send_file(
                 room_id="!test:matrix.test",
@@ -148,8 +148,8 @@ class TestAgentMediaIntegration:
         mock_config.homeserver_url = "http://test-synapse:8008"
         mock_logger = Mock()
         
-        with patch('src.matrix.agent_media.validate_url') as mock_validate:
-            mock_validate.side_effect = SSRFError("Blocked IP: 10.0.0.1")
+        with patch('src.matrix.agent_media.build_pinned_connector') as mock_build:
+            mock_build.side_effect = SSRFError("Blocked IP: 10.0.0.1")
             
             result = await fetch_and_send_video(
                 room_id="!test:matrix.test",
@@ -161,3 +161,29 @@ class TestAgentMediaIntegration:
             
             assert result is None
             mock_logger.warning.assert_called()
+
+
+class TestPinnedResolver:
+    @pytest.mark.asyncio
+    @patch('socket.getaddrinfo')
+    async def test_build_pinned_connector_uses_resolved_public_ip(self, mock_getaddrinfo):
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('93.184.216.34', 80))
+        ]
+        _, connector = build_pinned_connector("http://example.com/file.png")
+        resolver = connector._resolver
+        try:
+            result = await resolver.resolve("example.com", 80)
+        finally:
+            await connector.close()
+
+        assert result[0]["host"] == "93.184.216.34"
+        mock_getaddrinfo.assert_called_once()
+
+    @patch('socket.getaddrinfo')
+    def test_build_pinned_connector_blocks_private_dns_target(self, mock_getaddrinfo):
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.0.0.1', 80))
+        ]
+        with pytest.raises(SSRFError):
+            build_pinned_connector("http://evil.example/file.png")

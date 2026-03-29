@@ -36,29 +36,26 @@ async def cleanup_file_artifacts(input: CleanupArtifactsInput) -> CleanupArtifac
             os.unlink(input.temp_file_path)
             temp_removed = True
 
-        if input.remove_persistent and input.file_hash:
+        if input.remove_persistent:
+            if input.persistent_path and os.path.exists(input.persistent_path):
+                os.unlink(input.persistent_path)
+                persistent_removed = True
+                parent = os.path.dirname(input.persistent_path)
+                if parent and os.path.isdir(parent) and not os.listdir(parent):
+                    os.rmdir(parent)
 
-            def _remove_hash(index: dict) -> bool:
-                entry = index.get(input.file_hash)
-                if not entry:
-                    return False
-                if input.persistent_path and entry.get("persistent_path") != input.persistent_path:
-                    return False
-                index.pop(input.file_hash, None)
-                return True
+            if input.file_hash:
 
-            hash_entry_removed = _mutate_hash_index_locked(_remove_hash)
+                def _remove_hash(index: dict) -> bool:
+                    entry = index.get(input.file_hash)
+                    if not entry:
+                        return False
+                    if input.persistent_path and entry.get("persistent_path") != input.persistent_path:
+                        return False
+                    index.pop(input.file_hash, None)
+                    return True
 
-        if (
-            input.remove_persistent
-            and input.persistent_path
-            and os.path.exists(input.persistent_path)
-        ):
-            os.unlink(input.persistent_path)
-            persistent_removed = True
-            parent = os.path.dirname(input.persistent_path)
-            if parent and os.path.isdir(parent) and not os.listdir(parent):
-                os.rmdir(parent)
+                hash_entry_removed = _mutate_hash_index_locked(_remove_hash)
 
         elapsed = int((time.monotonic() - start) * 1000)
         activity.logger.info(

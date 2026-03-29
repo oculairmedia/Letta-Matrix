@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Header, HTTPException, status
-from typing import List, Optional
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Dict, List, Optional
 from urllib.parse import unquote
 import logging
 import os
@@ -43,6 +44,39 @@ from src.core.mapping_service import get_all_mappings
 from src.utils.password import generate_deterministic_identity_password
 
 logger = logging.getLogger(__name__)
+
+
+_IDENTITY_HTTP_SESSION: Optional[aiohttp.ClientSession] = None
+_IDENTITY_HTTP_SESSION_LOCK = asyncio.Lock()
+
+
+async def _get_identity_http_session() -> aiohttp.ClientSession:
+    global _IDENTITY_HTTP_SESSION
+    if _IDENTITY_HTTP_SESSION is not None and not _IDENTITY_HTTP_SESSION.closed:
+        return _IDENTITY_HTTP_SESSION
+
+    async with _IDENTITY_HTTP_SESSION_LOCK:
+        if _IDENTITY_HTTP_SESSION is not None and not _IDENTITY_HTTP_SESSION.closed:
+            return _IDENTITY_HTTP_SESSION
+        connector = aiohttp.TCPConnector(
+            limit=100,
+            limit_per_host=50,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        _IDENTITY_HTTP_SESSION = aiohttp.ClientSession(connector=connector)
+        return _IDENTITY_HTTP_SESSION
+
+
+@asynccontextmanager
+async def _identity_http_session_scope(
+    session: Optional[aiohttp.ClientSession] = None,
+) -> AsyncIterator[aiohttp.ClientSession]:
+    if session is not None:
+        yield session
+        return
+    pooled_session = await _get_identity_http_session()
+    yield pooled_session
 
 router = APIRouter(prefix="/api/v1", tags=["identities"])
 
@@ -99,13 +133,17 @@ def _sanitize_letta_name(name: str, remove_legacy_huly_prefix: bool) -> str:
     return name
 
 
-async def _get_matrix_display_name(mxid: str, access_token: str) -> Optional[str]:
+async def _get_matrix_display_name(
+    mxid: str,
+    access_token: str,
+    session: Optional[aiohttp.ClientSession] = None,
+) -> Optional[str]:
     homeserver_url = os.getenv("MATRIX_HOMESERVER_URL", "https://matrix.oculair.ca")
     url = f"{homeserver_url}/_matrix/client/v3/profile/{mxid}/displayname"
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
+        async with _identity_http_session_scope(session) as active_session:
+            async with active_session.get(url, headers=headers) as response:
                 if response.status != 200:
                     return None
                 payload = await response.json()
@@ -115,13 +153,17 @@ async def _get_matrix_display_name(mxid: str, access_token: str) -> Optional[str
         return None
 
 
-async def _get_room_name(room_id: str, access_token: str) -> Optional[str]:
+async def _get_room_name(
+    room_id: str,
+    access_token: str,
+    session: Optional[aiohttp.ClientSession] = None,
+) -> Optional[str]:
     homeserver_url = os.getenv("MATRIX_HOMESERVER_URL", "https://matrix.oculair.ca")
     url = f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/state/m.room.name"
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
+        async with _identity_http_session_scope(session) as active_session:
+            async with active_session.get(url, headers=headers) as response:
                 if response.status != 200:
                     return None
                 payload = await response.json()
@@ -136,6 +178,7 @@ async def _provision_login(
     localpart: str,
     password: str,
     retries: int = 1,
+    session: Optional[aiohttp.ClientSession] = None,
 ) -> Optional[str]:
     login_url = f"{homeserver_url}/_matrix/client/v3/login"
     login_data = {
@@ -146,8 +189,8 @@ async def _provision_login(
 
     for attempt in range(1, retries + 1):
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(login_url, json=login_data) as resp:
+            async with _identity_http_session_scope(session) as active_session:
+                async with active_session.post(login_url, json=login_data) as resp:
                     if resp.status == 200:
                         result = await resp.json()
                         token = result.get("access_token")
@@ -165,6 +208,7 @@ async def _send_admin_password_reset_command(
     homeserver_url: str,
     localpart: str,
     password: str,
+    session: Optional[aiohttp.ClientSession] = None,
 ) -> bool:
     admin_room_id = os.getenv("MATRIX_ADMIN_ROOM_ID", "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca")
     command = f"!admin users reset-password {localpart} {password}"
@@ -186,8 +230,8 @@ async def _send_admin_password_reset_command(
             "Content-Type": "application/json",
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.put(
+            async with _identity_http_session_scope(session) as active_session:
+                async with active_session.put(
                     url,
                     headers=headers,
                     json={"msgtype": "m.text", "body": command},
@@ -211,6 +255,7 @@ async def _reset_password_and_verify_login(
     localpart: str,
     password: str,
     max_attempts: int = 3,
+    session: Optional[aiohttp.ClientSession] = None,
 ) -> Optional[str]:
     for attempt in range(1, max_attempts + 1):
         reset_ok = await _send_admin_password_reset_command(
@@ -218,11 +263,18 @@ async def _reset_password_and_verify_login(
             homeserver_url,
             localpart,
             password,
+            session=session,
         )
         if not reset_ok:
             continue
 
-        access_token = await _provision_login(homeserver_url, localpart, password, retries=1)
+        access_token = await _provision_login(
+            homeserver_url,
+            localpart,
+            password,
+            retries=1,
+            session=session,
+        )
         if access_token:
             return access_token
 
@@ -351,6 +403,52 @@ async def identity_health(identity_type: Optional[str] = None):
     actionable_agents: List[dict[str, object]] = []
     now_ts = int(time.time())
 
+    identities_with_tokens = [
+        identity
+        for identity in identities
+        if identity.access_token is not None and str(identity.access_token)
+    ]
+
+    token_validation_by_identity: Dict[str, tuple[bool, Optional[str]]] = {}
+    if identities_with_tokens:
+        token_results = await asyncio.gather(
+            *(monitor._validate_identity_token(identity) for identity in identities_with_tokens),
+            return_exceptions=True,
+        )
+        for identity, result in zip(identities_with_tokens, token_results):
+            identity_id = str(identity.id)
+            if isinstance(result, BaseException):
+                token_validation_by_identity[identity_id] = (False, str(result))
+            else:
+                valid = bool(result)
+                token_validation_by_identity[identity_id] = (
+                    valid,
+                    None if valid else "token_invalid",
+                )
+
+    matrix_display_name_by_identity: Dict[str, Optional[str]] = {}
+    if identities_with_tokens:
+        shared_session = await _get_identity_http_session()
+        display_name_results = await asyncio.gather(
+            *(
+                _get_matrix_display_name(
+                    str(identity.mxid),
+                    str(identity.access_token),
+                    session=shared_session,
+                )
+                for identity in identities_with_tokens
+            ),
+            return_exceptions=True,
+        )
+        for identity, result in zip(identities_with_tokens, display_name_results):
+            identity_id = str(identity.id)
+            if isinstance(result, BaseException):
+                matrix_display_name_by_identity[identity_id] = None
+            else:
+                matrix_display_name_by_identity[identity_id] = (
+                    result if isinstance(result, str) else None
+                )
+
     for identity in identities:
         checked += 1
         identity_id = str(identity.id)
@@ -370,22 +468,17 @@ async def identity_health(identity_type: Optional[str] = None):
         token_valid = False
         token_error: Optional[str] = None
         if access_token:
-            try:
-                token_valid = await monitor._validate_identity_token(identity)
-                if not token_valid:
-                    token_error = "token_invalid"
-            except Exception as exc:
-                token_valid = False
-                token_error = str(exc)
+            token_valid, token_error = token_validation_by_identity.get(
+                identity_id,
+                (False, "token_invalid"),
+            )
         else:
             token_error = "missing_access_token"
         if not token_valid:
             token_invalid += 1
             issues.append("token_invalid")
 
-        matrix_display_name: Optional[str] = None
-        if access_token:
-            matrix_display_name = await _get_matrix_display_name(mxid, access_token)
+        matrix_display_name: Optional[str] = matrix_display_name_by_identity.get(identity_id)
 
         mapping_agent_name: Optional[str] = None
         mapping_password: Optional[str] = None
@@ -1093,10 +1186,17 @@ async def provision_identity(
         )
     
     password = generate_deterministic_identity_password(localpart, password_secret)
-    
+
     user_manager = MatrixUserManager(homeserver_url, admin_username, admin_password)
-    
-    access_token = await _provision_login(homeserver_url, localpart, password, retries=3)
+    shared_session = await _get_identity_http_session()
+
+    access_token = await _provision_login(
+        homeserver_url,
+        localpart,
+        password,
+        retries=3,
+        session=shared_session,
+    )
     if access_token is None:
         user_state = await user_manager.check_user_exists(localpart)
 
@@ -1111,9 +1211,21 @@ async def provision_identity(
                     display_name=display_name,
                     error=f"Failed to create Matrix user {mxid}",
                 )
-            access_token = await _provision_login(homeserver_url, localpart, password, retries=3)
+            access_token = await _provision_login(
+                homeserver_url,
+                localpart,
+                password,
+                retries=3,
+                session=shared_session,
+            )
         else:
-            access_token = await _provision_login(homeserver_url, localpart, password, retries=3)
+            access_token = await _provision_login(
+                homeserver_url,
+                localpart,
+                password,
+                retries=3,
+                session=shared_session,
+            )
 
         if access_token is None:
             access_token = await _reset_password_and_verify_login(
@@ -1122,6 +1234,7 @@ async def provision_identity(
                 localpart,
                 password,
                 max_attempts=3,
+                session=shared_session,
             )
 
     if access_token is None:

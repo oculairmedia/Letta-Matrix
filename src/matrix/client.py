@@ -3,6 +3,7 @@ import os
 import logging
 import time
 from typing import Optional, Dict, Any, Tuple, Union
+import aiohttp
 from nio import (
     AsyncClient,
     RoomMessageText,
@@ -14,6 +15,7 @@ from nio import (
 )
 from nio.responses import JoinError
 from nio.exceptions import RemoteProtocolError
+from sqlalchemy.exc import SQLAlchemyError
 
 # Import our authentication manager
 from src.matrix.auth import MatrixAuthManager
@@ -171,8 +173,10 @@ def _on_letta_task_done(key: Tuple[str, str], task: asyncio.Task) -> None:
 
             room_id, agent_id = key
             asyncio.get_event_loop().create_task(alert_letta_error(agent_id, room_id, str(exc)))
-        except Exception:
-            pass
+        except (ImportError, RuntimeError, ValueError) as alert_error:
+            logging.getLogger('matrix_client').debug(
+                f'[BG-TASK] Failed to enqueue alert for {key}: {alert_error}'
+            )
 
 
 async def cancel_all_letta_tasks() -> None:
@@ -286,7 +290,7 @@ async def file_callback(
                     f'No agent mapping for room {room.room_id}, skipping file processing (relay room)'
                 )
                 return
-        except Exception as e:
+        except (ImportError, RuntimeError, ValueError, SQLAlchemyError) as e:
             logger.warning(f'Could not query agent mappings: {e}, skipping file processing')
             return
 
@@ -305,7 +309,7 @@ async def file_callback(
             try:
                 await file_handler.ensure_search_tool_attached(agent_id)
                 logger.info(f'[FILE] search_documents tool verified for agent {agent_id}')
-            except Exception as attach_err:
+            except (RuntimeError, ValueError, TypeError, LettaApiError, MatrixClientError, asyncio.TimeoutError, aiohttp.ClientError) as attach_err:
                 logger.error(f'[FILE] Failed to attach search_documents tool: {attach_err}')
 
         if isinstance(file_result, (list, str)):
@@ -327,7 +331,7 @@ async def file_callback(
                     else:
                         # Edit subsequent status messages to blank (avoids "Message deleted")
                         await edit_message_as_agent(room.room_id, eid, '\u200b', config, logger)
-                except Exception as cleanup_err:
+                except (RuntimeError, ValueError, TypeError, MatrixClientError, LettaApiError, asyncio.TimeoutError, aiohttp.ClientError) as cleanup_err:
                     logger.debug(
                         f'[FILE-CLEANUP] Failed to clean up status message {eid}: {cleanup_err}'
                     )
@@ -336,7 +340,7 @@ async def file_callback(
         logger.error(f'File upload error: {e}')
         # File handler will send notifications
 
-    except Exception as e:
+    except (MatrixClientError, LettaApiError, asyncio.TimeoutError, RuntimeError, ValueError) as e:
         logger.error(f'Unexpected error in file callback: {e}', exc_info=True)
 
 
@@ -370,8 +374,14 @@ class _MessageCallbackRouter:
                 return 'bridge_originated'
 
         body = (getattr(event, 'body', None) or source_content.get('body', '') or '')
+        msgtype = source_content.get('msgtype')
         sender_is_machine = event.sender.startswith('@agent_') or event.sender.startswith('@oc_')
         bridge_like = bool(source_content.get('m.forwarded') or source_content.get('m.bridge_originated'))
+
+        if msgtype == 'm.notice' and sender_is_machine:
+            self.logger.debug(f'Ignoring bot/system m.notice from {event.sender}')
+            return 'bot_notice'
+
         if _is_no_text_fallback_echo(body) and (sender_is_machine or bridge_like):
             self.logger.debug(f'Ignoring no-text fallback echo from {event.sender}')
             return 'no_text_fallback_echo'
@@ -568,7 +578,7 @@ async def _maybe_handle_fs_mode(
                         update_letta_code_room_state(room.room_id, {'projectDir': project_dir})
                         logger.info(f'[HULY-FS] Auto-linked {agent_name} to {project_dir}')
                     break
-        except Exception as e:
+        except (LettaCodeApiError, MatrixClientError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.warning(f'[HULY-FS] Auto-link failed for {agent_name}: {e}')
 
     if not project_dir:
@@ -629,7 +639,15 @@ async def _maybe_handle_fs_mode(
                 wrap_response=False,
             )
             return True
-        except Exception as fs_err:
+        except (
+            LettaCodeApiError,
+            LettaApiError,
+            MatrixClientError,
+            asyncio.TimeoutError,
+            aiohttp.ClientError,
+            RuntimeError,
+            ValueError,
+        ) as fs_err:
             logger.warning(
                 f'[FS-FALLBACK] letta-code task failed ({fs_err}), falling back to streaming Letta API'
             )
@@ -669,7 +687,7 @@ async def _handle_stop_command(
                 logger.info(
                     f'[STOP] Sent gateway abort + evicted WS connection for agent {room_agent_id}'
                 )
-        except Exception as e:
+        except (LettaApiError, MatrixClientError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.warning(f'[STOP] Gateway abort failed: {e}')
 
     msg = '⏹ Stopped.' if stopped else 'Nothing running to stop.'
@@ -757,7 +775,7 @@ async def _handle_passive_portal_message(
             )
         except LettaApiError as e:
             logger.warning(f'[PORTAL-PASSIVE] Letta API error (non-critical): {e}')
-        except Exception as e:
+        except (LettaApiError, MatrixClientError, asyncio.TimeoutError, aiohttp.ClientError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f'[PORTAL-PASSIVE] Failed to send to Letta (non-critical): {e}')
 
     asyncio.create_task(_send_to_letta())
@@ -777,11 +795,17 @@ async def _dispatch_letta_task(
             )
             try:
                 await send_as_agent(
-                    room.room_id, '⏳ Still processing previous message...', config, logger
+                    room.room_id,
+                    '⏳ Still processing previous message...',
+                    config,
+                    logger,
+                    msgtype='m.notice',
                 )
                 _still_processing_last_sent[room.room_id] = now
-            except Exception:
-                pass
+            except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError) as notice_error:
+                logger.debug(
+                    f'[BG-TASK] Failed to send still-processing notice for {task_key}: {notice_error}'
+                )
         else:
             logger.debug(
                 f'[BG-TASK] Suppressed "still processing" notice for {task_key} '
@@ -930,7 +954,7 @@ async def create_room_if_needed(
         else:
             logger.error('Failed to create room', extra={'response': str(response)})
             return None
-    except Exception as e:
+    except (MatrixClientError, RuntimeError, ValueError, TypeError, asyncio.TimeoutError, aiohttp.ClientError) as e:
         logger.error('Error creating room', extra={'error': str(e)}, exc_info=True)
         return None
 
@@ -1015,7 +1039,7 @@ async def join_room_if_needed(client_instance, room_id_or_alias, logger: logging
                 extra={'room': room_id_or_alias, 'error': str(e)},
             )
         return None
-    except Exception as e:
+    except (MatrixClientError, RemoteProtocolError, RuntimeError, ValueError, TypeError, asyncio.TimeoutError, aiohttp.ClientError) as e:
         logger.error(
             'Unexpected error when joining room',
             extra={'room': room_id_or_alias, 'error': str(e)},
@@ -1038,7 +1062,7 @@ async def periodic_agent_sync(config, logger, interval=None):
         try:
             await run_agent_sync(config)
             logger.debug('Periodic agent sync completed successfully')
-        except Exception as e:
+        except (MatrixClientError, RemoteProtocolError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.error('Periodic agent sync failed', extra={'error': str(e)})
 
 
@@ -1079,7 +1103,7 @@ async def main():
     try:
         agent_manager = await run_agent_sync(config)
         logger.info('Agent-to-user sync completed successfully')
-    except Exception as e:
+    except (MatrixClientError, RemoteProtocolError, asyncio.TimeoutError, aiohttp.ClientError) as e:
         logger.error('Agent sync failed', extra={'error': str(e)})
         # Continue with main client setup even if agent sync fails
 
@@ -1157,7 +1181,7 @@ async def main():
                     logger.info(f'Successfully joined room for agent {agent_name}: {room_id}')
                 else:
                     logger.warning(f'Failed to join room for agent {agent_name}: {room_id}')
-    except Exception as e:
+    except (RuntimeError, ValueError, SQLAlchemyError) as e:
         logger.error(f'Error loading agent mappings: {e}')
 
     logger.info(f'Joined {agent_rooms_joined} agent rooms')
@@ -1210,7 +1234,7 @@ async def main():
     async def callback_wrapper(room, event):
         try:
             await message_callback(room, event, config, logger, client)
-        except Exception as e:
+        except (MatrixClientError, LettaApiError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.error(f'Error in message callback: {e}', exc_info=True)
 
     client.add_event_callback(callback_wrapper, RoomMessageText)
@@ -1219,7 +1243,7 @@ async def main():
     async def file_callback_wrapper(room, event):
         try:
             await file_callback(room, event, config, logger, file_handler)
-        except Exception as e:
+        except (FileUploadError, MatrixClientError, LettaApiError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.error(f'Error in file callback: {e}', exc_info=True)
 
     client.add_event_callback(file_callback_wrapper, RoomMessageMedia)
@@ -1228,7 +1252,7 @@ async def main():
     async def poll_response_wrapper(room, event):
         try:
             await poll_response_callback(room, event, config, logger)
-        except Exception as e:
+        except (MatrixClientError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.error(f'Error in poll response callback: {e}', exc_info=True)
 
     client.add_event_callback(poll_response_wrapper, UnknownEvent)
@@ -1267,7 +1291,7 @@ async def main():
 
         # Now start the main sync loop with regular filter
         await client.sync_forever(timeout=5000, full_state=False, sync_filter=sync_filter)
-    except Exception as e:
+    except (MatrixClientError, RemoteProtocolError, asyncio.TimeoutError, aiohttp.ClientError) as e:
         logger.error('Error during sync', extra={'error': str(e)}, exc_info=True)
     finally:
         await cancel_all_letta_tasks()

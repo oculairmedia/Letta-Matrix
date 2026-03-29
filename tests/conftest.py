@@ -336,6 +336,29 @@ def event_loop():
     loop.close()
 
 
+@pytest.fixture(autouse=True)
+def _reset_test_global_state():
+    yield
+    try:
+        from src.matrix import agent_auth as _agent_auth
+
+        _agent_auth._token_cache.clear()
+    except Exception:
+        pass
+    try:
+        from src.matrix import agent_actions as _agent_actions
+
+        _agent_actions._ROOM_AGENT_MAPPING_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        from src.core import mapping_service as _mapping_service
+
+        _mapping_service.invalidate_cache()
+    except Exception:
+        pass
+
+
 # ============================================================================
 # Helper Fixtures
 # ============================================================================

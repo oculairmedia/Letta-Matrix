@@ -1,16 +1,51 @@
+from contextlib import asynccontextmanager
+import asyncio
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 import aiohttp
 
 from src.matrix.config import Config
 from src.matrix.agent_auth import get_agent_token as _get_agent_token
-from src.utils.ssrf_protection import SSRFError, validate_url
+from src.utils.ssrf_protection import SSRFError, build_pinned_connector
 
 
 _AGENT_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=30)
 _AGENT_SEND_TIMEOUT = aiohttp.ClientTimeout(total=15)
+_MEDIA_SESSION: Optional[aiohttp.ClientSession] = None
+_MEDIA_SESSION_LOCK: Optional[asyncio.Lock] = None
+
+
+async def _get_media_session() -> aiohttp.ClientSession:
+    global _MEDIA_SESSION, _MEDIA_SESSION_LOCK
+    if _MEDIA_SESSION_LOCK is None:
+        _MEDIA_SESSION_LOCK = asyncio.Lock()
+    if _MEDIA_SESSION is not None and not _MEDIA_SESSION.closed:
+        return _MEDIA_SESSION
+
+    async with _MEDIA_SESSION_LOCK:
+        if _MEDIA_SESSION is not None and not _MEDIA_SESSION.closed:
+            return _MEDIA_SESSION
+        connector = aiohttp.TCPConnector(
+            limit=100,
+            limit_per_host=50,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        _MEDIA_SESSION = aiohttp.ClientSession(connector=connector)
+        return _MEDIA_SESSION
+
+
+@asynccontextmanager
+async def _media_session_scope(
+    session: Optional[aiohttp.ClientSession] = None,
+) -> AsyncIterator[aiohttp.ClientSession]:
+    if session is not None:
+        yield session
+        return
+    pooled_session = await _get_media_session()
+    yield pooled_session
 
 
 async def upload_and_send_audio(
@@ -23,7 +58,7 @@ async def upload_and_send_audio(
     duration_ms: Optional[int] = None,
 ) -> Optional[str]:
     try:
-        async with aiohttp.ClientSession() as session:
+        async with _media_session_scope() as session:
             agent_token = await _get_agent_token(
                 room_id, config, logger, session, caller="VOICE"
             )
@@ -96,7 +131,7 @@ async def upload_and_send_audio(
                 logger.debug("[VOICE] Sent audio event_id: %s", event_id)
                 return event_id
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, OSError) as e:
         logger.error(
             f"[VOICE] Exception while uploading/sending audio: {e}", exc_info=True
         )
@@ -112,31 +147,32 @@ async def fetch_and_send_image(
 ) -> Optional[str]:
     try:
         try:
-            validate_url(image_url)
+            safe_image_url, fetch_connector = build_pinned_connector(image_url)
         except SSRFError as e:
             logger.warning("[IMAGE] SSRF blocked: %s — %s", image_url, e)
             return None
         fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
-        async with aiohttp.ClientSession() as session:
+        async with _media_session_scope() as session:
             try:
-                async with session.get(
-                    image_url,
-                    headers=fetch_headers,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as img_response:
-                    if img_response.status != 200:
-                        logger.error(
-                            "[IMAGE] Failed to fetch image from %s: %s",
-                            image_url,
-                            img_response.status,
-                        )
-                        return None
-                    image_data = await img_response.read()
-                    content_type = img_response.headers.get("Content-Type", "image/png")
-                    mimetype = content_type.split(";")[0].strip()
-                    if not mimetype.startswith("image/"):
-                        mimetype = "image/png"
-            except Exception as fetch_err:
+                async with aiohttp.ClientSession(connector=fetch_connector) as fetch_session:
+                    async with fetch_session.get(
+                        safe_image_url,
+                        headers=fetch_headers,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as img_response:
+                        if img_response.status != 200:
+                            logger.error(
+                                "[IMAGE] Failed to fetch image from %s: %s",
+                                image_url,
+                                img_response.status,
+                            )
+                            return None
+                        image_data = await img_response.read()
+                        content_type = img_response.headers.get("Content-Type", "image/png")
+                        mimetype = content_type.split(";")[0].strip()
+                        if not mimetype.startswith("image/"):
+                            mimetype = "image/png"
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, OSError) as fetch_err:
                 logger.error(
                     "[IMAGE] Exception fetching image from %s: %s",
                     image_url,
@@ -240,7 +276,7 @@ async def fetch_and_send_image(
                         )
             except ImportError:
                 logger.debug("[IMAGE] Pillow not available, skipping thumbnail")
-            except Exception as thumb_err:
+            except (RuntimeError, ValueError, OSError) as thumb_err:
                 logger.debug(
                     "[IMAGE] Thumbnail generation failed: %s", thumb_err
                 )
@@ -289,7 +325,7 @@ async def fetch_and_send_image(
                 logger.info("[IMAGE] Sent image event_id: %s", event_id)
                 return event_id
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, OSError) as e:
         logger.error(
             f"[IMAGE] Exception while fetching/sending image: {e}", exc_info=True
         )
@@ -305,31 +341,32 @@ async def fetch_and_send_file(
 ) -> Optional[str]:
     try:
         try:
-            validate_url(file_url)
+            safe_file_url, fetch_connector = build_pinned_connector(file_url)
         except SSRFError as e:
             logger.warning("[FILE] SSRF blocked: %s — %s", file_url, e)
             return None
         fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
-        async with aiohttp.ClientSession() as session:
+        async with _media_session_scope() as session:
             try:
-                async with session.get(
-                    file_url,
-                    headers=fetch_headers,
-                    timeout=aiohttp.ClientTimeout(total=60),
-                ) as resp:
-                    if resp.status != 200:
-                        logger.error(
-                            "[FILE] Failed to fetch file from %s: %s",
-                            file_url,
-                            resp.status,
+                async with aiohttp.ClientSession(connector=fetch_connector) as fetch_session:
+                    async with fetch_session.get(
+                        safe_file_url,
+                        headers=fetch_headers,
+                        timeout=aiohttp.ClientTimeout(total=60),
+                    ) as resp:
+                        if resp.status != 200:
+                            logger.error(
+                                "[FILE] Failed to fetch file from %s: %s",
+                                file_url,
+                                resp.status,
+                            )
+                            return None
+                        file_data = await resp.read()
+                        content_type = resp.headers.get(
+                            "Content-Type", "application/octet-stream"
                         )
-                        return None
-                    file_data = await resp.read()
-                    content_type = resp.headers.get(
-                        "Content-Type", "application/octet-stream"
-                    )
-                    mimetype = content_type.split(";")[0].strip()
-            except Exception as fetch_err:
+                        mimetype = content_type.split(";")[0].strip()
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, OSError) as fetch_err:
                 logger.error(
                     "[FILE] Exception fetching file from %s: %s",
                     file_url,
@@ -407,7 +444,7 @@ async def fetch_and_send_file(
                 logger.info("[FILE] Sent file event_id: %s", event_id)
                 return event_id
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, OSError) as e:
         logger.error(f"[FILE] Exception: {e}", exc_info=True)
         return None
 
@@ -421,31 +458,32 @@ async def fetch_and_send_video(
 ) -> Optional[str]:
     try:
         try:
-            validate_url(video_url)
+            safe_video_url, fetch_connector = build_pinned_connector(video_url)
         except SSRFError as e:
             logger.warning("[VIDEO] SSRF blocked: %s — %s", video_url, e)
             return None
         fetch_headers = {"User-Agent": "MatrixBridge/1.0"}
-        async with aiohttp.ClientSession() as session:
+        async with _media_session_scope() as session:
             try:
-                async with session.get(
-                    video_url,
-                    headers=fetch_headers,
-                    timeout=aiohttp.ClientTimeout(total=120),
-                ) as resp:
-                    if resp.status != 200:
-                        logger.error(
-                            "[VIDEO] Failed to fetch from %s: %s",
-                            video_url,
-                            resp.status,
-                        )
-                        return None
-                    video_data = await resp.read()
-                    content_type = resp.headers.get("Content-Type", "video/mp4")
-                    mimetype = content_type.split(";")[0].strip()
-                    if not mimetype.startswith("video/"):
-                        mimetype = "video/mp4"
-            except Exception as fetch_err:
+                async with aiohttp.ClientSession(connector=fetch_connector) as fetch_session:
+                    async with fetch_session.get(
+                        safe_video_url,
+                        headers=fetch_headers,
+                        timeout=aiohttp.ClientTimeout(total=120),
+                    ) as resp:
+                        if resp.status != 200:
+                            logger.error(
+                                "[VIDEO] Failed to fetch from %s: %s",
+                                video_url,
+                                resp.status,
+                            )
+                            return None
+                        video_data = await resp.read()
+                        content_type = resp.headers.get("Content-Type", "video/mp4")
+                        mimetype = content_type.split(";")[0].strip()
+                        if not mimetype.startswith("video/"):
+                            mimetype = "video/mp4"
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, OSError) as fetch_err:
                 logger.error(
                     "[VIDEO] Exception fetching from %s: %s", video_url, fetch_err
                 )
@@ -523,6 +561,6 @@ async def fetch_and_send_video(
                 logger.info("[VIDEO] Sent video event_id: %s", event_id)
                 return event_id
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, OSError) as e:
         logger.error(f"[VIDEO] Exception: {e}", exc_info=True)
         return None

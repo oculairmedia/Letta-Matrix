@@ -120,7 +120,6 @@ class MessageRetryBuffer:
     async def _probe_gateway(self, config) -> bool:
         try:
             import websockets
-            import websockets
 
             extra_headers = {}
             api_key = config.letta_gateway_api_key or config.letta_token

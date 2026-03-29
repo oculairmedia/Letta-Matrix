@@ -370,6 +370,7 @@ class TestGetLettaAgents:
                 with patch('src.letta.client.get_letta_client', return_value=mock_client):
                     agents = await manager.get_letta_agents()
 
+                    assert agents is not None
                     assert len(agents) == 2
                     assert agents[0]["id"] == "agent-1"
                     assert agents[1]["name"] == "Agent Two"
@@ -466,3 +467,44 @@ class TestImportRecentHistory:
                         agent_password="password",
                         room_id="!room789:matrix.oculair.ca"
                     )
+
+
+@pytest.mark.unit
+class TestSyncAgentsToUsersEdgeCases:
+    @pytest.mark.asyncio
+    async def test_sync_agents_to_users_empty_success_response_is_not_failure(self, mock_config):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
+                manager = AgentUserManager(config=mock_config)
+
+                with patch.object(manager, '_ensure_space_ready', new_callable=AsyncMock, return_value=False), \
+                     patch.object(manager, 'get_letta_agents', new_callable=AsyncMock, return_value=[]), \
+                     patch.object(manager, '_provision_new_agents', new_callable=AsyncMock) as mock_provision, \
+                     patch.object(manager, '_validate_existing_agents', new_callable=AsyncMock) as mock_validate, \
+                     patch.object(manager, '_set_missing_avatars', new_callable=AsyncMock) as mock_avatars, \
+                     patch.object(manager, '_cleanup_removed_agents', new_callable=AsyncMock, return_value=set()) as mock_cleanup, \
+                     patch.object(manager, 'save_mappings', new_callable=AsyncMock) as mock_save, \
+                     patch.object(manager, '_sync_matrix_memory', new_callable=AsyncMock) as mock_sync_memory:
+                    await manager.sync_agents_to_users()
+
+                mock_provision.assert_awaited_once_with([], set())
+                mock_validate.assert_awaited_once_with([])
+                mock_avatars.assert_awaited_once_with([])
+                mock_cleanup.assert_awaited_once_with(set(), set())
+                mock_save.assert_awaited_once()
+                mock_sync_memory.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_sync_agents_to_users_none_fetch_response_aborts(self, mock_config):
+        with patch('src.core.agent_user_manager.logging.getLogger'):
+            with patch('src.core.agent_user_manager.os.makedirs'):
+                manager = AgentUserManager(config=mock_config)
+
+                with patch.object(manager, '_ensure_space_ready', new_callable=AsyncMock, return_value=False), \
+                     patch.object(manager, 'get_letta_agents', new_callable=AsyncMock, return_value=None), \
+                     patch.object(manager, 'save_mappings', new_callable=AsyncMock) as mock_save, \
+                     patch.object(manager, '_sync_matrix_memory', new_callable=AsyncMock) as mock_sync_memory:
+                    await manager.sync_agents_to_users()
+
+                mock_save.assert_not_awaited()
+                mock_sync_memory.assert_not_awaited()

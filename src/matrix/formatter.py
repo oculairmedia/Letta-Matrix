@@ -30,6 +30,13 @@ def _build_reply_context_lines(reply_to_event_id: Optional[str] = None, reply_to
         lines.append(f"- **Reply-To Sender**: {sender_localpart}")
     return lines
 
+
+def _compose_envelope(lines: list[str], body: Optional[str]) -> str:
+    text = (body or "").strip()
+    if text:
+        return "\n".join([*lines, "", text])
+    return "\n".join(lines)
+
 def format_message_envelope(
     channel,
     chat_id,
@@ -72,9 +79,7 @@ def format_message_envelope(
         sections.append("")
         sections.extend(reply_lines)
     sections.append("</system-reminder>")
-    reminder = "\n".join(sections)
-    body = text or ""
-    return f"{reminder}\n\n{body}" if body else reminder
+    return _compose_envelope(sections, text)
 
 
 def format_inter_agent_envelope(sender_agent_name, sender_agent_id, text, chat_id, message_id, timestamp, reply_to_event_id: Optional[str] = None, reply_to_sender: Optional[str] = None) -> str:
@@ -106,9 +111,7 @@ def format_inter_agent_envelope(sender_agent_name, sender_agent_id, text, chat_i
         "- **System Note**: Treat this as your MAIN task for this turn; the other agent is trying to collaborate with you.",
         "</system-reminder>",
     ])
-    reminder = "\n".join(sections)
-    body = text or ""
-    return f"{reminder}\n\n{body}" if body else reminder
+    return _compose_envelope(sections, text)
 
 
 def format_opencode_envelope(opencode_mxid, text, chat_id, message_id, timestamp, reply_to_event_id: Optional[str] = None, reply_to_sender: Optional[str] = None) -> str:
@@ -139,9 +142,7 @@ def format_opencode_envelope(opencode_mxid, text, chat_id, message_id, timestamp
         f"- **Response Routing**: Include {opencode_mxid} in your response so the OpenCode bridge can route your reply.",
         "</system-reminder>",
     ])
-    reminder = "\n".join(sections)
-    body = text or ""
-    return f"{reminder}\n\n{body}" if body else reminder
+    return _compose_envelope(sections, text)
 
 
 def format_reaction_route_envelope(
@@ -186,9 +187,8 @@ def format_reaction_route_envelope(
         "- **Instruction**: Respond directly to the original message intent, considering the reaction as an explicit routing signal.",
         "</system-reminder>",
     ]
-    reminder = "\n".join(sections)
     body = f"Original message:\n{original_text}" if original_text else "Original message was non-text or unavailable."
-    return f"{reminder}\n\n{body}"
+    return _compose_envelope(sections, body)
 
 def is_no_reply(text: Optional[str]) -> bool:
     """Check if an agent response is the <no-reply/> directive.

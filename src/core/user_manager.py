@@ -37,9 +37,35 @@ class MatrixUserManager:
         self.admin_username = admin_username
         self.admin_password = admin_password
         self.admin_token = None  # Cached admin token
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
 
         logger.info(f"Initialized MatrixUserManager with homeserver: {homeserver_url}")
         logger.info(f"Using admin account: {admin_username}")
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is not None and not self._session.closed:
+            return self._session
+
+        async with self._session_lock:
+            if self._session is not None and not self._session.closed:
+                return self._session
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                keepalive_timeout=30,
+            )
+            self._session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._session
+
+    async def close(self) -> None:
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
 
     def clear_admin_token_cache(self) -> None:
         self.admin_token = None
@@ -68,8 +94,8 @@ class MatrixUserManager:
 
             logger.info(f"Attempting to get admin token for user: {username}")
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+            session = await self._get_session()
+            async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         data = await response.json()
                         self.admin_token = data.get("access_token")
@@ -85,7 +111,6 @@ class MatrixUserManager:
             logger.warning(f"Admin login exception: {e}")
 
         # Self-healing fallback: use pre-configured admin token
-        import os
         fallback_token = os.getenv("MATRIX_ADMIN_TOKEN")
         if fallback_token:
             logger.info("Using MATRIX_ADMIN_TOKEN fallback (admin password login failed)")
@@ -128,8 +153,8 @@ class MatrixUserManager:
                 "password": "dummy_check_password_12345"
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
+            session = await self._get_session()
+            async with session.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         logger.debug(f"User {username} exists and accepted test password")
                         return "exists_healthy"
@@ -172,8 +197,8 @@ class MatrixUserManager:
                 "password": password,
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, timeout=DEFAULT_TIMEOUT) as response:
+            session = await self._get_session()
+            async with session.post(url, json=payload, timeout=DEFAULT_TIMEOUT) as response:
                     return response.status == 200
         except Exception as exc:
             logger.warning(f"Credential verification failed for {username}: {exc}")
@@ -194,8 +219,8 @@ class MatrixUserManager:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.put(
+            session = await self._get_session()
+            async with session.put(
                     url,
                     headers=headers,
                     json={"msgtype": "m.text", "body": command},
@@ -235,8 +260,8 @@ class MatrixUserManager:
                 "password": password
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=initial_data, timeout=DEFAULT_TIMEOUT) as response:
+            session = await self._get_session()
+            async with session.post(url, headers=headers, json=initial_data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         # Registration succeeded without auth (unlikely but handle it)
                         logger.info(f"Created Matrix user: @{username}:matrix.oculair.ca")
@@ -339,8 +364,8 @@ class MatrixUserManager:
             }
             data = {"displayname": display_name}
 
-            async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
+            session = await self._get_session()
+            async with session.put(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         logger.info(f"Set display name for {user_id}: {display_name}")
                         return True
@@ -370,8 +395,8 @@ class MatrixUserManager:
             }
             data = {"avatar_url": avatar_mxc_url}
 
-            async with aiohttp.ClientSession() as session:
-                async with session.put(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
+            session = await self._get_session()
+            async with session.put(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         logger.info(f"Set avatar for {user_id}: {avatar_mxc_url}")
                         return True
@@ -402,8 +427,8 @@ class MatrixUserManager:
                 "Content-Type": mimetype
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=image_data, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+            session = await self._get_session()
+            async with session.post(url, data=image_data, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
                     if response.status == 200:
                         result = await response.json()
                         content_uri = result.get("content_uri")
@@ -440,42 +465,42 @@ class MatrixUserManager:
             return False
 
         try:
-            async with aiohttp.ClientSession() as session:
-                # Login as the user to get their token
-                login_url = f"{self.homeserver_url}/_matrix/client/v3/login"
-                login_data = {
-                    "type": "m.login.password",
-                    "identifier": {"type": "m.id.user", "user": user_id},
-                    "password": password
-                }
+            session = await self._get_session()
+            # Login as the user to get their token
+            login_url = f"{self.homeserver_url}/_matrix/client/v3/login"
+            login_data = {
+                "type": "m.login.password",
+                "identifier": {"type": "m.id.user", "user": user_id},
+                "password": password
+            }
 
-                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as login_response:
-                    if login_response.status != 200:
-                        error_text = await login_response.text()
-                        logger.error(f"Failed to login as {user_id}: {login_response.status} - {error_text}")
-                        return False
+            async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as login_response:
+                if login_response.status != 200:
+                    error_text = await login_response.text()
+                    logger.error(f"Failed to login as {user_id}: {login_response.status} - {error_text}")
+                    return False
 
-                    login_result = await login_response.json()
-                    user_token = login_result.get("access_token")
-                    if not user_token:
-                        logger.error(f"No access token returned for {user_id}")
-                        return False
+                login_result = await login_response.json()
+                user_token = login_result.get("access_token")
+                if not user_token:
+                    logger.error(f"No access token returned for {user_id}")
+                    return False
 
-                # Set display name using user's own token
-                profile_url = f"{self.homeserver_url}/_matrix/client/v3/profile/{user_id}/displayname"
-                headers = {
-                    "Authorization": f"Bearer {user_token}",
-                    "Content-Type": "application/json"
-                }
+            # Set display name using user's own token
+            profile_url = f"{self.homeserver_url}/_matrix/client/v3/profile/{user_id}/displayname"
+            headers = {
+                "Authorization": f"Bearer {user_token}",
+                "Content-Type": "application/json"
+            }
 
-                async with session.put(profile_url, headers=headers, json={"displayname": display_name}, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status == 200:
-                        logger.info(f"Successfully updated display name for {user_id} to '{display_name}'")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Failed to update display name: {response.status} - {error_text}")
-                        return False
+            async with session.put(profile_url, headers=headers, json={"displayname": display_name}, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    logger.info(f"Successfully updated display name for {user_id} to '{display_name}'")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Failed to update display name: {response.status} - {error_text}")
+                    return False
 
         except Exception as e:
             logger.error(f"Error updating display name for {user_id}: {e}")

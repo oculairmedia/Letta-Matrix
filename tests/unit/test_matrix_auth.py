@@ -203,7 +203,7 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_get_authenticated_client_handles_exception(self, auth_manager):
         """Test handling of general exceptions during authentication"""
-        with patch('src.matrix.auth.AsyncClient', side_effect=Exception("Network error")):
+        with patch('src.matrix.auth.AsyncClient', side_effect=RuntimeError("Network error")):
             client = await auth_manager.get_authenticated_client()
 
             assert client is None
@@ -415,7 +415,7 @@ class TestLogout:
     @pytest.mark.asyncio
     async def test_logout_handles_exception(self, auth_manager, mock_nio_client):
         """Test that logout handles exceptions gracefully"""
-        mock_nio_client.logout = AsyncMock(side_effect=Exception("Network error"))
+        mock_nio_client.logout = AsyncMock(side_effect=RuntimeError("Network error"))
         auth_manager.client = mock_nio_client
 
         # Should not raise exception
@@ -489,7 +489,7 @@ class TestSessionPersistence:
         """Test that exceptions during session restore trigger login"""
         mock_nio_client.access_token = None
         mock_nio_client.device_id = None
-        mock_nio_client.load_store = Mock(side_effect=Exception("Store corrupted"))
+        mock_nio_client.load_store = Mock(side_effect=RuntimeError("Store corrupted"))
 
         # Should fall back to login
         class MockLoginResponse:
@@ -521,7 +521,7 @@ class TestRateLimiting:
     async def test_detects_rate_limit_in_error_message(self, auth_manager, mock_nio_client):
         """Test that rate limiting is detected in error messages"""
         mock_nio_client.access_token = None
-        mock_nio_client.login = AsyncMock(side_effect=Exception("429 rate limit exceeded"))
+        mock_nio_client.login = AsyncMock(side_effect=RuntimeError("429 rate limit exceeded"))
 
         with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):
             client = await auth_manager.get_authenticated_client()
@@ -534,7 +534,7 @@ class TestRateLimiting:
         """Test that 'rate' keyword is detected in errors"""
         mock_nio_client.access_token = None
         mock_nio_client.login = AsyncMock(
-            side_effect=Exception("Too many login attempts - rate limited")
+            side_effect=RuntimeError("Too many login attempts - rate limited")
         )
 
         with patch('src.matrix.auth.AsyncClient', return_value=mock_nio_client):

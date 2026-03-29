@@ -130,9 +130,15 @@ async def get_recent_messages(homeserver: str, raw_request: Request, limit: int 
             return {"success": False, "message": f"Failed to get rooms: {rooms_result.message}"}
 
         all_messages = []
+        per_room_limit = limit if limit > 0 else 50
 
         for room in rooms_result.rooms:
-            messages_result = await matrix_client.get_messages(homeserver, access_token, room.room_id, limit=5)
+            messages_result = await matrix_client.get_messages(
+                homeserver,
+                access_token,
+                room.room_id,
+                limit=per_room_limit,
+            )
 
             if messages_result.success:
                 for msg in messages_result.messages:

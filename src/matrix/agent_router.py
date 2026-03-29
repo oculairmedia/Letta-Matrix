@@ -1,11 +1,35 @@
 """Agent routing and conversation resolution helpers for Matrix rooms."""
 
+import asyncio
 import logging
 from typing import Optional, Tuple
 
 import aiohttp
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.matrix.config import Config
+
+
+_router_session: Optional[aiohttp.ClientSession] = None
+_router_session_lock = asyncio.Lock()
+
+
+async def _get_router_session() -> aiohttp.ClientSession:
+    global _router_session
+    if _router_session is not None and not _router_session.closed:
+        return _router_session
+
+    async with _router_session_lock:
+        if _router_session is not None and not _router_session.closed:
+            return _router_session
+        connector = aiohttp.TCPConnector(
+            limit=50,
+            limit_per_host=20,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        _router_session = aiohttp.ClientSession(connector=connector)
+        return _router_session
 
 
 async def get_agent_from_room_members(
@@ -22,37 +46,37 @@ async def get_agent_from_room_members(
         )
         headers = {"Authorization": f"Bearer {admin_token}"}
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(members_url, headers=headers) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Failed to get room members: {resp.status}")
-                    return None
-
-                members_data = await resp.json()
-                members = members_data.get("chunk", [])
-
-                from src.models.agent_mapping import AgentMappingDB
-
-                db = AgentMappingDB()
-                all_mappings = db.get_all()
-
-                for member in members:
-                    user_id = member.get("state_key")
-                    if not user_id:
-                        continue
-                    for mapping in all_mappings:
-                        if mapping.matrix_user_id == user_id:
-                            logger.info(
-                                f"Found agent via room members: {mapping.agent_name} ({mapping.agent_id})"
-                            )
-                            return (mapping.agent_id, mapping.agent_name)
-
-                logger.warning(
-                    f"No agent users found in room {room_id} members"
-                )
+        session = await _get_router_session()
+        async with session.get(members_url, headers=headers) as resp:
+            if resp.status != 200:
+                logger.warning(f"Failed to get room members: {resp.status}")
                 return None
 
-    except Exception as e:
+            members_data = await resp.json()
+            members = members_data.get("chunk", [])
+
+            from src.models.agent_mapping import AgentMappingDB
+
+            db = AgentMappingDB()
+            all_mappings = db.get_all()
+
+            for member in members:
+                user_id = member.get("state_key")
+                if not user_id:
+                    continue
+                for mapping in all_mappings:
+                    if mapping.matrix_user_id == user_id:
+                        logger.info(
+                            f"Found agent via room members: {mapping.agent_name} ({mapping.agent_id})"
+                        )
+                        return (mapping.agent_id, mapping.agent_name)
+
+            logger.warning(
+                f"No agent users found in room {room_id} members"
+            )
+            return None
+
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, SQLAlchemyError) as e:
         logger.warning(
             f"Error extracting agent from room members: {e}", exc_info=True
         )
@@ -105,7 +129,7 @@ async def _resolve_agent_for_room(
                     )
                     if member_result:
                         agent_id_to_use, agent_name_found = member_result
-        except Exception as e:
+        except (ImportError, RuntimeError, ValueError, SQLAlchemyError) as e:
             logger.warning(f"[{tag}] Could not query agent mappings: {e}")
 
     return agent_id_to_use, agent_name_found
@@ -145,7 +169,7 @@ async def _resolve_conversation_id(
             f"[CONVERSATIONS] Using conversation {conversation_id} (created={created})"
         )
         return conversation_id
-    except Exception as e:
+    except (ImportError, RuntimeError, ValueError, TypeError, aiohttp.ClientError, asyncio.TimeoutError) as e:
         logger.warning(
             f"[CONVERSATIONS] Failed to get conversation, falling back to agents API: {e}"
         )

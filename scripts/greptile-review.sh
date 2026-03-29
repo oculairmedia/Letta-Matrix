@@ -6,8 +6,33 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
-PR_NUMBER="${1:-}"
-WATCH_MODE="${2:---watch}"
+PR_NUMBER=""
+WATCH_MODE=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --watch)
+      WATCH_MODE=true
+      ;;
+    -h|--help)
+      printf 'Usage: ./scripts/greptile-review.sh [--watch] [pr-number]\n'
+      exit 0
+      ;;
+    -*)
+      printf 'Unknown option: %s\n' "$arg" >&2
+      printf 'Usage: ./scripts/greptile-review.sh [--watch] [pr-number]\n' >&2
+      exit 1
+      ;;
+    *)
+      if [ -z "$PR_NUMBER" ]; then
+        PR_NUMBER="$arg"
+      else
+        printf 'Only one PR number is allowed. Received: %s and %s\n' "$PR_NUMBER" "$arg" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
 
 if [ -z "$PR_NUMBER" ]; then
   PR_NUMBER="$(gh pr view --json number -q .number 2>/dev/null || true)"
@@ -20,7 +45,7 @@ fi
 
 gh pr comment "$PR_NUMBER" --body "@greptile please re-review the latest changes."
 
-if [ "$WATCH_MODE" = "--watch" ]; then
+if [ "$WATCH_MODE" = true ]; then
   gh pr checks "$PR_NUMBER" --watch || true
 fi
 

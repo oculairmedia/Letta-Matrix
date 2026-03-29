@@ -66,12 +66,12 @@ class MatrixClient:
                             try:
                                 body = await response.json()
                                 retry_after = body.get("retry_after_ms", retry_after * 1000) / 1000
-                            except Exception:
+                            except (aiohttp.ContentTypeError, ValueError, TypeError):
                                 pass
                             await asyncio.sleep(retry_after)
                             continue
                         return False
-            except Exception:
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
                 if attempt < retries - 1:
                     await asyncio.sleep(1)
                     continue
@@ -96,7 +96,7 @@ class MatrixClient:
                         try:
                             body = await response.json()
                             retry_after = body.get("retry_after_ms", retry_after * 1000) / 1000
-                        except Exception:
+                        except (aiohttp.ContentTypeError, ValueError, TypeError):
                             pass
                         await asyncio.sleep(retry_after)
                         continue
@@ -324,7 +324,7 @@ async def test_room_member_count_reasonable(matrix_client):
         members = await matrix_client.get_room_members(agent["room_id"])
         member_count = len(members)
         
-        if member_count < 3:
+        if member_count < 4:
             issues.append(f"{agent['agent_name']}: only {member_count} members")
         
         # Maximum sanity check - more than 50 members is suspicious

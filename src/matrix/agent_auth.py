@@ -135,7 +135,7 @@ async def get_agent_token(
         invalidate_agent_token(agent_username)
         logger.error(f"[{caller}] Login timed out for {agent_username}")
         return None
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, KeyError, TypeError) as e:
         invalidate_agent_token(agent_username)
         logger.error(f"[{caller}] Login exception for {agent_username}: {e}")
         return None
@@ -278,6 +278,6 @@ async def repair_agent_password(
             f"[{caller}] Password repair: reset password and synced stores for {agent_name} ({agent_username})"
         )
         return new_password
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError, RuntimeError, ValueError, KeyError, TypeError) as e:
         logger.error(f"[{caller}] Password repair failed for {agent_username}: {e}", exc_info=True)
         return None

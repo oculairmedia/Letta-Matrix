@@ -13,6 +13,7 @@ from src.core.retry import (
     ConversationBusyError,
     is_conversation_busy_error,
     retry_async,
+    retry_sync,
     retry_on_conversation_busy,
     send_message_with_retry,
 )
@@ -273,7 +274,12 @@ class TestRetryAsync:
             return "ok"
 
         with patch("src.core.retry.asyncio.sleep", return_value=None):
-            result = await retry_async(async_func, max_attempts=3, base_delay=0.001)
+            result = await retry_async(
+                async_func,
+                max_attempts=3,
+                base_delay=0.001,
+                retryable_exceptions=(RuntimeError,),
+            )
 
         assert result == "ok"
         assert call_count == 2
@@ -289,7 +295,12 @@ class TestRetryAsync:
 
         with patch("src.core.retry.asyncio.sleep", return_value=None):
             with pytest.raises(RuntimeError, match="boom"):
-                await retry_async(async_func, max_attempts=2, base_delay=0.001)
+                await retry_async(
+                    async_func,
+                    max_attempts=2,
+                    base_delay=0.001,
+                    retryable_exceptions=(RuntimeError,),
+                )
 
         assert call_count == 2
 
@@ -309,10 +320,76 @@ class TestRetryAsync:
             return "ok"
 
         with patch("src.core.retry.asyncio.sleep", side_effect=mock_sleep):
-            result = await retry_async(async_func, max_attempts=4, base_delay=0.5)
+            result = await retry_async(
+                async_func,
+                max_attempts=4,
+                base_delay=0.5,
+                retryable_exceptions=(RuntimeError,),
+            )
 
         assert result == "ok"
         assert sleep_calls == [0.5, 1.0, 2.0]
+
+    @pytest.mark.asyncio
+    async def test_retry_async_max_delay_cap(self):
+        call_count = 0
+        sleep_calls = []
+
+        async def mock_sleep(delay):
+            sleep_calls.append(delay)
+
+        async def async_func():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 4:
+                raise RuntimeError("transient")
+            return "ok"
+
+        with patch("src.core.retry.asyncio.sleep", side_effect=mock_sleep):
+            result = await retry_async(
+                async_func,
+                max_attempts=4,
+                base_delay=1.0,
+                max_delay=1.5,
+                retryable_exceptions=(RuntimeError,),
+            )
+
+        assert result == "ok"
+        assert sleep_calls == [1.0, 1.5, 1.5]
+
+    @pytest.mark.asyncio
+    async def test_retry_async_should_retry_predicate(self):
+        call_count = 0
+
+        async def async_func():
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("fatal")
+
+        with pytest.raises(RuntimeError, match="fatal"):
+            await retry_async(
+                async_func,
+                max_attempts=3,
+                base_delay=0.001,
+                retryable_exceptions=(RuntimeError,),
+                should_retry=lambda e: "retry" in str(e),
+            )
+
+        assert call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_async_default_does_not_retry_runtime_error(self):
+        call_count = 0
+
+        async def async_func():
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("not retryable by default")
+
+        with pytest.raises(RuntimeError, match="not retryable by default"):
+            await retry_async(async_func, max_attempts=3, base_delay=0.001)
+
+        assert call_count == 1
 
 
 class TestSendMessageWithRetry:
@@ -335,6 +412,48 @@ class TestSendMessageWithRetry:
             input="Hello",
             streaming=True,
         )
+
+
+class TestRetrySync:
+    def test_retry_sync_success_on_retry(self):
+        call_count = 0
+
+        def sync_func():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise RuntimeError("transient")
+            return "ok"
+
+        with patch("src.core.retry.time.sleep", return_value=None):
+            result = retry_sync(
+                sync_func,
+                max_attempts=3,
+                base_delay=0.001,
+                retryable_exceptions=(RuntimeError,),
+            )
+
+        assert result == "ok"
+        assert call_count == 3
+
+    def test_retry_sync_predicate_stops_retry(self):
+        call_count = 0
+
+        def sync_func():
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("fatal")
+
+        with pytest.raises(RuntimeError, match="fatal"):
+            retry_sync(
+                sync_func,
+                max_attempts=3,
+                base_delay=0.001,
+                retryable_exceptions=(RuntimeError,),
+                should_retry=lambda e: "transient" in str(e),
+            )
+
+        assert call_count == 1
     
     @pytest.mark.asyncio
     async def test_retry_on_busy(self):

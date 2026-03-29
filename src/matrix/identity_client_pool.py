@@ -3,8 +3,17 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Dict, Optional
+import aiohttp
 
-from nio import AsyncClient, RoomSendError, RoomSendResponse
+from nio import (
+    AsyncClient,
+    RoomReadMarkersError,
+    RoomReadMarkersResponse,
+    RoomRedactError,
+    RoomRedactResponse,
+    RoomSendError,
+    RoomSendResponse,
+)
 
 from src.core.identity_health_monitor import get_identity_token_health_monitor
 from src.core.identity_storage import get_identity_service
@@ -75,6 +84,10 @@ class IdentityClientPool:
         await self.close_all()
 
     async def get_client(self, identity_id: str) -> Optional[AsyncClient]:
+        pooled = self._clients.get(identity_id)
+        if pooled is not None:
+            return pooled.client
+
         async with self._lock:
             pooled = self._clients.get(identity_id)
             if pooled is not None:
@@ -123,7 +136,7 @@ class IdentityClientPool:
 
             logger.info("Created client for identity: %s -> %s", identity_id, mxid)
             return client
-        except Exception as exc:
+        except (TypeError, ValueError, OSError, RuntimeError) as exc:
             logger.error("Failed to create client for %s: %s", identity.id, exc)
             return None
 
@@ -131,7 +144,7 @@ class IdentityClientPool:
         while not self._health_check_stop.is_set():
             try:
                 await self._run_health_check()
-            except Exception as exc:
+            except (RuntimeError, asyncio.TimeoutError, aiohttp.ClientError) as exc:
                 logger.error("Identity client pool health check failed: %s", exc, exc_info=True)
             try:
                 await asyncio.wait_for(
@@ -154,7 +167,7 @@ class IdentityClientPool:
     async def _check_client_health(self, client: AsyncClient, identity_id: str) -> bool:
         try:
             response = await client.whoami()
-        except Exception as exc:
+        except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError, aiohttp.ClientError) as exc:
             logger.warning("whoami failed for %s: %s", identity_id, exc)
             return False
 
@@ -217,7 +230,7 @@ class IdentityClientPool:
                     return None
                 logger.error("Unexpected response type: %s", type(response))
                 return None
-            except Exception as exc:
+            except (RuntimeError, ValueError, asyncio.TimeoutError, aiohttp.ClientError) as exc:
                 logger.error("Error sending message from %s: %s", identity_id, exc)
                 if attempt == 0 and self._is_unknown_token_error(exc):
                     recovered = await self._recover_identity(identity_id)
@@ -281,6 +294,227 @@ class IdentityClientPool:
         identity_id = f"letta_{agent_id}"
         return await self.edit_message(identity_id, room_id, event_id, message, msgtype)
 
+    async def _redact_with_recovery(
+        self,
+        identity_id: str,
+        room_id: str,
+        event_id: str,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """Redact an event with automatic token recovery."""
+        client = await self.get_client(identity_id)
+        if not client:
+            logger.error("Cannot redact message: no client for %s", identity_id)
+            return False
+
+        for attempt in range(2):
+            try:
+                response = await client.room_redact(
+                    room_id=room_id,
+                    event_id=event_id,
+                    reason=reason,
+                )
+
+                if isinstance(response, RoomRedactResponse):
+                    logger.info(
+                        "Message redacted by %s in %s: %s",
+                        identity_id,
+                        room_id,
+                        response.event_id,
+                    )
+                    return True
+                if isinstance(response, RoomRedactError):
+                    logger.error("Failed to redact message: %s", response.message)
+                    if attempt == 0 and self._is_unknown_token_error(response):
+                        recovered = await self._recover_identity(identity_id)
+                        if recovered:
+                            client = await self.get_client(identity_id)
+                            if client:
+                                continue
+                    return False
+                logger.error("Unexpected response type: %s", type(response))
+                return False
+            except (RuntimeError, ValueError, asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                logger.error("Error redacting message from %s: %s", identity_id, exc)
+                if attempt == 0 and self._is_unknown_token_error(exc):
+                    recovered = await self._recover_identity(identity_id)
+                    if recovered:
+                        client = await self.get_client(identity_id)
+                        if client:
+                            continue
+                return False
+        return False
+
+    async def redact_message(
+        self,
+        identity_id: str,
+        room_id: str,
+        event_id: str,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """Redact (delete) a message."""
+        return await self._redact_with_recovery(identity_id, room_id, event_id, reason)
+
+    async def redact_as_agent(
+        self,
+        agent_id: str,
+        room_id: str,
+        event_id: str,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """Redact (delete) a message as an agent."""
+        identity_id = f"letta_{agent_id}"
+        return await self.redact_message(identity_id, room_id, event_id, reason)
+
+    async def _react_with_recovery(
+        self,
+        identity_id: str,
+        room_id: str,
+        event_id: str,
+        emoji: str,
+    ) -> Optional[str]:
+        """Send a reaction with automatic token recovery."""
+        client = await self.get_client(identity_id)
+        if not client:
+            logger.error("Cannot send reaction: no client for %s", identity_id)
+            return None
+
+        content: Dict[str, object] = {
+            "m.relates_to": {
+                "rel_type": "m.annotation",
+                "event_id": event_id,
+                "key": emoji,
+            }
+        }
+
+        for attempt in range(2):
+            try:
+                response = await client.room_send(
+                    room_id=room_id,
+                    message_type="m.reaction",
+                    content=content,
+                )
+
+                if isinstance(response, RoomSendResponse):
+                    logger.info(
+                        "Reaction sent by %s to %s: %s",
+                        identity_id,
+                        event_id,
+                        response.event_id,
+                    )
+                    return response.event_id
+                if isinstance(response, RoomSendError):
+                    logger.error("Failed to send reaction: %s", response.message)
+                    if attempt == 0 and self._is_unknown_token_error(response):
+                        recovered = await self._recover_identity(identity_id)
+                        if recovered:
+                            client = await self.get_client(identity_id)
+                            if client:
+                                continue
+                    return None
+                logger.error("Unexpected response type: %s", type(response))
+                return None
+            except (RuntimeError, ValueError, asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                logger.error("Error sending reaction from %s: %s", identity_id, exc)
+                if attempt == 0 and self._is_unknown_token_error(exc):
+                    recovered = await self._recover_identity(identity_id)
+                    if recovered:
+                        client = await self.get_client(identity_id)
+                        if client:
+                            continue
+                return None
+        return None
+
+    async def react_to_message(
+        self,
+        identity_id: str,
+        room_id: str,
+        event_id: str,
+        emoji: str,
+    ) -> Optional[str]:
+        """Send a reaction (emoji) to a message."""
+        return await self._react_with_recovery(identity_id, room_id, event_id, emoji)
+
+    async def react_as_agent(
+        self,
+        agent_id: str,
+        room_id: str,
+        event_id: str,
+        emoji: str,
+    ) -> Optional[str]:
+        """Send a reaction (emoji) to a message as an agent."""
+        identity_id = f"letta_{agent_id}"
+        return await self.react_to_message(identity_id, room_id, event_id, emoji)
+
+    async def _read_receipt_with_recovery(
+        self,
+        identity_id: str,
+        room_id: str,
+        event_id: str,
+    ) -> bool:
+        """Send a read receipt with automatic token recovery."""
+        client = await self.get_client(identity_id)
+        if not client:
+            logger.error("Cannot send read receipt: no client for %s", identity_id)
+            return False
+
+        for attempt in range(2):
+            try:
+                response = await client.room_read_markers(
+                    room_id=room_id,
+                    fully_read_event=event_id,
+                    read_event=event_id,
+                )
+
+                if isinstance(response, RoomReadMarkersResponse):
+                    logger.debug(
+                        "Read receipt sent by %s for %s in %s",
+                        identity_id,
+                        event_id,
+                        room_id,
+                    )
+                    return True
+                if isinstance(response, RoomReadMarkersError):
+                    logger.debug("Failed to send read receipt: %s", response.message)
+                    if attempt == 0 and self._is_unknown_token_error(response):
+                        recovered = await self._recover_identity(identity_id)
+                        if recovered:
+                            client = await self.get_client(identity_id)
+                            if client:
+                                continue
+                    return False
+                logger.error("Unexpected response type: %s", type(response))
+                return False
+            except (RuntimeError, ValueError, asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                logger.debug("Error sending read receipt from %s: %s", identity_id, exc)
+                if attempt == 0 and self._is_unknown_token_error(exc):
+                    recovered = await self._recover_identity(identity_id)
+                    if recovered:
+                        client = await self.get_client(identity_id)
+                        if client:
+                            continue
+                return False
+        return False
+
+    async def send_read_receipt(
+        self,
+        identity_id: str,
+        room_id: str,
+        event_id: str,
+    ) -> bool:
+        """Send a read receipt for a message."""
+        return await self._read_receipt_with_recovery(identity_id, room_id, event_id)
+
+    async def read_receipt_as_agent(
+        self,
+        agent_id: str,
+        room_id: str,
+        event_id: str,
+    ) -> bool:
+        """Send a read receipt for a message as an agent."""
+        identity_id = f"letta_{agent_id}"
+        return await self.send_read_receipt(identity_id, room_id, event_id)
+
     async def close_client(self, identity_id: str) -> None:
         async with self._lock:
             pooled = self._clients.pop(identity_id, None)
@@ -288,7 +522,7 @@ class IdentityClientPool:
             try:
                 await pooled.client.close()
                 logger.info("Closed client for: %s", identity_id)
-            except Exception as exc:
+            except (RuntimeError, ValueError, asyncio.TimeoutError, aiohttp.ClientError) as exc:
                 logger.error("Error closing client for %s: %s", identity_id, exc)
 
     async def restart_client(self, identity_id: str) -> Optional[AsyncClient]:
@@ -302,7 +536,7 @@ class IdentityClientPool:
         for pooled in pooled_clients:
             try:
                 await pooled.client.close()
-            except Exception as exc:
+            except (RuntimeError, ValueError, asyncio.TimeoutError, aiohttp.ClientError) as exc:
                 logger.error("Error closing client %s: %s", pooled.identity_id, exc)
         logger.info("All identity clients closed")
 

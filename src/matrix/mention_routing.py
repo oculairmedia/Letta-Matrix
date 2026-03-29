@@ -9,6 +9,7 @@ This module provides functions to:
 """
 import os
 import re
+import asyncio
 import logging
 from typing import Any, List, Tuple, Optional
 
@@ -39,6 +40,26 @@ AGENT_MXID_PATTERN = re.compile(r'@(agent_[0-9a-f_]+):([a-zA-Z0-9.\-]+)')
 OC_MXID_PATTERN = re.compile(r'@(oc_[a-zA-Z0-9_]+):([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})')
 
 OPENCODE_BRIDGE_URL = os.environ.get("OPENCODE_BRIDGE_URL", "http://192.168.50.90:3201")
+_mention_session: Optional[aiohttp.ClientSession] = None
+_mention_session_lock = asyncio.Lock()
+
+
+async def _get_mention_session() -> aiohttp.ClientSession:
+    global _mention_session
+    if _mention_session is not None and not _mention_session.closed:
+        return _mention_session
+
+    async with _mention_session_lock:
+        if _mention_session is not None and not _mention_session.closed:
+            return _mention_session
+        connector = aiohttp.TCPConnector(
+            limit=50,
+            limit_per_host=20,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        _mention_session = aiohttp.ClientSession(connector=connector)
+        return _mention_session
 
 
 def strip_reply_fallback(body: str) -> str:
@@ -124,15 +145,15 @@ async def resolve_opencode_room(mxid: str) -> Optional[Tuple[str, str]]:
     """Returns (room_id, directory) for an OpenCode MXID, or None."""
     localpart = mxid.split(":")[0].lstrip("@")
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{OPENCODE_BRIDGE_URL}/registrations",
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-    except Exception as e:
+        session = await _get_mention_session()
+        async with session.get(
+            f"{OPENCODE_BRIDGE_URL}/registrations",
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+    except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, KeyError, TypeError) as e:
         logger.error(f"Failed to query opencode-bridge for {mxid}: {e}")
         return None
 
@@ -182,7 +203,7 @@ async def forward_to_opencode_room(
             logger.error(f"Failed to forward to OpenCode room: {response.message}")
             return None
         return None
-    except Exception as e:
+    except (RuntimeError, ValueError, KeyError, TypeError) as e:
         logger.error(f"Error forwarding to OpenCode room: {e}")
         return None
 
@@ -250,7 +271,7 @@ async def forward_to_agent_room(
             logger.error(f"Unexpected response type: {type(response)}")
             return None
             
-    except Exception as e:
+    except (RuntimeError, ValueError, KeyError, TypeError, asyncio.TimeoutError, aiohttp.ClientError) as e:
         logger.error(f"Error forwarding to {target_agent_name}'s room: {e}")
         return None
 

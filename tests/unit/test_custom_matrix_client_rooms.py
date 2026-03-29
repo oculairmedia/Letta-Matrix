@@ -57,7 +57,7 @@ class TestCreateRoomIfNeeded:
     async def test_create_room_exception(self, mock_client, mock_logger):
         """Test room creation when exception occurs"""
         # Mock exception during room creation
-        mock_client.room_create = AsyncMock(side_effect=Exception("Network error"))
+        mock_client.room_create = AsyncMock(side_effect=RuntimeError("Network error"))
 
         room_id = await create_room_if_needed(mock_client, mock_logger)
 
@@ -141,7 +141,7 @@ class TestJoinRoomIfNeeded:
     async def test_join_room_exception(self, mock_client, mock_logger):
         """Test join room when exception occurs"""
         # Mock exception during join
-        mock_client.join = AsyncMock(side_effect=Exception("Connection timeout"))
+        mock_client.join = AsyncMock(side_effect=RuntimeError("Connection timeout"))
 
         result = await join_room_if_needed(mock_client, "!room:matrix.oculair.ca", mock_logger)
 

@@ -157,7 +157,7 @@ class Config:
                 from src.matrix.group_config import load_groups_config
                 config.matrix_groups = load_groups_config(groups_json)
             return config
-        except Exception as e:
+        except (ValueError, TypeError, json.JSONDecodeError, OSError, ImportError) as e:
             raise ConfigurationError(f"Failed to load configuration: {e}")
 
 

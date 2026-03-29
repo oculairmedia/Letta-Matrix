@@ -397,7 +397,7 @@ class TestForwardToAgentRoom:
         from src.matrix.mention_routing import forward_to_agent_room
         
         with patch('src.matrix.identity_client_pool.get_identity_client_pool') as mock_get_pool:
-            mock_get_pool.side_effect = Exception("Connection failed")
+            mock_get_pool.side_effect = RuntimeError("Connection failed")
             
             event_id = await forward_to_agent_room(
                 source_room_id="!source:test",
