@@ -5,9 +5,12 @@ Matrix Room Manager - Handles room creation and management
 import asyncio
 import logging
 import aiohttp
+import os
+import time
 from typing import Dict, List, Optional
 
 from .types import AgentUserMapping
+from src.core.password_consistency import sync_agent_password_consistently
 
 logger = logging.getLogger("matrix_client.room_manager")
 
@@ -50,6 +53,14 @@ class MatrixRoomManager:
         # Cache to track which users are already joined to which rooms
         # Format: {(room_id, username): True}
         self._membership_cache: Dict[tuple, bool] = {}
+        self._agent_auth_failures: Dict[str, int] = {}
+        self._agent_auth_last_reason: Dict[str, str] = {}
+        self._agent_auth_last_status: Dict[str, int] = {}
+        self._agent_auth_next_retry_at: Dict[str, float] = {}
+        self._agent_auth_last_password: Dict[str, str] = {}
+        self.agent_auth_retry_limit = int(os.getenv("AGENT_AUTH_RETRY_LIMIT", "3"))
+        self.agent_auth_backoff_seconds = float(os.getenv("AGENT_AUTH_BACKOFF_SECONDS", "0.5"))
+        self.agent_auth_cooldown_seconds = float(os.getenv("AGENT_AUTH_COOLDOWN_SECONDS", "300"))
 
     async def update_room_name(self, room_id: str, new_name: str) -> bool:
         """Update the name of an existing room"""
@@ -247,6 +258,162 @@ class MatrixRoomManager:
         logger.warning(f"Failed to login as {username} after password reset")
         return None
 
+    def _current_time(self) -> float:
+        return time.monotonic()
+
+    def _agent_login_suppressed(self, agent_id: str, password: str) -> bool:
+        if self._agent_auth_last_password.get(agent_id) != password:
+            return False
+        next_retry = self._agent_auth_next_retry_at.get(agent_id, 0.0)
+        return self._current_time() < next_retry
+
+    def _record_agent_auth_failure(
+        self,
+        agent_id: str,
+        password: str,
+        reason: str,
+        status: int,
+        agent_username: str,
+    ) -> None:
+        failure_count = self._agent_auth_failures.get(agent_id, 0) + 1
+        self._agent_auth_failures[agent_id] = failure_count
+        self._agent_auth_last_reason[agent_id] = reason
+        self._agent_auth_last_status[agent_id] = status
+        self._agent_auth_last_password[agent_id] = password
+        self._agent_auth_next_retry_at[agent_id] = self._current_time() + self.agent_auth_cooldown_seconds
+
+        logger.warning(
+            "agent_auth_failure agent_id=%s agent_username=%s count=%s status=%s reason=%s cooldown_until=%.3f",
+            agent_id,
+            agent_username,
+            failure_count,
+            status,
+            reason,
+            self._agent_auth_next_retry_at[agent_id],
+        )
+
+    def _record_agent_auth_success(self, agent_id: str, password: str, agent_username: str) -> None:
+        previous_failures = self._agent_auth_failures.get(agent_id, 0)
+        self._agent_auth_failures[agent_id] = 0
+        self._agent_auth_last_reason[agent_id] = "healthy"
+        self._agent_auth_last_status[agent_id] = 200
+        self._agent_auth_last_password[agent_id] = password
+        self._agent_auth_next_retry_at[agent_id] = 0.0
+
+        if previous_failures > 0:
+            logger.info(
+                "agent_auth_recovered agent_id=%s agent_username=%s previous_failures=%s",
+                agent_id,
+                agent_username,
+                previous_failures,
+            )
+
+    async def _reset_agent_password_via_admin_room(
+        self,
+        session: aiohttp.ClientSession,
+        agent_username: str,
+        new_password: str,
+    ) -> bool:
+        admin_token = await self.get_admin_token()
+        if not admin_token:
+            return False
+
+        admin_room = "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca"
+        txn_id = int(self._current_time() * 1000)
+        url = f"{self.homeserver_url}/_matrix/client/v3/rooms/{admin_room}/send/m.room.message/{txn_id}"
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        command = f"!admin users reset-password {agent_username} {new_password}"
+
+        async with session.put(
+            url,
+            headers=headers,
+            json={"msgtype": "m.text", "body": command},
+            timeout=DEFAULT_TIMEOUT,
+        ) as response:
+            if response.status != 200:
+                return False
+
+        await asyncio.sleep(self.agent_auth_backoff_seconds)
+        return True
+
+    async def _login_agent_with_recovery(
+        self,
+        session: aiohttp.ClientSession,
+        agent_id: str,
+        agent_username: str,
+        agent_password: str,
+    ) -> Optional[str]:
+        login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
+
+        if self._agent_login_suppressed(agent_id, agent_password):
+            self._record_agent_auth_failure(
+                agent_id,
+                agent_password,
+                "suppressed_by_cooldown",
+                429,
+                agent_username,
+            )
+            return None
+
+        async def login_with_password(password: str) -> tuple[Optional[str], int, str]:
+            login_data = {
+                "type": "m.login.password",
+                "user": agent_username,
+                "password": password,
+            }
+            async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("access_token"), 200, ""
+                body = await response.text()
+                return None, response.status, body
+
+        token, status, error_text = await login_with_password(agent_password)
+        if token:
+            self._record_agent_auth_success(agent_id, agent_password, agent_username)
+            return token
+
+        if status != 403 and "M_FORBIDDEN" not in error_text:
+            self._record_agent_auth_failure(
+                agent_id,
+                agent_password,
+                "login_failed_non_forbidden",
+                status,
+                agent_username,
+            )
+            return None
+
+        for attempt in range(1, self.agent_auth_retry_limit + 1):
+            new_password = self.user_manager.generate_agent_password(agent_id)
+            reset_ok = await self._reset_agent_password_via_admin_room(
+                session,
+                agent_username,
+                new_password,
+            )
+            if not reset_ok:
+                await asyncio.sleep(self.agent_auth_backoff_seconds * attempt)
+                continue
+
+            synced = await sync_agent_password_consistently(agent_id, new_password)
+            if not synced:
+                await asyncio.sleep(self.agent_auth_backoff_seconds * attempt)
+                continue
+
+            token, _, _ = await login_with_password(new_password)
+            if token:
+                self._record_agent_auth_success(agent_id, new_password, agent_username)
+                return token
+            await asyncio.sleep(self.agent_auth_backoff_seconds * attempt)
+
+        self._record_agent_auth_failure(
+            agent_id,
+            agent_password,
+            "login_failed_after_recovery",
+            403,
+            agent_username,
+        )
+        return None
+
     async def ensure_required_members(self, room_id: str, agent_id: str) -> Dict[str, str]:
         """
         Ensure all required members are in the room.
@@ -269,31 +436,22 @@ class MatrixRoomManager:
                 return {user: "failed" for user in self.REQUIRED_ROOM_MEMBERS}
             
             agent_username = mapping.matrix_user_id.split(':')[0].replace('@', '')
-            agent_password = mapping.matrix_password
+            agent_password = str(mapping.matrix_password)
             
             async with aiohttp.ClientSession() as session:
-                # Login as agent once for all invites
-                login_url = f"{self.homeserver_url}/_matrix/client/r0/login"
-                login_data = {
-                    "type": "m.login.password",
-                    "user": agent_username,
-                    "password": agent_password
-                }
-                
-                async with session.post(login_url, json=login_data, timeout=DEFAULT_TIMEOUT) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"Failed to login as agent {agent_username}: {response.status} - {error_text}")
-                        if response.status == 403 or "M_FORBIDDEN" in error_text:
-                            try:
-                                from src.matrix.alerting import alert_auth_failure
-                                await alert_auth_failure(agent_username, room_id)
-                            except Exception as alert_error:
-                                logger.warning(f"Failed to send auth-failure alert for {agent_username}: {alert_error}")
-                        return {user: "failed" for user in self.REQUIRED_ROOM_MEMBERS}
-                    
-                    auth_data = await response.json()
-                    agent_token = auth_data.get("access_token")
+                agent_token = await self._login_agent_with_recovery(
+                    session,
+                    agent_id,
+                    agent_username,
+                    agent_password,
+                )
+                if not agent_token:
+                    try:
+                        from src.matrix.alerting import alert_auth_failure
+                        await alert_auth_failure(agent_username, room_id)
+                    except Exception as alert_error:
+                        logger.warning(f"Failed to send auth-failure alert for {agent_username}: {alert_error}")
+                    return {user: "failed" for user in self.REQUIRED_ROOM_MEMBERS}
                 
                 for required_user in self.REQUIRED_ROOM_MEMBERS:
                     if required_user in current_members:

@@ -131,6 +131,19 @@ class AgentUserManager:
                 # Handle backward compatibility for new invitation_status field
                 if "invitation_status" not in mapping_dict:
                     mapping_dict["invitation_status"] = None
+
+                try:
+                    from src.core.identity_storage import get_identity_service
+
+                    identity = get_identity_service().get_by_agent_id(str(db_mapping.agent_id))
+                    if identity is not None:
+                        if getattr(identity, "display_name", None):
+                            mapping_dict["agent_name"] = str(identity.display_name)
+                        if getattr(identity, "mxid", None):
+                            mapping_dict["matrix_user_id"] = str(identity.mxid)
+                except Exception as identity_error:
+                    logger.debug(f"Identity enrichment unavailable for {db_mapping.agent_id}: {identity_error}")
+
                 agent_id = str(db_mapping.agent_id)
                 self.mappings[agent_id] = AgentUserMapping(**mapping_dict)
 

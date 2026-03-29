@@ -201,6 +201,12 @@ def _parse_stream_event(
         metadata["tool_name"] = raw.get("tool_name", "unknown")
         if raw.get("tool_call_id"):
             metadata["tool_call_id"] = raw["tool_call_id"]
+        if raw.get("arguments"):
+            metadata["arguments"] = raw["arguments"]
+        logger.info(
+            "[GW-STREAM] TOOL_CALL raw=%s",
+            {k: (v[:200] if isinstance(v, str) and len(v) > 200 else v) for k, v in raw.items()},
+        )
 
     elif mapped_type == StreamEventType.TOOL_RETURN:
         metadata["tool_name"] = raw.get("tool_name") or "unknown"
