@@ -120,6 +120,7 @@ async def send_to_letta_api_streaming(
     reply_to_sender: Optional[str] = None,
     opencode_sender: Optional[str] = None,
     room_member_count: int = 3,
+    thread_root_event_id: Optional[str] = None,
 ) -> str:
     """
     Send a message to Letta via the WS gateway with real-time streaming.
@@ -156,17 +157,30 @@ async def send_to_letta_api_streaming(
 
     # ── Matrix message callbacks ──────────────────────────────────
 
-    async def send_message(rid: str, content: str, msgtype: str = "m.text") -> str:
+    async def send_message(
+        rid: str,
+        content: str,
+        msgtype: str = "m.text",
+        thread_event_id: Optional[str] = None,
+        thread_latest_event_id: Optional[str] = None,
+    ) -> str:
         event_id = await send_as_agent_with_event_id(
             rid,
             content,
             config,
             logger,
             msgtype=msgtype,
+            thread_event_id=thread_event_id,
+            thread_latest_event_id=thread_latest_event_id,
         )
         return event_id or ""
 
-    async def send_final_message(rid: str, content: str) -> str:
+    async def send_final_message(
+        rid: str,
+        content: str,
+        thread_event_id: Optional[str] = None,
+        thread_latest_event_id: Optional[str] = None,
+    ) -> str:
         final_content = content
 
         logger.debug(
@@ -206,6 +220,8 @@ async def send_to_letta_api_streaming(
             logger,
             reply_to_event_id=reply_to_event_id,
             reply_to_sender=reply_to_sender,
+            thread_event_id=thread_event_id,
+            thread_latest_event_id=thread_latest_event_id,
         )
         return event_id or ""
 
@@ -229,6 +245,7 @@ async def send_to_letta_api_streaming(
             room_id=room_id,
             send_final_message=send_final_message,
             delete_message=delete_message,
+            thread_root_event_id=thread_root_event_id,
         )
     else:
         handler = StreamingMessageHandler(
@@ -237,6 +254,7 @@ async def send_to_letta_api_streaming(
             room_id=room_id,
             delete_progress=False,
             send_final_message=send_final_message,
+            thread_root_event_id=thread_root_event_id,
         )
 
     final_response = ""
@@ -460,12 +478,7 @@ async def send_to_letta_api_streaming(
 
     if not final_response:
         fallback_text = NO_TEXT_RESPONSE_FALLBACK
-        await handler.handle_event(
-            StreamEvent(type=StreamEventType.ASSISTANT, content=fallback_text)
-        )
-        await handler.handle_event(
-            StreamEvent(type=StreamEventType.STOP, content="end_turn")
-        )
+        await send_message(room_id, fallback_text, msgtype="m.notice")
         final_response = fallback_text
 
     return final_response
