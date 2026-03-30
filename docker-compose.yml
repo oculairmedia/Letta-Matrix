@@ -79,8 +79,8 @@ services:
       - .env
     environment:
       - MATRIX_HOMESERVER_URL=http://tuwunel:6167
-      - DATABASE_URL=postgresql://letta:letta@192.168.50.90:5432/matrix_letta
-      - CONVERSATION_TRACKER_URL=http://192.168.50.90:3101
+      - DATABASE_URL=${DATABASE_URL}
+      - CONVERSATION_TRACKER_URL=${CONVERSATION_TRACKER_URL}
       - MATRIX_API_URL=http://matrix-api:8000
       - LETTA_CODE_ENABLED=false
     volumes:
@@ -121,7 +121,7 @@ services:
       - .env
     environment:
       - MATRIX_HOMESERVER_URL=http://tuwunel:6167
-      - DATABASE_URL=postgresql://letta:letta@192.168.50.90:5432/matrix_letta
+      - DATABASE_URL=${DATABASE_URL}
       - USE_IDENTITY_POSTING=true
       - IDENTITY_POSTING_STRICT=true
     volumes:
@@ -152,15 +152,15 @@ services:
     env_file:
       - .env
     environment:
-      - TEMPORAL_HOST=192.168.50.90:7233
+      - TEMPORAL_HOST=${HOST_IP:-192.168.50.90}:7233
       - TEMPORAL_NAMESPACE=matrix
       - TEMPORAL_TASK_QUEUE=matrix-file-queue
       - MATRIX_HOMESERVER_URL=http://tuwunel:6167
       - MATRIX_ACCESS_TOKEN=${MATRIX_ADMIN_TOKEN}
-      - LETTA_API_URL=${LETTA_API_URL:-http://192.168.50.90:8289}
+      - LETTA_API_URL=${LETTA_API_URL}
       - LETTA_TOKEN=${LETTA_TOKEN}
       - MATRIX_API_URL=http://matrix-api:8000
-      - HAYHOOKS_INGEST_URL=http://192.168.50.90:1416/ingest_document/run
+      - HAYHOOKS_INGEST_URL=${HAYHOOKS_INGEST_URL}
       - DOCUMENT_PARSING_ENABLED=true
       - DOCUMENT_PARSING_MAX_FILE_SIZE_MB=50
       - DOCUMENT_PARSING_TIMEOUT_SECONDS=120
@@ -195,7 +195,7 @@ services:
       - MATRIX_ACCESS_TOKEN=${OPENCODE_BRIDGE_ACCESS_TOKEN}
       - BRIDGE_PORT=3201
       - AGENT_MAPPINGS_PATH=/app/data/agent_user_mappings.json
-      - DATABASE_URL=postgresql://letta:letta@192.168.50.90:5432/matrix_letta
+      - DATABASE_URL=${DATABASE_URL}
     volumes:
       - ./matrix_client_data:/app/data
       - ./opencode-bridge/dist:/app/dist:ro
@@ -240,7 +240,7 @@ services:
       - DATA_DIR=/app/data
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Letta Integration
-      - LETTA_API_URL=${LETTA_API_URL:-http://192.168.50.90:8283}
+      - LETTA_API_URL=${LETTA_API_URL}
       - LETTA_API_KEY=${LETTA_API_KEY}
       # Cross-Run Tracking Configuration
       - WEBHOOK_PORT=3101
@@ -341,7 +341,7 @@ services:
     restart: unless-stopped
     mem_limit: 1g
     memswap_limit: 1g
-    command: ["--config", "/etc/livekit.yaml", "--node-ip=192.168.50.90"]
+    command: ["--config", "/etc/livekit.yaml", "--node-ip=${HOST_IP:-192.168.50.90}"]
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
     environment:
@@ -372,11 +372,11 @@ services:
     mem_limit: 256m
     memswap_limit: 256m
     environment:
-      - LIVEKIT_URL=wss://matrix.oculair.ca/livekit/sfu
+      - LIVEKIT_URL=${LIVEKIT_URL:-wss://matrix.oculair.ca/livekit/sfu}
       - LIVEKIT_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_SECRET=${LIVEKIT_API_SECRET}
       - LK_JWT_PORT=8080
-      - LIVEKIT_FULL_ACCESS_HOMESERVERS=matrix.oculair.ca
+      - LIVEKIT_FULL_ACCESS_HOMESERVERS=${MATRIX_SERVER_NAME:-matrix.oculair.ca}
     networks:
       - matrix-internal
     ports:
