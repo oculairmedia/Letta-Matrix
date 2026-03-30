@@ -36,7 +36,6 @@ The bridge connects Letta AI agents to Matrix chat rooms. Each Letta agent gets:
 - `@admin:matrix.oculair.ca`
 - `@letta:matrix.oculair.ca`
 - `@oc_matrix_synapse_deployment:matrix.oculair.ca` (OpenCode bridge)
-- `@agent_mail_bridge:matrix.oculair.ca`
 
 **Post-creation**:
 - Room added to "Letta Agents" space

@@ -5,7 +5,6 @@ Fix room membership for all agent rooms.
 This script ensures all required members are in every agent room:
 - @admin:matrix.oculair.ca
 - @letta:matrix.oculair.ca
-- @agent_mail_bridge:matrix.oculair.ca
 
 Usage:
     python scripts/admin/fix_room_membership.py [--dry-run]
@@ -37,7 +36,6 @@ DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "letta")
 REQUIRED_MEMBERS = [
     "@admin:matrix.oculair.ca",
     "@letta:matrix.oculair.ca",
-    "@agent_mail_bridge:matrix.oculair.ca",
 ]
 
 
