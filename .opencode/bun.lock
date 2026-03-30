@@ -4,7 +4,7 @@
   "workspaces": {
     "": {
       "dependencies": {
-        "@opencode-ai/plugin": "1.2.21",
+        "@opencode-ai/plugin": "1.3.6",
         "matrix-js-sdk": "^34.13.0",
         "yaml": "^2.8.0",
       },
@@ -17,9 +17,9 @@
 
     "@matrix-org/olm": ["@matrix-org/olm@3.2.15", "", {}, "sha512-S7lOrndAK9/8qOtaTq/WhttJC/o4GAzdfK0MUPpo8ApzsJEC0QjtwrkC3KBXdFP1cD1MXi/mlKR7aaoVMKgs6Q=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.2.21", "", { "dependencies": { "@opencode-ai/sdk": "1.2.21", "zod": "4.1.8" } }, "sha512-2/JhdD19bu9fxPIzZun2x57KA4Q4EsY/yRQZO54GTsVugZ+T0b5GZkFFYIyOVE6bU4PCoSYBK5MAU+VCEyxvEA=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.3.6", "", { "dependencies": { "@opencode-ai/sdk": "1.3.6", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.1.92", "@opentui/solid": ">=0.1.92" }, "optionalPeers": ["@opentui/core", "@opentui/solid"] }, "sha512-u198ug1P/CO1BsxoNy1m94tzttuFF6E9GqTv83nFOVsAk5XL67TwM7oqiKZ+soXtecxDBiPSvq7EppwAaEXflw=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.2.21", "", {}, "sha512-7XF7QlXDP5iAbGcAsxsrmKlIjRtSzKgbwuDHPPuZbILkhGOfCo05XwPidAZrVWucZ/re44oc/psw2zDECaZOpQ=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.3.6", "", {}, "sha512-9hSMEGSSL3iPXs3g3J+mHE1PKZL7fEnur/Mog1K48w+Dfkqi0E0FzGtW0dJDTcrmlkCgtUMGSw9COURlM5X78g=="],
 
     "@types/events": ["@types/events@3.0.3", "", {}, "sha512-trOc4AAUThEz9hapPtSd7wf5tiQKvTtu5b371UxXdTuqzIh0ArcRspRP0i0Viu+LXstIQ1z96t1nsPxT9ol01g=="],
 
