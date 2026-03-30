@@ -1,5 +1,7 @@
 import os
+from pathlib import Path
 from nio import AsyncClient, LoginError, LogoutError
+from nio.exceptions import LocalProtocolError
 import logging
 
 from src.core.retry import retry_async
@@ -23,8 +25,41 @@ class MatrixAuthManager:
         self.device_name = device_name
         self.client = None
 
-        # Store directory for session persistence
         self.store_path = './matrix_store'
+        self.session_store_enabled = _env_bool('MATRIX_SESSION_STORE_ENABLED', True)
+        self.store_max_files_per_user = int(
+            os.getenv('MATRIX_STORE_MAX_FILES_PER_USER', '25')
+        )
+        self.store_prune_enabled = _env_bool('MATRIX_STORE_PRUNE_ENABLED', True)
+
+    def _prune_stale_store_files(self) -> None:
+        if not self.store_prune_enabled:
+            return
+        try:
+            store_dir = Path(self.store_path)
+            if not store_dir.exists():
+                return
+            user_prefix = f'{self.user_id}_'
+            db_files = sorted(
+                [
+                    p
+                    for p in store_dir.glob('*.db')
+                    if p.name.startswith(user_prefix)
+                ],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            stale = db_files[self.store_max_files_per_user :]
+            for db_file in stale:
+                db_file.unlink(missing_ok=True)
+            if stale:
+                logger.info(
+                    'Pruned %d stale Matrix store files for %s',
+                    len(stale),
+                    self.user_id,
+                )
+        except OSError as prune_error:
+            logger.warning(f'Could not prune stale Matrix store files: {prune_error}')
 
     async def get_authenticated_client(self):
         """
@@ -32,27 +67,28 @@ class MatrixAuthManager:
         Handles login and session persistence with rate limiting protection.
         """
         try:
-            # Create store directory if it doesn't exist
-            os.makedirs(self.store_path, exist_ok=True)
+            if self.session_store_enabled:
+                os.makedirs(self.store_path, exist_ok=True)
+                self._prune_stale_store_files()
 
-            # Create client with persistent store
             self.client = AsyncClient(
                 homeserver=self.homeserver_url,
                 user=self.user_id,
-                store_path=self.store_path,
+                store_path=self.store_path if self.session_store_enabled else None,
                 config=None,
             )
 
-            # Try to restore previous session first
-            try:
-                self.client.load_store()
-                if self.client.access_token and self.client.device_id and self.client.user_id:
-                    logger.info(
-                        f'Restored session from store - Token: {self.client.access_token[:20]}..., Device: {self.client.device_id}'
-                    )
-                    logger.info('Skipping login to avoid rate limiting')
-                    return self.client
-                else:
+            if self.session_store_enabled:
+                try:
+                    if not self.client.user_id:
+                        self.client.user_id = str(self.user_id)
+                    self.client.load_store()
+                    if self.client.access_token and self.client.device_id and self.client.user_id:
+                        logger.info(
+                            f'Restored session from store - Token: {self.client.access_token[:20]}..., Device: {self.client.device_id}'
+                        )
+                        logger.info('Skipping login to avoid rate limiting')
+                        return self.client
                     logger.info(
                         'Session load attempted but missing credentials - '
                         f'Token: {bool(self.client.access_token)}, '
@@ -61,10 +97,10 @@ class MatrixAuthManager:
                     )
                     self.client.access_token = ''
                     self.client.device_id = None
-            except (OSError, RuntimeError, ValueError, TypeError) as e:
-                logger.warning(f'Could not restore session: {e}')
-                self.client.access_token = ''
-                self.client.device_id = None
+                except (LocalProtocolError, OSError, RuntimeError, ValueError, TypeError) as e:
+                    logger.warning(f'Could not restore session: {e}')
+                    self.client.access_token = ''
+                    self.client.device_id = None
 
             # Only attempt login if we don't have stored credentials
             if not (self.client.access_token and self.client.device_id and self.client.user_id):
@@ -169,3 +205,10 @@ class MatrixAuthManager:
             finally:
                 await self.client.close()
                 self.client = None
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
