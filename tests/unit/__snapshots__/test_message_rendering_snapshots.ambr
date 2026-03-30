@@ -31,22 +31,19 @@
 # ---
 # name: test_agent_actions_rendering_snapshots[reply_with_quote-Acknowledged \u2705-$orig-reply-@alice:matrix.oculair.ca-Please confirm deployment window-!room:matrix.oculair.ca]
   dict({
-    'body': '''
-      > <@alice:matrix.oculair.ca> Please confirm deployment window
-      
-      Acknowledged ✅
-    ''',
-    'format': 'org.matrix.custom.html',
-    'formatted_body': '<mx-reply><blockquote><a href="https://matrix.to/#/!room:matrix.oculair.ca/$orig-reply">In reply to</a> <a href="https://matrix.to/#/@alice:matrix.oculair.ca">@alice:matrix.oculair.ca</a><br/>Please confirm deployment window</blockquote></mx-reply>Acknowledged ✅',
+    'body': 'Acknowledged ✅',
     'm.mentions': dict({
       'user_ids': list([
         '@alice:matrix.oculair.ca',
       ]),
     }),
     'm.relates_to': dict({
+      'event_id': '$orig-reply',
+      'is_falling_back': True,
       'm.in_reply_to': dict({
         'event_id': '$orig-reply',
       }),
+      'rel_type': 'm.thread',
     }),
     'msgtype': 'm.text',
   })

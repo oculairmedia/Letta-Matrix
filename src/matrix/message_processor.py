@@ -347,7 +347,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
                 event_id=original_event_id or "",
                 conversation_id="",
                 is_streaming=config.letta_streaming_enabled,
-                reply_to_event_id=original_event_id,
+                reply_to_event_id=original_event_id if user_reply_to_event_id else None,
                 thread_root_event_id=thread_root_event_id_for_routing,
                 thread_latest_event_id=thread_latest_event_id_for_routing,
                 config=config,
@@ -369,7 +369,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
                 config,
                 logger,
                 room_id,
-                reply_to_event_id=original_event_id,
+                reply_to_event_id=original_event_id if user_reply_to_event_id else None,
                 reply_to_sender=None,
                 opencode_sender=opencode_mxid,
                 thread_root_event_id=thread_root_event_id_for_routing,
@@ -419,7 +419,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
                         response_text=letta_response,
                         config=config,
                         logger_instance=logger,
-                        reply_to_event_id=original_event_id,
+                        reply_to_event_id=original_event_id if user_reply_to_event_id else None,
                         reply_to_sender=None,
                     )
                 )
@@ -440,7 +440,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
                         letta_response,
                         config,
                         logger,
-                        reply_to_event_id=original_event_id,
+                        reply_to_event_id=original_event_id if user_reply_to_event_id else None,
                         reply_to_sender=None,
                         thread_event_id=thread_root_event_id_for_routing,
                         thread_latest_event_id=thread_latest_event_id_for_routing,
@@ -463,7 +463,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
                                 "is_falling_back": True,
                                 "m.in_reply_to": {"event_id": fallback_eid},
                             }
-                        elif original_event_id:
+                        elif original_event_id and user_reply_to_event_id:
                             message_content["m.relates_to"] = {
                                 "m.in_reply_to": {"event_id": original_event_id},
                             }

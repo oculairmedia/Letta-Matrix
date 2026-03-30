@@ -172,27 +172,15 @@ def _build_message_content(
             "m.in_reply_to": {"event_id": fallback_event_id},
         }
     elif reply_to_event_id:
+        # Use m.thread (MSC3440 / spec v1.4+) so responses appear as
+        # collapsible threads under the user's message in Element, rather
+        # than as flat rich-replies in the main timeline.
         message_data["m.relates_to"] = {
-            "m.in_reply_to": {"event_id": reply_to_event_id}
+            "rel_type": "m.thread",
+            "event_id": reply_to_event_id,
+            "is_falling_back": True,
+            "m.in_reply_to": {"event_id": reply_to_event_id},
         }
-        quoted_sender = reply_to_sender or "user"
-        quoted_body = reply_to_body or ""
-        if quoted_body:
-            if len(quoted_body) > 200:
-                quoted_body = quoted_body[:200] + "..."
-            message_data[
-                "body"
-            ] = f"> <{quoted_sender}> {quoted_body}\n\n{message}"
-            mx_reply_html = (
-                f'<mx-reply><blockquote>'
-                f'<a href="https://matrix.to/#/{room_id}/{reply_to_event_id}">In reply to</a> '
-                f'<a href="https://matrix.to/#/{html.escape(quoted_sender)}">{html.escape(quoted_sender)}</a><br/>'
-                f"{html.escape(quoted_body)}"
-                f"</blockquote></mx-reply>"
-            )
-            existing_html = message_data.get("formatted_body", message)
-            message_data["format"] = "org.matrix.custom.html"
-            message_data["formatted_body"] = mx_reply_html + existing_html
         if reply_to_sender:
             message_data["m.mentions"] = {"user_ids": [reply_to_sender]}
 
@@ -295,7 +283,7 @@ async def send_as_agent_with_event_id(
 
         if reply_to_event_id:
             logger.debug(
-                f"[SEND_AS_AGENT] Creating rich reply to event {reply_to_event_id}"
+                f"[SEND_AS_AGENT] Threading response under event {reply_to_event_id}"
             )
 
         if agent_id:

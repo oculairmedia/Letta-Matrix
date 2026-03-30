@@ -830,7 +830,7 @@ class TestRoomCreation:
         room_manager.user_manager.generate_agent_password = MagicMock(return_value="AgentPass_recovery_123!")
 
         with patch.object(room_manager, '_reset_agent_password_via_admin_room', new_callable=AsyncMock, return_value=True) as mock_reset:
-            with patch('src.core.room_manager.sync_agent_password_consistently', new_callable=AsyncMock, return_value=True) as mock_sync:
+            with patch('src.core.room_agent_auth.sync_agent_password_consistently', new_callable=AsyncMock, return_value=True) as mock_sync:
                 token = await room_manager._login_agent_with_recovery(
                     mock_session,
                     "agent-123",

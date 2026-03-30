@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.matrix.client import _dispatch_letta_task, _maybe_handle_fs_mode
+from src.matrix.task_manager import _dispatch_letta_task
+from src.matrix.fs_mode_handler import _maybe_handle_fs_mode
 
 
 @pytest.mark.asyncio
@@ -26,8 +27,8 @@ async def test_dispatch_busy_notice_preserves_thread_relation():
     active_task = asyncio.create_task(asyncio.sleep(60))
 
     try:
-        with patch("src.matrix.client._active_letta_tasks", {("!room:test.com", "agent-1"): active_task}), patch(
-            "src.matrix.client.send_as_agent", new_callable=AsyncMock
+        with patch("src.matrix.task_manager._active_letta_tasks", {("!room:test.com", "agent-1"): active_task}), patch(
+            "src.matrix.task_manager.send_as_agent", new_callable=AsyncMock
         ) as mock_send:
             handled = await _dispatch_letta_task(
                 room=room,
@@ -65,11 +66,11 @@ async def test_dispatch_busy_notice_respects_cooldown_and_skips_send():
     active_task = asyncio.create_task(asyncio.sleep(60))
 
     try:
-        with patch("src.matrix.client._active_letta_tasks", {("!room:test.com", "agent-1"): active_task}), patch(
-            "src.matrix.client._still_processing_last_sent", {"!room:test.com": 100.0}
-        ), patch("src.matrix.client._STILL_PROCESSING_COOLDOWN", 60.0), patch(
-            "src.matrix.client.time.monotonic", return_value=120.0
-        ), patch("src.matrix.client.send_as_agent", new_callable=AsyncMock) as mock_send:
+        with patch("src.matrix.task_manager._active_letta_tasks", {("!room:test.com", "agent-1"): active_task}), patch(
+            "src.matrix.task_manager._still_processing_last_sent", {"!room:test.com": 100.0}
+        ), patch("src.matrix.task_manager._STILL_PROCESSING_COOLDOWN", 60.0), patch(
+            "src.matrix.task_manager.time.monotonic", return_value=120.0
+        ), patch("src.matrix.task_manager.send_as_agent", new_callable=AsyncMock) as mock_send:
             handled = await _dispatch_letta_task(
                 room=room,
                 event=event,
@@ -97,7 +98,7 @@ async def test_fs_mode_returns_false_when_not_enabled():
     room = SimpleNamespace(room_id="!room:test.com", display_name="Test Room")
     event = SimpleNamespace(sender="@user:test.com", body="hello", event_id="$evt")
 
-    with patch("src.matrix.client.get_letta_code_room_state", return_value={"enabled": False}):
+    with patch("src.matrix.fs_mode_handler.get_letta_code_room_state", return_value={"enabled": False}):
         handled = await _maybe_handle_fs_mode(
             room,
             event,
@@ -115,8 +116,8 @@ async def test_fs_mode_without_agent_id_notifies_and_handles():
     room = SimpleNamespace(room_id="!room:test.com", display_name="Test Room")
     event = SimpleNamespace(sender="@user:test.com", body="hello", event_id="$evt", source={})
 
-    with patch("src.matrix.client.get_letta_code_room_state", return_value={"enabled": True}), patch(
-        "src.matrix.client.send_as_agent", new_callable=AsyncMock
+    with patch("src.matrix.fs_mode_handler.get_letta_code_room_state", return_value={"enabled": True}), patch(
+        "src.matrix.fs_mode_handler.send_as_agent", new_callable=AsyncMock
     ) as mock_send, patch("src.models.agent_mapping.AgentMappingDB") as mock_db:
         mock_db.return_value.get_by_room_id.return_value = None
         handled = await _maybe_handle_fs_mode(
@@ -144,9 +145,9 @@ async def test_fs_mode_opencode_sender_runs_letta_code_task_with_wrapped_prompt(
     )
     config = Mock(letta_code_enabled=True)
 
-    with patch("src.matrix.client.get_letta_code_room_state", return_value={"enabled": True, "projectDir": "/tmp/proj"}), patch(
-        "src.matrix.client.matrix_formatter.format_opencode_envelope", return_value="WRAPPED"
-    ) as mock_wrap, patch("src.matrix.client.run_letta_code_task", new_callable=AsyncMock) as mock_run:
+    with patch("src.matrix.fs_mode_handler.get_letta_code_room_state", return_value={"enabled": True, "projectDir": "/tmp/proj"}), patch(
+        "src.matrix.fs_mode_handler.matrix_formatter.format_opencode_envelope", return_value="WRAPPED"
+    ) as mock_wrap, patch("src.matrix.fs_mode_handler.run_letta_code_task", new_callable=AsyncMock) as mock_run:
         handled = await _maybe_handle_fs_mode(
             room,
             event,
@@ -166,9 +167,9 @@ async def test_fs_mode_missing_project_dir_notifies_and_handles():
     room = SimpleNamespace(room_id="!room:test.com", display_name="Test Room")
     event = SimpleNamespace(sender="@user:test.com", body="hello", event_id="$evt", source={})
 
-    with patch("src.matrix.client.get_letta_code_room_state", return_value={"enabled": True}), patch(
-        "src.matrix.client.resolve_letta_project_dir", new_callable=AsyncMock, return_value=None
-    ), patch("src.matrix.client.send_as_agent", new_callable=AsyncMock) as mock_send:
+    with patch("src.matrix.fs_mode_handler.get_letta_code_room_state", return_value={"enabled": True}), patch(
+        "src.matrix.fs_mode_handler.resolve_letta_project_dir", new_callable=AsyncMock, return_value=None
+    ), patch("src.matrix.fs_mode_handler.send_as_agent", new_callable=AsyncMock) as mock_send:
         handled = await _maybe_handle_fs_mode(
             room,
             event,

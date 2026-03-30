@@ -139,11 +139,18 @@ class TestTypingIndicatorManagerIdempotency:
 
 
 class TestHTMLEscapeReplyMetadata:
-    """Tests for HTML-escaping quoted_sender and quoted_body in replies."""
+    """Tests for reply metadata safety.
+
+    After the switch from rich-reply (mx-reply blockquote) to m.thread
+    (MSC3440), reply_to_sender and reply_to_body are no longer embedded in
+    formatted_body at all. This eliminates the XSS vector entirely — the
+    tests now verify that malicious content never appears in any HTML output
+    and that the m.thread structure is correct.
+    """
 
     @pytest.mark.asyncio
     async def test_escape_sender_with_script_tag(self):
-        """Sender with <script> tag should be escaped in mx_reply_html."""
+        """Malicious sender must not appear in any HTML output."""
         from src.matrix.agent_actions import send_as_agent_with_event_id
         from src.matrix.config import Config
 
@@ -153,7 +160,6 @@ class TestHTMLEscapeReplyMetadata:
         logger = Mock(spec=logging.Logger)
         room_id = "!test:matrix.test"
 
-        # Mock the mapping service
         mock_mapping = {
             "agent_name": "TestAgent",
             "matrix_user_id": "@agent:matrix.test",
@@ -172,7 +178,6 @@ class TestHTMLEscapeReplyMetadata:
             "aiohttp.ClientSession.put",
             new_callable=AsyncMock,
         ) as mock_put:
-            # Setup mock response
             mock_response = AsyncMock()
             mock_response.status = 200
             mock_response.json = AsyncMock(return_value={"event_id": "$test"})
@@ -188,19 +193,26 @@ class TestHTMLEscapeReplyMetadata:
                 reply_to_body="Original message",
             )
 
-            # Check that the PUT was called
             assert mock_put.called
             call_args = mock_put.call_args
             json_data = call_args.kwargs.get("json", {})
-            formatted_body = json_data.get("formatted_body", "")
 
-            # The sender should be escaped in the HTML
-            assert html.escape(malicious_sender) in formatted_body
+            # With m.thread, sender/body are never in formatted_body — no XSS vector
+            formatted_body = json_data.get("formatted_body", "")
             assert "<script>" not in formatted_body
+
+            # m.thread structure present
+            relates_to = json_data.get("m.relates_to", {})
+            assert relates_to.get("rel_type") == "m.thread"
+            assert relates_to.get("event_id") == "$event123"
+
+            # Sender tracked via m.mentions
+            mentions = json_data.get("m.mentions", {})
+            assert malicious_sender in mentions.get("user_ids", [])
 
     @pytest.mark.asyncio
     async def test_escape_body_with_img_onerror(self):
-        """Quoted body with <img onerror> should be escaped."""
+        """Malicious quoted body must not appear in any HTML output."""
         from src.matrix.agent_actions import send_as_agent_with_event_id
         from src.matrix.config import Config
 
@@ -246,15 +258,18 @@ class TestHTMLEscapeReplyMetadata:
             assert mock_put.called
             call_args = mock_put.call_args
             json_data = call_args.kwargs.get("json", {})
-            formatted_body = json_data.get("formatted_body", "")
 
-            # The body should be escaped
-            assert html.escape(malicious_body) in formatted_body
+            # With m.thread, quoted body is never in formatted_body
+            formatted_body = json_data.get("formatted_body", "")
             assert "<img onerror" not in formatted_body
+
+            # m.thread structure present
+            relates_to = json_data.get("m.relates_to", {})
+            assert relates_to.get("rel_type") == "m.thread"
 
     @pytest.mark.asyncio
     async def test_normal_reply_still_works(self):
-        """Normal reply without HTML should still work."""
+        """Normal reply should use m.thread with m.mentions."""
         from src.matrix.agent_actions import send_as_agent_with_event_id
         from src.matrix.config import Config
 
@@ -298,11 +313,16 @@ class TestHTMLEscapeReplyMetadata:
             assert mock_put.called
             call_args = mock_put.call_args
             json_data = call_args.kwargs.get("json", {})
-            formatted_body = json_data.get("formatted_body", "")
 
-            # Normal text should be present
-            assert "Alice" in formatted_body
-            assert "Hello world" in formatted_body
+            # m.thread structure
+            relates_to = json_data.get("m.relates_to", {})
+            assert relates_to.get("rel_type") == "m.thread"
+            assert relates_to.get("event_id") == "$event123"
+            assert relates_to.get("is_falling_back") is True
+
+            # Sender tracked via m.mentions
+            mentions = json_data.get("m.mentions", {})
+            assert "Alice" in mentions.get("user_ids", [])
 
 
 # =============================================================================

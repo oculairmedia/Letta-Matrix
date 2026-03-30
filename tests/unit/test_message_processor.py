@@ -163,11 +163,13 @@ async def test_process_letta_message_passes_thread_context_to_non_streaming_send
 
     process_await_args = mock_process_agent_response.await_args
     assert process_await_args is not None
-    assert process_await_args.kwargs["reply_to_event_id"] == "$evt-1"
+    # reply_to_event_id is None because user_reply_to_event_id is not set
+    # (the message is in a thread but is not itself a reply)
+    assert process_await_args.kwargs["reply_to_event_id"] is None
 
     send_await_args = mock_send_as_agent.await_args
     assert send_await_args is not None
-    assert send_await_args.kwargs["reply_to_event_id"] == "$evt-1"
+    assert send_await_args.kwargs["reply_to_event_id"] is None
     assert send_await_args.kwargs["thread_event_id"] == "$thread-root"
     assert send_await_args.kwargs["thread_latest_event_id"] == "$evt-1"
 
