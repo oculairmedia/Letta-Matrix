@@ -552,7 +552,7 @@ class TestMessageCallback:
         mock_client.user_id = "@bot:test.com"
 
         # Mock is_duplicate_event to return True
-        with patch('src.matrix.client.is_duplicate_event', return_value=True):
+        with patch('src.matrix.message_router.is_duplicate_event', return_value=True):
             await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
         # Should return early, no Letta API call
@@ -575,7 +575,7 @@ class TestMessageCallback:
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
 
-        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+        with patch('src.matrix.message_router.is_duplicate_event', return_value=False):
             await message_callback(mock_room, mock_event, mock_config, mock_logger, mock_client)
 
         # Should return early without processing
@@ -596,7 +596,7 @@ class TestMessageCallback:
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
 
-        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+        with patch('src.matrix.message_router.is_duplicate_event', return_value=False):
             with patch('src.core.mapping_service.get_mapping_by_room_id', 
                        side_effect=mock_get_mapping_by_room_id(mock_mapping_data)):
                 with patch('src.core.mapping_service.get_mapping_by_matrix_user', 
@@ -627,7 +627,7 @@ class TestMessageCallback:
         mock_client.user_id = "@bot:test.com"
 
         # Mock Letta API response
-        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+        with patch('src.matrix.message_router.is_duplicate_event', return_value=False):
             with patch('src.core.mapping_service.get_mapping_by_room_id', 
                        side_effect=mock_get_mapping_by_room_id(mock_mapping_data)):
                 with patch('src.core.mapping_service.get_mapping_by_matrix_user', 
@@ -659,7 +659,7 @@ class TestMessageCallback:
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
 
-        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+        with patch('src.matrix.message_router.is_duplicate_event', return_value=False):
             with patch('src.core.mapping_service.get_mapping_by_room_id', 
                        side_effect=mock_get_mapping_by_room_id(mock_mapping_data)):
                 with patch('src.core.mapping_service.get_mapping_by_matrix_user', 
@@ -696,7 +696,7 @@ class TestMessageCallback:
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
 
-        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+        with patch('src.matrix.message_router.is_duplicate_event', return_value=False):
             with patch('src.core.mapping_service.get_mapping_by_room_id', 
                        side_effect=mock_get_mapping_by_room_id(mock_mapping_data)):
                 with patch('src.matrix.client.send_to_letta_api', return_value="Response") as mock_letta:
@@ -728,7 +728,7 @@ class TestMessageCallback:
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
 
-        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+        with patch('src.matrix.message_router.is_duplicate_event', return_value=False):
             with patch('src.core.mapping_service.get_mapping_by_room_id', 
                        side_effect=mock_get_mapping_by_room_id(mock_mapping_data)):
                 with patch('src.matrix.client.send_to_letta_api', return_value="Response") as mock_letta:
@@ -756,7 +756,7 @@ class TestMessageCallback:
         mock_client = Mock()
         mock_client.user_id = "@bot:test.com"
 
-        with patch('src.matrix.client.is_duplicate_event', return_value=False):
+        with patch('src.matrix.message_router.is_duplicate_event', return_value=False):
             with patch('src.core.mapping_service.get_mapping_by_room_id', 
                        side_effect=mock_get_mapping_by_room_id(mock_mapping_data)):
                 with patch('src.matrix.client.send_to_letta_api', return_value="Response") as mock_letta:
