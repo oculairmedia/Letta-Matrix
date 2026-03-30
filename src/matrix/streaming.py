@@ -829,7 +829,19 @@ class LiveEditStreamingHandler:
         return None
 
     async def _send_final(self, content: str) -> str:
-        # Replace progress message with final response (avoids redacted blocks)
+        # When threading is active, an in-place edit cannot add m.relates_to
+        # to a progress message that was born without it.  Delete the progress
+        # message and send a fresh threaded response instead.
+        if self._event_id and self.thread_root_event_id and self.delete_message:
+            try:
+                await self.delete_message(self.room_id, self._event_id)
+            except (RuntimeError, ValueError, TypeError, AssertionError):
+                pass  # best-effort cleanup
+            self._event_id = None
+            self._lines.clear()
+            # fall through to fresh-send below
+
+        # Replace progress message with final response (non-threaded only)
         if self._event_id:
             await self._edit_with_msgtype(self._event_id, content, "m.text")
             eid = self._event_id
@@ -837,7 +849,7 @@ class LiveEditStreamingHandler:
             self._lines.clear()
             return eid
 
-        # No progress message existed — send fresh
+        # Send fresh — with threading if applicable
         if self.thread_root_event_id:
             try:
                 eid = await self.send_final_message(
