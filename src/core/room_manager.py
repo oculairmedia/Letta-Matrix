@@ -7,6 +7,7 @@ import logging
 import aiohttp
 import os
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from .types import AgentUserMapping
@@ -61,8 +62,162 @@ class MatrixRoomManager:
         self.agent_auth_retry_limit = int(os.getenv("AGENT_AUTH_RETRY_LIMIT", "3"))
         self.agent_auth_backoff_seconds = float(os.getenv("AGENT_AUTH_BACKOFF_SECONDS", "0.5"))
         self.agent_auth_cooldown_seconds = float(os.getenv("AGENT_AUTH_COOLDOWN_SECONDS", "300"))
+        self.topic_update_interval_seconds = float(os.getenv("ROOM_TOPIC_UPDATE_INTERVAL_SECONDS", "30"))
+        self._topic_update_last_at: Dict[str, float] = {}
         self._session: Optional[aiohttp.ClientSession] = None
         self._session_lock = asyncio.Lock()
+
+    def _build_agent_room_topic(self, agent_name: str) -> str:
+        created = datetime.now(timezone.utc).date().isoformat()
+        return f"🤖 {agent_name} — Letta agent workspace (created {created})"
+
+    async def get_topic(self, room_id: str) -> Optional[str]:
+        try:
+            admin_token = await self.get_admin_token()
+            if not admin_token:
+                logger.warning("Failed to get admin token, cannot get room topic")
+                return None
+
+            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.topic"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json",
+            }
+
+            session = await self._get_session()
+            async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    payload = await response.json()
+                    if isinstance(payload, dict):
+                        topic = payload.get("topic")
+                        return str(topic) if isinstance(topic, str) else None
+                    return None
+                if response.status == 404:
+                    return None
+                error_text = await response.text()
+                logger.warning(
+                    "Failed to get topic for %s: %s - %s",
+                    room_id,
+                    response.status,
+                    error_text,
+                )
+                return None
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, OSError) as exc:
+            logger.error("Error getting topic for %s: %s", room_id, exc)
+            return None
+
+    async def set_topic(
+        self,
+        room_id: str,
+        topic_text: str,
+        acting_user_id: Optional[str] = None,
+    ) -> bool:
+        now = time.monotonic()
+        last_updated = self._topic_update_last_at.get(room_id)
+        if last_updated is not None and (now - last_updated) < self.topic_update_interval_seconds:
+            logger.info(
+                "Skipping room topic update for %s due to rate limit (%ss)",
+                room_id,
+                self.topic_update_interval_seconds,
+            )
+            return False
+
+        power_levels = await self.get_power_levels(room_id)
+        if not power_levels:
+            return False
+
+        raw_users = power_levels.get("users")
+        users: Dict[str, int] = {}
+        if isinstance(raw_users, dict):
+            for key, value in raw_users.items():
+                if isinstance(value, bool):
+                    users[str(key)] = int(value)
+                elif isinstance(value, int):
+                    users[str(key)] = value
+                elif isinstance(value, float):
+                    users[str(key)] = int(value)
+                elif isinstance(value, str):
+                    try:
+                        users[str(key)] = int(value)
+                    except ValueError:
+                        continue
+
+        users_default_raw = power_levels.get("users_default", 0)
+        if isinstance(users_default_raw, bool):
+            users_default = int(users_default_raw)
+        elif isinstance(users_default_raw, int):
+            users_default = users_default_raw
+        elif isinstance(users_default_raw, float):
+            users_default = int(users_default_raw)
+        elif isinstance(users_default_raw, str):
+            try:
+                users_default = int(users_default_raw)
+            except ValueError:
+                users_default = 0
+        else:
+            users_default = 0
+
+        raw_events = power_levels.get("events")
+        topic_required = 50
+        if isinstance(raw_events, dict):
+            topic_level_raw = raw_events.get("m.room.topic")
+            if isinstance(topic_level_raw, bool):
+                topic_required = int(topic_level_raw)
+            elif isinstance(topic_level_raw, int):
+                topic_required = topic_level_raw
+            elif isinstance(topic_level_raw, float):
+                topic_required = int(topic_level_raw)
+            elif isinstance(topic_level_raw, str):
+                try:
+                    topic_required = int(topic_level_raw)
+                except ValueError:
+                    topic_required = 50
+
+        actor_level = users.get(acting_user_id, users_default) if acting_user_id else 100
+        if int(actor_level) < int(topic_required):
+            logger.warning(
+                "Refusing topic update in %s due to insufficient power level: actor=%s actor_level=%s required=%s",
+                room_id,
+                acting_user_id,
+                actor_level,
+                topic_required,
+            )
+            return False
+
+        admin_token = await self.get_admin_token()
+        if not admin_token:
+            logger.warning("Failed to get admin token, cannot set room topic")
+            return False
+
+        url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.topic"
+        headers = {
+            "Authorization": f"Bearer {admin_token}",
+            "Content-Type": "application/json",
+        }
+
+        session = await self._get_session()
+        try:
+            async with session.put(
+                url,
+                headers=headers,
+                json={"topic": topic_text},
+                timeout=DEFAULT_TIMEOUT,
+            ) as response:
+                if response.status == 200:
+                    self._topic_update_last_at[room_id] = now
+                    logger.info("Updated room topic for %s", room_id)
+                    return True
+                error_text = await response.text()
+                logger.warning(
+                    "Failed to set topic for %s: %s - %s",
+                    room_id,
+                    response.status,
+                    error_text,
+                )
+                return False
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, OSError) as exc:
+            logger.error("Error setting topic for %s: %s", room_id, exc)
+            return False
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is not None and not self._session.closed:
@@ -82,6 +237,335 @@ class MatrixRoomManager:
                 timeout=DEFAULT_TIMEOUT,
             )
             return self._session
+
+    def _build_room_power_levels(
+        self,
+        *,
+        room_creator_user_id: str,
+        invited_users: List[str],
+    ) -> Dict[str, object]:
+        users = {room_creator_user_id: 100}
+        for user_id in invited_users:
+            users[user_id] = 50
+
+        return {
+            "users": users,
+            "users_default": 0,
+            "events": {
+                "m.room.name": 50,
+                "m.room.topic": 50,
+                "m.room.power_levels": 100,
+            },
+            "events_default": 0,
+            "state_default": 50,
+            "ban": 50,
+            "kick": 50,
+            "redact": 50,
+            "invite": 0,
+        }
+
+    async def get_power_levels(self, room_id: str) -> Optional[Dict[str, object]]:
+        try:
+            admin_token = await self.get_admin_token()
+            if not admin_token:
+                logger.warning("Failed to get admin token, cannot get power levels")
+                return None
+
+            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.power_levels"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json",
+            }
+
+            session = await self._get_session()
+            async with session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    payload = await response.json()
+                    if isinstance(payload, dict):
+                        return payload
+                    logger.warning("Unexpected power levels payload type for room %s", room_id)
+                    return None
+                error_text = await response.text()
+                logger.warning(
+                    "Failed to get power levels for %s: %s - %s",
+                    room_id,
+                    response.status,
+                    error_text,
+                )
+                return None
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, OSError) as exc:
+            logger.error("Error getting power levels for %s: %s", room_id, exc)
+            return None
+
+    async def _put_power_levels(self, room_id: str, content: Dict[str, object]) -> bool:
+        try:
+            admin_token = await self.get_admin_token()
+            if not admin_token:
+                logger.warning("Failed to get admin token, cannot update power levels")
+                return False
+
+            url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.power_levels"
+            headers = {
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json",
+            }
+
+            session = await self._get_session()
+            async with session.put(url, headers=headers, json=content, timeout=DEFAULT_TIMEOUT) as response:
+                if response.status == 200:
+                    logger.info("Updated power levels for room %s", room_id)
+                    return True
+                error_text = await response.text()
+                logger.warning(
+                    "Failed to update power levels for %s: %s - %s",
+                    room_id,
+                    response.status,
+                    error_text,
+                )
+                return False
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, OSError) as exc:
+            logger.error("Error updating power levels for %s: %s", room_id, exc)
+            return False
+
+    async def set_user_power_level(
+        self,
+        room_id: str,
+        user_id: str,
+        level: int,
+        acting_user_id: Optional[str] = None,
+    ) -> bool:
+        if level >= 100:
+            logger.warning("Refusing to set PL >= 100 for %s in room %s", user_id, room_id)
+            return False
+
+        power_levels = await self.get_power_levels(room_id)
+        if not power_levels:
+            return False
+
+        raw_users = power_levels.get("users")
+        users: Dict[str, int] = {}
+        if isinstance(raw_users, dict):
+            for key, value in raw_users.items():
+                if isinstance(value, bool):
+                    users[str(key)] = int(value)
+                elif isinstance(value, int):
+                    users[str(key)] = value
+                elif isinstance(value, float):
+                    users[str(key)] = int(value)
+                elif isinstance(value, str):
+                    try:
+                        users[str(key)] = int(value)
+                    except ValueError:
+                        continue
+
+        users_default_raw = power_levels.get("users_default", 0)
+        if isinstance(users_default_raw, bool):
+            users_default = int(users_default_raw)
+        elif isinstance(users_default_raw, int):
+            users_default = users_default_raw
+        elif isinstance(users_default_raw, float):
+            users_default = int(users_default_raw)
+        elif isinstance(users_default_raw, str):
+            try:
+                users_default = int(users_default_raw)
+            except ValueError:
+                users_default = 0
+        else:
+            users_default = 0
+
+        actor_level = users.get(acting_user_id, users_default) if acting_user_id else 100
+        if acting_user_id and level >= int(actor_level):
+            logger.warning(
+                "Refusing power level escalation in %s: actor=%s actor_level=%s requested=%s",
+                room_id,
+                acting_user_id,
+                actor_level,
+                level,
+            )
+            return False
+
+        users[user_id] = int(level)
+        power_levels["users"] = users
+        logger.info(
+            "Setting user power level in room %s: %s -> %s",
+            room_id,
+            user_id,
+            level,
+        )
+        return await self._put_power_levels(room_id, power_levels)
+
+    async def set_event_power_level(
+        self,
+        room_id: str,
+        event_type: str,
+        level: int,
+        acting_user_id: Optional[str] = None,
+    ) -> bool:
+        if level >= 100 and event_type != "m.room.power_levels":
+            logger.warning("Refusing to set %s PL >= 100 in room %s", event_type, room_id)
+            return False
+
+        power_levels = await self.get_power_levels(room_id)
+        if not power_levels:
+            return False
+
+        raw_users = power_levels.get("users")
+        users: Dict[str, int] = {}
+        if isinstance(raw_users, dict):
+            for key, value in raw_users.items():
+                if isinstance(value, bool):
+                    users[str(key)] = int(value)
+                elif isinstance(value, int):
+                    users[str(key)] = value
+                elif isinstance(value, float):
+                    users[str(key)] = int(value)
+                elif isinstance(value, str):
+                    try:
+                        users[str(key)] = int(value)
+                    except ValueError:
+                        continue
+
+        users_default_raw = power_levels.get("users_default", 0)
+        if isinstance(users_default_raw, bool):
+            users_default = int(users_default_raw)
+        elif isinstance(users_default_raw, int):
+            users_default = users_default_raw
+        elif isinstance(users_default_raw, float):
+            users_default = int(users_default_raw)
+        elif isinstance(users_default_raw, str):
+            try:
+                users_default = int(users_default_raw)
+            except ValueError:
+                users_default = 0
+        else:
+            users_default = 0
+
+        actor_level = users.get(acting_user_id, users_default) if acting_user_id else 100
+        if acting_user_id and level >= int(actor_level):
+            logger.warning(
+                "Refusing event PL escalation in %s: actor=%s actor_level=%s requested=%s",
+                room_id,
+                acting_user_id,
+                actor_level,
+                level,
+            )
+            return False
+
+        raw_events = power_levels.get("events")
+        events: Dict[str, int] = {}
+        if isinstance(raw_events, dict):
+            for key, value in raw_events.items():
+                if isinstance(value, bool):
+                    events[str(key)] = int(value)
+                elif isinstance(value, int):
+                    events[str(key)] = value
+                elif isinstance(value, float):
+                    events[str(key)] = int(value)
+                elif isinstance(value, str):
+                    try:
+                        events[str(key)] = int(value)
+                    except ValueError:
+                        continue
+        events[event_type] = int(level)
+        power_levels["events"] = events
+        logger.info(
+            "Setting event power level in room %s: %s -> %s",
+            room_id,
+            event_type,
+            level,
+        )
+        return await self._put_power_levels(room_id, power_levels)
+
+    async def make_room_read_only(self, room_id: str, acting_user_id: Optional[str] = None) -> bool:
+        return await self.set_event_power_level(
+            room_id,
+            "m.room.message",
+            50,
+            acting_user_id=acting_user_id,
+        )
+
+    async def make_room_writable(self, room_id: str, acting_user_id: Optional[str] = None) -> bool:
+        return await self.set_event_power_level(
+            room_id,
+            "m.room.message",
+            0,
+            acting_user_id=acting_user_id,
+        )
+
+    async def apply_multi_agent_power_hierarchy(
+        self,
+        room_id: str,
+        coordinator_user_id: str,
+        worker_user_ids: Optional[List[str]] = None,
+        observer_user_ids: Optional[List[str]] = None,
+        acting_user_id: Optional[str] = None,
+    ) -> bool:
+        power_levels = await self.get_power_levels(room_id)
+        if not power_levels:
+            return False
+
+        raw_users = power_levels.get("users")
+        users: Dict[str, int] = {}
+        if isinstance(raw_users, dict):
+            for key, value in raw_users.items():
+                if isinstance(value, bool):
+                    users[str(key)] = int(value)
+                elif isinstance(value, int):
+                    users[str(key)] = value
+                elif isinstance(value, float):
+                    users[str(key)] = int(value)
+                elif isinstance(value, str):
+                    try:
+                        users[str(key)] = int(value)
+                    except ValueError:
+                        continue
+
+        users_default_raw = power_levels.get("users_default", 0)
+        if isinstance(users_default_raw, bool):
+            users_default = int(users_default_raw)
+        elif isinstance(users_default_raw, int):
+            users_default = users_default_raw
+        elif isinstance(users_default_raw, float):
+            users_default = int(users_default_raw)
+        elif isinstance(users_default_raw, str):
+            try:
+                users_default = int(users_default_raw)
+            except ValueError:
+                users_default = 0
+        else:
+            users_default = 0
+
+        actor_level = users.get(acting_user_id, users_default) if acting_user_id else 100
+
+        role_assignments: Dict[str, int] = {coordinator_user_id: 90}
+        for worker in worker_user_ids or []:
+            role_assignments[worker] = 50
+        for observer in observer_user_ids or []:
+            role_assignments[observer] = 10
+
+        if acting_user_id:
+            for user_id, level in role_assignments.items():
+                if level >= int(actor_level):
+                    logger.warning(
+                        "Refusing hierarchy update in %s for %s -> %s (actor=%s level=%s)",
+                        room_id,
+                        user_id,
+                        level,
+                        acting_user_id,
+                        actor_level,
+                    )
+                    return False
+
+        users.update(role_assignments)
+        power_levels["users"] = users
+        logger.info(
+            "Applying multi-agent hierarchy in %s: coordinator=%s workers=%s observers=%s",
+            room_id,
+            coordinator_user_id,
+            len(worker_user_ids or []),
+            len(observer_user_ids or []),
+        )
+        return await self._put_power_levels(room_id, power_levels)
 
     async def update_room_name(self, room_id: str, new_name: str) -> bool:
         """Update the name of an existing room"""
@@ -250,9 +734,13 @@ class MatrixRoomManager:
             logger.warning(f"Cannot reset password for {username} - no admin token")
             return None
         
-        # Reset password via Tuwunel admin command
         import time
-        admin_room = "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca"
+        from .admin_room import resolve_admin_room_id, AdminRoomResolutionError
+        try:
+            admin_room = await resolve_admin_room_id(access_token=admin_token, homeserver_url=self.homeserver_url)
+        except AdminRoomResolutionError as exc:
+            logger.warning("Cannot reset password for %s: %s", username, exc)
+            return None
         txn_id = int(time.time() * 1000)
         url = f"{self.homeserver_url}/_matrix/client/v3/rooms/{admin_room}/send/m.room.message/{txn_id}"
         headers = {"Authorization": f"Bearer {admin_token}"}
@@ -339,7 +827,11 @@ class MatrixRoomManager:
         if not admin_token:
             return False
 
-        admin_room = "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca"
+        from .admin_room import resolve_admin_room_id, AdminRoomResolutionError
+        try:
+            admin_room = await resolve_admin_room_id(access_token=admin_token, homeserver_url=self.homeserver_url)
+        except AdminRoomResolutionError:
+            return False
         txn_id = int(self._current_time() * 1000)
         url = f"{self.homeserver_url}/_matrix/client/v3/rooms/{admin_room}/send/m.room.message/{txn_id}"
         headers = {"Authorization": f"Bearer {admin_token}"}
@@ -835,10 +1327,14 @@ class MatrixRoomManager:
 
             room_data = {
                 "name": f"{mapping.agent_name} - Letta Agent Chat",
-                "topic": f"Private chat with Letta agent: {mapping.agent_name}",
+                "topic": self._build_agent_room_topic(mapping.agent_name),
                 "preset": "trusted_private_chat",  # Allows invited users to see history
                 "invite": invites,
                 "is_direct": False,
+                "power_level_content_override": self._build_room_power_levels(
+                    room_creator_user_id=mapping.matrix_user_id,
+                    invited_users=invites,
+                ),
                 "initial_state": [
                     {
                         "type": "m.room.guest_access",

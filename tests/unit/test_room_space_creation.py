@@ -332,6 +332,22 @@ class TestRoomCreation:
             save_mappings_callback=AsyncMock()
         )
 
+    def test_build_agent_room_topic_includes_agent_name(self, room_manager):
+        topic = room_manager._build_agent_room_topic("Meridian")
+        assert topic.startswith("🤖 Meridian — Letta agent workspace")
+        assert "created " in topic
+
+    def test_build_room_power_levels_assigns_creator_and_invites(self, room_manager):
+        payload = room_manager._build_room_power_levels(
+            room_creator_user_id="@agent_123:test.com",
+            invited_users=["@admin:matrix.oculair.ca", "@letta:matrix.oculair.ca"],
+        )
+
+        assert payload["users"]["@agent_123:test.com"] == 100
+        assert payload["users"]["@admin:matrix.oculair.ca"] == 50
+        assert payload["users"]["@letta:matrix.oculair.ca"] == 50
+        assert payload["events"]["m.room.power_levels"] == 100
+
     @pytest.mark.asyncio
     async def test_create_or_update_agent_room_creates_room(self, room_manager):
         """Test create_or_update_agent_room creates a room"""
@@ -378,6 +394,14 @@ class TestRoomCreation:
             
             # Verify room was assigned to mapping
             assert mapping.room_id == "!newroom:test.com"
+            create_call = mock_post.call_args_list[1]
+            create_payload = create_call.kwargs["json"]
+            assert create_payload["topic"].startswith("🤖 Test Agent")
+            assert "power_level_content_override" in create_payload
+            power_levels = create_payload["power_level_content_override"]
+            assert power_levels["users"]["@agent_123:test.com"] == 100
+            assert power_levels["users"]["@admin:matrix.oculair.ca"] == 50
+            assert power_levels["events"]["m.room.topic"] == 50
 
     @pytest.mark.asyncio
     async def test_update_room_name_success(self, room_manager):
@@ -403,6 +427,199 @@ class TestRoomCreation:
             
             assert result is True
             mock_put.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_power_levels_success(self, room_manager):
+        room_manager.get_admin_token = AsyncMock(return_value="admin_token")
+
+        get_response = MagicMock()
+        get_response.status = 200
+        get_response.json = AsyncMock(return_value={"users": {"@admin:test.com": 100}, "users_default": 0})
+        get_response.__aenter__ = AsyncMock(return_value=get_response)
+        get_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=get_response)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            payload = await room_manager.get_power_levels("!room:test.com")
+
+        assert payload is not None
+        assert payload["users"]["@admin:test.com"] == 100
+
+    @pytest.mark.asyncio
+    async def test_set_user_power_level_rejects_level_100(self, room_manager):
+        updated = await room_manager.set_user_power_level(
+            "!room:test.com",
+            "@user:test.com",
+            100,
+            acting_user_id="@admin:test.com",
+        )
+
+        assert updated is False
+
+    @pytest.mark.asyncio
+    async def test_set_user_power_level_updates_users_map(self, room_manager):
+        with patch.object(room_manager, "get_power_levels", new_callable=AsyncMock) as mock_get_levels, \
+             patch.object(room_manager, "_put_power_levels", new_callable=AsyncMock, return_value=True) as mock_put:
+            mock_get_levels.return_value = {
+                "users": {"@admin:test.com": 90},
+                "users_default": 0,
+                "events": {"m.room.topic": 50},
+            }
+
+            updated = await room_manager.set_user_power_level(
+                "!room:test.com",
+                "@moderator:test.com",
+                50,
+                acting_user_id="@admin:test.com",
+            )
+
+        assert updated is True
+        put_await_args = mock_put.await_args
+        assert put_await_args is not None
+        put_payload = put_await_args.args[1]
+        assert put_payload["users"]["@moderator:test.com"] == 50
+
+    @pytest.mark.asyncio
+    async def test_make_room_read_only_sets_message_event_level(self, room_manager):
+        with patch.object(room_manager, "set_event_power_level", new_callable=AsyncMock, return_value=True) as mock_set:
+            updated = await room_manager.make_room_read_only("!room:test.com")
+
+        assert updated is True
+        mock_set.assert_awaited_once_with(
+            "!room:test.com",
+            "m.room.message",
+            50,
+            acting_user_id=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_make_room_writable_sets_message_event_level_zero(self, room_manager):
+        with patch.object(room_manager, "set_event_power_level", new_callable=AsyncMock, return_value=True) as mock_set:
+            updated = await room_manager.make_room_writable("!room:test.com")
+
+        assert updated is True
+        mock_set.assert_awaited_once_with(
+            "!room:test.com",
+            "m.room.message",
+            0,
+            acting_user_id=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_event_power_level_rejects_level_100(self, room_manager):
+        updated = await room_manager.set_event_power_level(
+            "!room:test.com",
+            "m.room.message",
+            100,
+            acting_user_id="@admin:test.com",
+        )
+        assert updated is False
+
+    def test_agent_auth_failure_tracking_and_success_reset(self, room_manager):
+        room_manager.agent_auth_cooldown_seconds = 30.0
+        with patch.object(room_manager, "_current_time", return_value=100.0):
+            room_manager._record_agent_auth_failure(
+                "agent-123",
+                "pw-1",
+                "bad password",
+                403,
+                "agent_123",
+            )
+
+        assert room_manager._agent_auth_failures["agent-123"] == 1
+        assert room_manager._agent_auth_last_status["agent-123"] == 403
+        assert room_manager._agent_auth_last_reason["agent-123"] == "bad password"
+        assert room_manager._agent_auth_next_retry_at["agent-123"] == 130.0
+
+        with patch.object(room_manager, "_current_time", return_value=120.0):
+            assert room_manager._agent_login_suppressed("agent-123", "pw-1") is True
+
+        with patch.object(room_manager, "_current_time", return_value=140.0):
+            assert room_manager._agent_login_suppressed("agent-123", "pw-1") is False
+
+        room_manager._record_agent_auth_success("agent-123", "pw-1", "agent_123")
+        assert room_manager._agent_auth_failures["agent-123"] == 0
+        assert room_manager._agent_auth_last_status["agent-123"] == 200
+        assert room_manager._agent_auth_last_reason["agent-123"] == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_get_topic_success(self, room_manager):
+        room_manager.get_admin_token = AsyncMock(return_value="admin_token")
+
+        get_response = MagicMock()
+        get_response.status = 200
+        get_response.json = AsyncMock(return_value={"topic": "Current room topic"})
+        get_response.__aenter__ = AsyncMock(return_value=get_response)
+        get_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=get_response)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            topic = await room_manager.get_topic("!room:test.com")
+
+        assert topic == "Current room topic"
+
+    @pytest.mark.asyncio
+    async def test_set_topic_rate_limited_after_first_update(self, room_manager):
+        room_manager.get_admin_token = AsyncMock(return_value="admin_token")
+        room_manager.get_power_levels = AsyncMock(
+            return_value={
+                "users": {"@admin:test.com": 90},
+                "users_default": 0,
+                "events": {"m.room.topic": 50},
+            }
+        )
+
+        put_response = MagicMock()
+        put_response.status = 200
+        put_response.__aenter__ = AsyncMock(return_value=put_response)
+        put_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.put = MagicMock(return_value=put_response)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            first = await room_manager.set_topic(
+                "!room:test.com",
+                "Topic 1",
+                acting_user_id="@admin:test.com",
+            )
+            second = await room_manager.set_topic(
+                "!room:test.com",
+                "Topic 2",
+                acting_user_id="@admin:test.com",
+            )
+
+        assert first is True
+        assert second is False
+
+    @pytest.mark.asyncio
+    async def test_apply_multi_agent_power_hierarchy_assigns_roles(self, room_manager):
+        with patch.object(room_manager, "get_power_levels", new_callable=AsyncMock) as mock_get_levels, \
+             patch.object(room_manager, "_put_power_levels", new_callable=AsyncMock, return_value=True) as mock_put:
+            mock_get_levels.return_value = {
+                "users": {"@admin:test.com": 100},
+                "users_default": 0,
+            }
+
+            updated = await room_manager.apply_multi_agent_power_hierarchy(
+                "!room:test.com",
+                coordinator_user_id="@coordinator:test.com",
+                worker_user_ids=["@worker-a:test.com", "@worker-b:test.com"],
+                observer_user_ids=["@observer:test.com"],
+            )
+
+        assert updated is True
+        put_await_args = mock_put.await_args
+        assert put_await_args is not None
+        put_payload = put_await_args.args[1]
+        assert put_payload["users"]["@coordinator:test.com"] == 90
+        assert put_payload["users"]["@worker-a:test.com"] == 50
+        assert put_payload["users"]["@worker-b:test.com"] == 50
+        assert put_payload["users"]["@observer:test.com"] == 10
 
     @pytest.mark.asyncio
     async def test_find_existing_agent_room_returns_none(self, room_manager):
