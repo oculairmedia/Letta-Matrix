@@ -132,6 +132,8 @@ def _build_message_content(
     reply_to_sender: Optional[str] = None,
     reply_to_body: Optional[str] = None,
     room_id: Optional[str] = None,
+    thread_event_id: Optional[str] = None,
+    thread_latest_event_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build Matrix message content dict with markdown, pills, and reply formatting."""
     message_data: Dict[str, Any] = {"msgtype": msgtype, "body": message}
@@ -161,7 +163,15 @@ def _build_message_content(
                 "[SEND_AS_AGENT] Mention pill conversion failed: %s", exc
             )
 
-    if reply_to_event_id:
+    if thread_event_id:
+        fallback_event_id = thread_latest_event_id or reply_to_event_id or thread_event_id
+        message_data["m.relates_to"] = {
+            "rel_type": "m.thread",
+            "event_id": thread_event_id,
+            "is_falling_back": True,
+            "m.in_reply_to": {"event_id": fallback_event_id},
+        }
+    elif reply_to_event_id:
         message_data["m.relates_to"] = {
             "m.in_reply_to": {"event_id": reply_to_event_id}
         }
@@ -252,6 +262,8 @@ async def send_as_agent_with_event_id(
     reply_to_event_id: Optional[str] = None,
     reply_to_sender: Optional[str] = None,
     reply_to_body: Optional[str] = None,
+    thread_event_id: Optional[str] = None,
+    thread_latest_event_id: Optional[str] = None,
     session: Optional[aiohttp.ClientSession] = None,
 ) -> Optional[str]:
     """
@@ -271,7 +283,14 @@ async def send_as_agent_with_event_id(
         )
 
         message_data = _build_message_content(
-            message, msgtype, reply_to_event_id, reply_to_sender, reply_to_body, room_id
+            message,
+            msgtype,
+            reply_to_event_id,
+            reply_to_sender,
+            reply_to_body,
+            room_id,
+            thread_event_id,
+            thread_latest_event_id,
         )
 
         if reply_to_event_id:
@@ -352,6 +371,8 @@ async def send_as_agent(
     msgtype: str = "m.text",
     reply_to_event_id: Optional[str] = None,
     reply_to_sender: Optional[str] = None,
+    thread_event_id: Optional[str] = None,
+    thread_latest_event_id: Optional[str] = None,
     session: Optional[aiohttp.ClientSession] = None,
 ) -> bool:
     """
@@ -366,6 +387,8 @@ async def send_as_agent(
         msgtype=msgtype,
         reply_to_event_id=reply_to_event_id,
         reply_to_sender=reply_to_sender,
+        thread_event_id=thread_event_id,
+        thread_latest_event_id=thread_latest_event_id,
         session=session,
     )
     return event_id is not None

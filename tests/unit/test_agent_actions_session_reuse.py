@@ -238,3 +238,29 @@ def test_build_edit_content_does_not_swallow_keyboard_interrupt() -> None:
     ):
         with pytest.raises(KeyboardInterrupt):
             _build_edit_content("$evt", "hi @Meridian")
+
+
+def test_build_message_content_thread_relation_shape() -> None:
+    payload = _build_message_content(
+        "threaded update",
+        thread_event_id="$root",
+        thread_latest_event_id="$latest",
+    )
+
+    relates = payload.get("m.relates_to")
+    assert isinstance(relates, dict)
+    assert relates.get("rel_type") == "m.thread"
+    assert relates.get("event_id") == "$root"
+    assert relates.get("is_falling_back") is True
+    assert relates.get("m.in_reply_to", {}).get("event_id") == "$latest"
+
+
+def test_build_message_content_thread_fallback_uses_root_when_latest_missing() -> None:
+    payload = _build_message_content(
+        "threaded update",
+        thread_event_id="$root",
+    )
+
+    relates = payload.get("m.relates_to")
+    assert isinstance(relates, dict)
+    assert relates.get("m.in_reply_to", {}).get("event_id") == "$root"
