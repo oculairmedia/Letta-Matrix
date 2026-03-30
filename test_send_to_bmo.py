@@ -49,7 +49,7 @@ async def main():
                 print(f"   Event ID: {event_id}")
                 print(f"   Room: {bmo_room}")
                 print(f"\nNow check the logs:")
-                print(f"docker logs matrix-synapse-deployment-matrix-client-1 --tail 50 | grep -E '(AGENT ROUTING|BMO|{bmo_room[:20]})'")
+                print(f"docker logs matrix-tuwunel-deploy-matrix-client-1 --tail 50 | grep -E '(AGENT ROUTING|BMO|{bmo_room[:20]})'")
             else:
                 error = await resp.text()
                 print(f"Failed to send: {resp.status}")

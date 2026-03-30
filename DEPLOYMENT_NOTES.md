@@ -37,13 +37,13 @@ docker-compose -f docker-compose.tuwunel.yml restart matrix-client
 Monitor for next 24-48 hours:
 ```bash
 # Check CPU
-docker stats matrix-synapse-deployment-tuwunel-1 --no-stream
+docker stats matrix-tuwunel-deploy-tuwunel-1 --no-stream
 
 # Check login rate
-docker logs matrix-synapse-deployment-tuwunel-1 --since 5m | grep "logged in" | wc -l
+docker logs matrix-tuwunel-deploy-tuwunel-1 --since 5m | grep "logged in" | wc -l
 
 # Check sync metrics
-docker logs matrix-synapse-deployment-matrix-client-1 --since 5m | grep "Sync metrics"
+docker logs matrix-tuwunel-deploy-matrix-client-1 --since 5m | grep "Sync metrics"
 ```
 
 ## Configuration

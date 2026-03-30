@@ -4,7 +4,7 @@
 
 set -e
 
-CONTAINER="matrix-synapse-deployment-matrix-client-1"
+CONTAINER="matrix-tuwunel-deploy-matrix-client-1"
 
 echo "Restarting $CONTAINER to pick up code changes..."
 docker restart "$CONTAINER"

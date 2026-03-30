@@ -222,7 +222,7 @@ curl http://localhost:8015/health
 curl http://localhost:8004/health
 
 # Tool execution logs
-docker logs matrix-synapse-deployment-mcp-server-1
+docker logs matrix-tuwunel-deploy-mcp-server-1
 ```
 
 ### Performance Monitoring

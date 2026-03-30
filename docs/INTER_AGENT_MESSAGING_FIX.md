@@ -112,7 +112,7 @@ python3 check_room_messages.py
 python3 test_agent_to_agent_direct.py
 
 # Monitor processing logs
-docker logs matrix-synapse-deployment-matrix-client-1 -f | grep "inter-agent"
+docker logs matrix-tuwunel-deploy-matrix-client-1 -f | grep "inter-agent"
 ```
 
 ## Key Features

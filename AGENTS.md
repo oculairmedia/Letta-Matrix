@@ -2,17 +2,19 @@
 
 # Agent Instructions
 
-## Huly Integration
+## Project Info
 
-- **Project Code**: `MXSYN`
-- **Project Name**: Matrix Synapse Deployment
-- **Letta Agent ID**: `agent-870d3dfb-319f-4c52-91f1-72ab46d944a7`
+- **Project Identifier**: `matrix-tuwunel-deploy`
+- **Project Name**: Matrix Tuwunel Deploy
+- **PM Agent ID**: `agent-b19ab6d5-460b-48f7-b300-738021d9a882`
+- **Path**: `/opt/stacks/matrix-tuwunel-deploy`
+- **Beads Prefix**: `matrix-synapse-deployment`
 
 ## Workflow Instructions
 
-1. **Before starting work**: Search Huly for related issues using `huly-mcp` with project code `MXSYN`
-2. **Issue references**: All issues for this project use the format `MXSYN-XXX` (e.g., `MXSYN-123`)
-3. **On task completion**: Report to this project's Letta agent via `matrix-identity-bridge` using `talk_to_agent`
+1. **Before starting work**: Search for related issues using `bd ready` or the `vibesync` MCP (`project_query` tool with `project_identifier: "matrix-tuwunel-deploy"`)
+2. **Issue tracking**: Use `bd` (beads) for all issue management — create, update, close
+3. **On task completion**: Report to this project's PM agent via `matrix-identity-bridge` using `talk_to_agent`
 4. **Memory**: Store important discoveries in Graphiti with `graphiti-mcp_add_memory`
 <!-- VIBESYNC:project-info:END -->
 
@@ -64,6 +66,9 @@ You (Developer Agent - experienced)
 **Files Changed**: [List if applicable]
 **Next Steps**: [If any]
 ```
+
+> **⚠️ KNOWN BUG**: PM agent messaging is currently **disabled** to prevent message loops. Do NOT send messages to the PM agent until the forwarding loop issue is resolved. Report directly to the user instead.
+
 <!-- VIBESYNC:reporting-hierarchy:END -->
 
 <!-- VIBESYNC:beads-instructions:START -->
@@ -90,7 +95,7 @@ Beads uses a **hybrid sync** approach for reliability:
 
 - `bd create`, `bd update`, `bd close` write to SQLite DB
 - File watcher detects DB changes automatically
-- Syncs to Huly within ~30-60 seconds
+- Syncs to VibSync within ~30-60 seconds
 
 #### Git Persistence (`bd sync`)
 
@@ -101,8 +106,8 @@ Beads uses a **hybrid sync** approach for reliability:
 ### Best Practice
 
 ```bash
-bd create "New task"   # Auto-syncs to Huly
-bd close some-issue    # Auto-syncs to Huly
+bd create "New task"   # Auto-syncs to VibSync
+bd close some-issue    # Auto-syncs to VibSync
 bd sync                # Git backup (recommended before session end)
 ```
 
@@ -153,8 +158,8 @@ bd sync                # Git backup (recommended before session end)
 
 ## Codebase Context
 
-**Project**: Matrix Synapse Deployment (`MXSYN`)
-**Path**: `/opt/stacks/matrix-synapse-deployment`
+**Project**: Matrix Tuwunel Deploy (`matrix-tuwunel-deploy`)
+**Path**: `/opt/stacks/matrix-tuwunel-deploy`
 
 This project's PM agent has a `codebase_ast` memory block with live structural data including:
 
@@ -252,7 +257,7 @@ Send commands to `#admins:matrix.oculair.ca` as any user who is a member of the 
    ```bash
    timeout 60 docker run --rm --entrypoint "" \
      -e TUWUNEL_SERVER_NAME=matrix.oculair.ca \
-     -v /opt/stacks/matrix-synapse-deployment/tuwunel-data:/var/lib/tuwunel \
+     -v /opt/stacks/matrix-tuwunel-deploy/tuwunel-data:/var/lib/tuwunel \
      ghcr.io/oculairmedia/tuwunel-docker2010:latest \
      /usr/local/bin/tuwunel -c /var/lib/tuwunel/tuwunel.toml \
      -O 'server_name="matrix.oculair.ca"' \
@@ -359,7 +364,7 @@ The PostgreSQL database (`matrix_letta.agent_mappings` table) has stale or incor
 Check if mapping exists in PostgreSQL:
 
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 python3 -c "
+docker exec matrix-tuwunel-deploy-matrix-client-1 python3 -c "
 from src.models.agent_mapping import AgentMappingDB
 
 db = AgentMappingDB()
@@ -375,7 +380,7 @@ else:
 Check if mapping exists in JSON file:
 
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 python3 -c "
+docker exec matrix-tuwunel-deploy-matrix-client-1 python3 -c "
 import json
 with open('/app/data/agent_user_mappings.json', 'r') as f:
     data = json.load(f)
@@ -390,7 +395,7 @@ for mxid, mapping in data.items():
 Update PostgreSQL to match the JSON file:
 
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 python3 -c "
+docker exec matrix-tuwunel-deploy-matrix-client-1 python3 -c "
 from sqlalchemy import create_engine, text
 import os
 

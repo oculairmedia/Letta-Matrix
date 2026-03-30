@@ -72,7 +72,7 @@ async def send_test_message():
                             print("- message: your response")
                             print("\n" + "="*70)
                             print("\nCheck the matrix-client logs to verify context injection:")
-                            print("\ndocker logs matrix-synapse-deployment-matrix-client-1 2>&1 | grep -A 3 \"Detected inter-agent message\"")
+                            print("\ndocker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | grep -A 3 \"Detected inter-agent message\"")
                             
                             return True
                         except Exception as e:

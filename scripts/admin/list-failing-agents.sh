@@ -7,7 +7,7 @@
 set -euo pipefail
 
 SINCE="24h"
-CONTAINER="matrix-synapse-deployment-matrix-client-1"
+CONTAINER="matrix-tuwunel-deploy-matrix-client-1"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

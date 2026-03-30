@@ -40,10 +40,10 @@ Database room IDs were becoming stale when Matrix rooms were recreated, causing 
 ### Verification
 ```bash
 # Check for drift
-docker exec matrix-synapse-deployment-matrix-client-1 python3 /app/check_all_drift.py
+docker exec matrix-tuwunel-deploy-matrix-client-1 python3 /app/check_all_drift.py
 
 # Watch drift detection in action
-docker logs matrix-synapse-deployment-matrix-client-1 -f | grep "room drift"
+docker logs matrix-tuwunel-deploy-matrix-client-1 -f | grep "room drift"
 ```
 
 ### Benefits

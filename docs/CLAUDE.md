@@ -223,7 +223,7 @@ curl http://localhost:8015/health
 curl http://localhost:8004/health
 
 # Check agent sync logs
-docker logs matrix-synapse-deployment-matrix-client-1 | grep "agent sync"
+docker logs matrix-tuwunel-deploy-matrix-client-1 | grep "agent sync"
 ```
 
 ### Key Log Messages

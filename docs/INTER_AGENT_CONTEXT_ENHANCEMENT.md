@@ -131,10 +131,10 @@ Agent B responds correctly using the Matrix tool
 docker-compose -f docker-compose.tuwunel.yml ps | grep -E "letta-agent-mcp|matrix-client"
 
 # 2. View letta-agent-mcp logs
-docker logs matrix-synapse-deployment-letta-agent-mcp-1 --tail 20
+docker logs matrix-tuwunel-deploy-letta-agent-mcp-1 --tail 20
 
 # 3. View matrix-client logs for inter-agent detection
-docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
   grep "Detected inter-agent message"
 
 # 4. Send test message from one agent to another
@@ -176,14 +176,14 @@ When Agent A sends to Agent B:
 
 ```bash
 # letta-agent-mcp container
-Image: matrix-synapse-deployment-letta-agent-mcp
+Image: matrix-tuwunel-deploy-letta-agent-mcp
 Port: 8017
 Status: Running (healthy)
 Tools: 4 (matrix_agent_message, matrix_agent_message_async, 
           matrix_agent_message_status, matrix_agent_message_result)
 
 # matrix-client container
-Image: matrix-synapse-deployment-matrix-client
+Image: matrix-tuwunel-deploy-matrix-client
 Status: Running (healthy)
 Features: Inter-agent message detection, context injection
 ```

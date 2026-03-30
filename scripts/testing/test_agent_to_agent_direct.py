@@ -77,7 +77,7 @@ async def test_agent_message():
                         # Check logs to see who sent the message
                         print("\n📝 To verify sender identity:")
                         print("Check BMO's Matrix room to see if message appears as from Meridian")
-                        print("Run: docker logs matrix-synapse-deployment-matrix-client-1 | grep 'Processing message from'")
+                        print("Run: docker logs matrix-tuwunel-deploy-matrix-client-1 | grep 'Processing message from'")
                 else:
                     print(f"❌ Failed to send: {content.get('error')}")
             else:

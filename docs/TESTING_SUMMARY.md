@@ -167,7 +167,7 @@ These tests prevent:
 
 - **Test Suite Details**: `TEST_AGENT_ROUTING.md`
 - **Bug Report**: Conversation summary from January 2025
-- **Production Logs**: `docker logs matrix-synapse-deployment-matrix-client-1`
+- **Production Logs**: `docker logs matrix-tuwunel-deploy-matrix-client-1`
 - **Agent Mappings**: `/app/data/agent_user_mappings.json`
 - **GitHub Workflow**: `.github/workflows/agent-routing-tests.yml`
 

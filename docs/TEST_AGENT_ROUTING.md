@@ -148,7 +148,7 @@ After deploying changes that affect agent routing:
 
 2. **Check logs for correct routing**
    ```bash
-   docker logs matrix-synapse-deployment-matrix-client-1 | grep "AGENT ROUTING"
+   docker logs matrix-tuwunel-deploy-matrix-client-1 | grep "AGENT ROUTING"
    ```
    Should show: `Room !8I9YBvbr4KpXNedbph:matrix.oculair.ca -> Agent agent-597b5756...`
 
@@ -208,6 +208,6 @@ Zero tolerance for:
 
 ## References
 - **Bug Report**: `CONVERSATION_SUMMARY.md`
-- **Production Logs**: `docker logs matrix-synapse-deployment-matrix-client-1`
+- **Production Logs**: `docker logs matrix-tuwunel-deploy-matrix-client-1`
 - **Agent Mappings**: `/app/data/agent_user_mappings.json`
 - **Letta API Docs**: https://docs.letta.com/api

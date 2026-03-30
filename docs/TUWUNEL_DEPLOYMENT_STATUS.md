@@ -69,7 +69,7 @@ $ curl http://localhost:6167/_matrix/client/versions
 1. **Create Tuwunel Admin User**
    ```bash
    # Method 1: Via Tuwunel admin console
-   docker exec -it matrix-synapse-deployment-tuwunel-1 /usr/local/bin/tuwunel --console
+   docker exec -it matrix-tuwunel-deploy-tuwunel-1 /usr/local/bin/tuwunel --console
    
    # Method 2: Via registration (if enabled)
    # Use Element or Matrix client to register

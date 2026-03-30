@@ -80,7 +80,7 @@ Error handling tests:
 docker-compose up -d matrix-client
 
 # Check logs for space creation
-docker logs matrix-synapse-deployment-matrix-client-1 | grep "Creating Letta Agents space"
+docker logs matrix-tuwunel-deploy-matrix-client-1 | grep "Creating Letta Agents space"
 
 # Expected output:
 # [AGENT_SYNC] Creating Letta Agents space
@@ -100,7 +100,7 @@ docker logs matrix-synapse-deployment-matrix-client-1 | grep "Creating Letta Age
 
 # Wait for sync (0.5 seconds)
 # Check logs
-docker logs matrix-synapse-deployment-matrix-client-1 | tail -20
+docker logs matrix-tuwunel-deploy-matrix-client-1 | tail -20
 
 # Expected:
 # Processing agent: NewAgent (agent-xyz)
@@ -114,13 +114,13 @@ docker logs matrix-synapse-deployment-matrix-client-1 | tail -20
 # If you have existing agent rooms before space implementation:
 
 # Delete the space config to force recreation
-docker exec matrix-synapse-deployment-matrix-client-1 rm -f /app/data/letta_space_config.json
+docker exec matrix-tuwunel-deploy-matrix-client-1 rm -f /app/data/letta_space_config.json
 
 # Restart the client
 docker-compose restart matrix-client
 
 # Check logs for migration
-docker logs matrix-synapse-deployment-matrix-client-1 | grep "Migrating"
+docker logs matrix-tuwunel-deploy-matrix-client-1 | grep "Migrating"
 
 # Expected:
 # [AGENT_SYNC] Migrating existing agent rooms to the new space
@@ -147,7 +147,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 docker-compose restart matrix-client
 
 # Check logs - should reuse existing space
-docker logs matrix-synapse-deployment-matrix-client-1 | grep "Using existing"
+docker logs matrix-tuwunel-deploy-matrix-client-1 | grep "Using existing"
 
 # Expected:
 # [AGENT_SYNC] Using existing Letta Agents space: !AbCdEfG:matrix.oculair.ca
@@ -157,7 +157,7 @@ docker logs matrix-synapse-deployment-matrix-client-1 | grep "Using existing"
 
 ### View Space Configuration
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 cat /app/data/letta_space_config.json
+docker exec matrix-tuwunel-deploy-matrix-client-1 cat /app/data/letta_space_config.json
 ```
 
 Expected output:
@@ -171,7 +171,7 @@ Expected output:
 
 ### Check Agent Room Mappings
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 cat /app/data/agent_user_mappings.json
+docker exec matrix-tuwunel-deploy-matrix-client-1 cat /app/data/agent_user_mappings.json
 ```
 
 ### Common Issues

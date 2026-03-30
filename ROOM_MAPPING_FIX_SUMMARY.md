@@ -37,7 +37,7 @@ Updated both JSON and database to use YOUR actual rooms:
 ## Verification
 ```bash
 # Test a specific agent's routing
-docker exec matrix-synapse-deployment-matrix-client-1 python3 << 'EOF'
+docker exec matrix-tuwunel-deploy-matrix-client-1 python3 << 'EOF'
 import sys; sys.path.insert(0, '/app')
 from src.models.agent_mapping import AgentMappingDB
 db = AgentMappingDB()

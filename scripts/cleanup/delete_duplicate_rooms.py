@@ -209,7 +209,7 @@ def main():
     print("1. Restart matrix-client to pick up new mappings:")
     print("   docker-compose restart matrix-client")
     print("2. Monitor logs to verify agents use new rooms:")
-    print("   docker logs -f matrix-synapse-deployment-matrix-client-1")
+    print("   docker logs -f matrix-tuwunel-deploy-matrix-client-1")
 
 if __name__ == '__main__':
     main()

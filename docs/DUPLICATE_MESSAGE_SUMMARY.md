@@ -105,7 +105,7 @@ is_duplicate = (cursor.rowcount == 0)
 
 4. **Monitor for duplicates:**
    ```bash
-   docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+   docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
      grep "Duplicate Matrix event detected"
    ```
 
@@ -125,11 +125,11 @@ sqlite3 matrix_client_data/matrix_event_dedupe.db \
   "SELECT COUNT(*) as total_events FROM processed_events;"
 
 # Check recent duplicates in logs
-docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
   grep -A 2 "Duplicate Matrix event detected" | tail -20
 
 # Monitor live message processing
-docker logs -f matrix-synapse-deployment-matrix-client-1 2>&1 | \
+docker logs -f matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
   grep -E "Received message|Duplicate|event_id"
 ```
 
@@ -164,13 +164,13 @@ docker logs -f matrix-synapse-deployment-matrix-client-1 2>&1 | \
 
 3. **Check event_id capture:**
    ```bash
-   docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+   docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
      grep "event_id" | tail -10
    ```
 
 4. **Verify dedupe store is being called:**
    ```bash
-   docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+   docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
      grep -E "Duplicate|Recorded Matrix event"
    ```
 

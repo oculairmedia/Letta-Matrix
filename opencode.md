@@ -37,7 +37,7 @@ We have made this mistake multiple times, so let's be very clear:
 | Database | RocksDB (embedded) |
 | Data Directory | `./tuwunel-data/` |
 | Admin APIs | Matrix Client API only |
-| Container Name | `matrix-synapse-deployment-tuwunel-1` |
+| Container Name | `matrix-tuwunel-deploy-tuwunel-1` |
 | Service Name | `tuwunel` |
 
 ---
@@ -177,16 +177,16 @@ python3 -m pytest --cov=src --cov-report=html
 
 ```bash
 # Matrix client (agent sync)
-docker logs -f matrix-synapse-deployment-matrix-client-1
+docker logs -f matrix-tuwunel-deploy-matrix-client-1
 
 # Filter for space operations
-docker logs -f matrix-synapse-deployment-matrix-client-1 2>&1 | grep -i space
+docker logs -f matrix-tuwunel-deploy-matrix-client-1 2>&1 | grep -i space
 
 # Filter for agent sync
-docker logs -f matrix-synapse-deployment-matrix-client-1 2>&1 | grep AGENT_SYNC
+docker logs -f matrix-tuwunel-deploy-matrix-client-1 2>&1 | grep AGENT_SYNC
 
 # Tuwunel homeserver
-docker logs -f matrix-synapse-deployment-tuwunel-1
+docker logs -f matrix-tuwunel-deploy-tuwunel-1
 ```
 
 ### Common Operations
@@ -281,7 +281,7 @@ Located in `scripts/`:
 cat matrix_client_data/letta_space_config.json
 
 # Check logs for space recreation
-docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | grep -i "space"
+docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | grep -i "space"
 ```
 
 **Fix**: Already deployed! Space validation prevents loops.
@@ -391,10 +391,10 @@ docker-compose ps
 docker-compose restart matrix-client
 
 # View matrix-client logs
-docker logs -f matrix-synapse-deployment-matrix-client-1
+docker logs -f matrix-tuwunel-deploy-matrix-client-1
 
 # View Tuwunel logs (homeserver)
-docker logs -f matrix-synapse-deployment-tuwunel-1
+docker logs -f matrix-tuwunel-deploy-tuwunel-1
 
 # Run tests
 python3 -m pytest tests/unit/test_agent_user_manager_space.py -v

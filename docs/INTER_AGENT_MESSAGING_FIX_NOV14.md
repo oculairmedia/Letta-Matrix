@@ -216,7 +216,7 @@ Total: 3/3 tests passed
 ### 2. Check Logs
 ```bash
 # Should see agent login, not admin
-docker logs matrix-synapse-deployment-letta-agent-mcp-1 | grep "Agent login successful"
+docker logs matrix-tuwunel-deploy-letta-agent-mcp-1 | grep "Agent login successful"
 
 # Output:
 # Agent login successful for Meridian  ✓ CORRECT!

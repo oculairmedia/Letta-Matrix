@@ -165,7 +165,7 @@ After deploying changes that affect agent responses:
 
 3. **Check server logs**
    ```bash
-   docker logs matrix-synapse-deployment-matrix-client-1 | grep "SEND_AS_AGENT"
+   docker logs matrix-tuwunel-deploy-matrix-client-1 | grep "SEND_AS_AGENT"
    ```
    Should show:
    ```
@@ -176,7 +176,7 @@ After deploying changes that affect agent responses:
 
 4. **Verify sent_as_agent flag**
    ```bash
-   docker logs matrix-synapse-deployment-matrix-client-1 | grep "sent_as_agent"
+   docker logs matrix-tuwunel-deploy-matrix-client-1 | grep "sent_as_agent"
    ```
    Should show: `"sent_as_agent": true`
 
@@ -185,7 +185,7 @@ After deploying changes that affect agent responses:
 Add to monitoring:
 ```bash
 # Check for agent send failures
-docker logs matrix-synapse-deployment-matrix-client-1 --since 1h | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 --since 1h | \
   grep "Failed to send message as agent" | wc -l
 # Should be 0 or very low
 ```
@@ -204,7 +204,7 @@ docker logs matrix-synapse-deployment-matrix-client-1 --since 1h | \
 **Debug**:
 ```bash
 # Check for login errors
-docker logs matrix-synapse-deployment-matrix-client-1 | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 | \
   grep "\[SEND_AS_AGENT\].*Failed to login"
 
 # Verify agent mapping has password
@@ -223,7 +223,7 @@ cat matrix_client_data/agent_user_mappings.json | \
 **Check**:
 ```bash
 # Should see transaction IDs in logs
-docker logs matrix-synapse-deployment-matrix-client-1 | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 | \
   grep "Sending to.*m.room.message"
 ```
 

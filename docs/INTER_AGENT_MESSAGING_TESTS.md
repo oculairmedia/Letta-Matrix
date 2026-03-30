@@ -193,7 +193,7 @@ The tests verify:
 docker ps | grep letta-agent-mcp
 
 # Check logs
-docker logs matrix-synapse-deployment-letta-agent-mcp-1
+docker logs matrix-tuwunel-deploy-letta-agent-mcp-1
 ```
 
 ### Test Fails: "Agent not found"
@@ -217,7 +217,7 @@ cat matrix_client_data/agent_user_mappings.json | \
 This indicates the fix wasn't applied. Verify:
 ```bash
 # Check letta-agent-mcp logs for "Agent login successful"
-docker logs matrix-synapse-deployment-letta-agent-mcp-1 | \
+docker logs matrix-tuwunel-deploy-letta-agent-mcp-1 | \
   grep "Agent login successful"
 
 # Should show the SENDING agent logging in, not admin

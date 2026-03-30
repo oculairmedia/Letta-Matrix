@@ -39,7 +39,7 @@ async def main():
                 print(f"✅ Message sent successfully!")
                 print(f"   Event ID: {event_id}")
                 print(f"\nNow check the matrix-client logs for routing information:")
-                print(f"docker logs matrix-synapse-deployment-matrix-client-1 --tail 50 | grep -i 'routing\\|meridian\\|agent.*routing'")
+                print(f"docker logs matrix-tuwunel-deploy-matrix-client-1 --tail 50 | grep -i 'routing\\|meridian\\|agent.*routing'")
             else:
                 error = await resp.text()
                 print(f"❌ Failed to send message: {resp.status}")

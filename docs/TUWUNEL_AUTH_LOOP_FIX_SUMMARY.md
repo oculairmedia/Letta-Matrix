@@ -80,13 +80,13 @@ MATRIX_AGENT_SYNC_INTERVAL=120
 ### Health Checks
 ```bash
 # Check tuwunel CPU
-docker stats matrix-synapse-deployment-tuwunel-1 --no-stream
+docker stats matrix-tuwunel-deploy-tuwunel-1 --no-stream
 
 # Count recent logins
-docker logs matrix-synapse-deployment-tuwunel-1 --since 5m | grep "logged in" | wc -l
+docker logs matrix-tuwunel-deploy-tuwunel-1 --since 5m | grep "logged in" | wc -l
 
 # View sync metrics
-docker logs matrix-synapse-deployment-matrix-client-1 --since 2m | grep "Sync metrics"
+docker logs matrix-tuwunel-deploy-matrix-client-1 --since 2m | grep "Sync metrics"
 ```
 
 ## Future Improvements

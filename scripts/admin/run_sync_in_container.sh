@@ -13,7 +13,7 @@ echo "🚀 Running mapping sync in matrix-client container..."
 echo ""
 
 # Run the sync script inside the container
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/scripts/admin/sync_mappings_to_db.py "$@"
 
 echo ""

@@ -38,35 +38,35 @@ echo ""
 
 # Check for duplicate detection in logs
 echo "3. Checking recent logs for duplicate events..."
-DUPLICATE_COUNT=$(docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | grep -c "Duplicate Matrix event detected" || echo "0")
+DUPLICATE_COUNT=$(docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | grep -c "Duplicate Matrix event detected" || echo "0")
 echo "   Duplicate events detected (all time): $DUPLICATE_COUNT"
 
 if [ "$DUPLICATE_COUNT" -gt 0 ]; then
     echo "   Recent duplicate detections:"
-    docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | grep "Duplicate Matrix event detected" | tail -5
+    docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | grep "Duplicate Matrix event detected" | tail -5
 fi
 echo ""
 
 # Check for message processing
 echo "4. Checking message processing..."
-PROCESSED_COUNT=$(docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | grep -c "Received message from user" || echo "0")
+PROCESSED_COUNT=$(docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | grep -c "Received message from user" || echo "0")
 echo "   Messages processed (all time): $PROCESSED_COUNT"
 echo ""
 
 # Check for errors
 echo "5. Checking for errors..."
-ERROR_COUNT=$(docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | grep -c "ERROR" || echo "0")
+ERROR_COUNT=$(docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | grep -c "ERROR" || echo "0")
 echo "   Errors in logs: $ERROR_COUNT"
 
 if [ "$ERROR_COUNT" -gt 0 ]; then
     echo "   Recent errors:"
-    docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | grep "ERROR" | tail -5
+    docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | grep "ERROR" | tail -5
 fi
 echo ""
 
 # Check environment variables
 echo "6. Checking configuration..."
-TTL=$(docker exec matrix-synapse-deployment-matrix-client-1 printenv MATRIX_EVENT_DEDUPE_TTL 2>/dev/null || echo "3600 (default)")
+TTL=$(docker exec matrix-tuwunel-deploy-matrix-client-1 printenv MATRIX_EVENT_DEDUPE_TTL 2>/dev/null || echo "3600 (default)")
 echo "   Event dedupe TTL: $TTL seconds"
 echo ""
 
@@ -85,5 +85,5 @@ else
 fi
 echo ""
 echo "For detailed logs, run:"
-echo "  docker logs matrix-synapse-deployment-matrix-client-1 | grep -E 'Duplicate|Received message'"
+echo "  docker logs matrix-tuwunel-deploy-matrix-client-1 | grep -E 'Duplicate|Received message'"
 

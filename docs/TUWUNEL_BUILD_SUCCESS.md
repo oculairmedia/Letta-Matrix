@@ -49,7 +49,7 @@ docker ps | grep tuwunel
 curl http://localhost:6167/_matrix/client/versions
 
 # Check logs
-docker logs matrix-synapse-deployment-tuwunel-1
+docker logs matrix-tuwunel-deploy-tuwunel-1
 ```
 
 ### 3. Test Letta Integration

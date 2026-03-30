@@ -231,7 +231,7 @@ python3 test_inter_agent_context.py
 ### Verify Context Enhancement
 
 ```bash
-docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
   grep -A 30 "INTER-AGENT CONTEXT"
 ```
 
@@ -250,7 +250,7 @@ YOU MUST respond using the 'matrix_agent_message' tool...
 ### Verify Tool Registration
 
 ```bash
-docker logs matrix-synapse-deployment-letta-agent-mcp-1 2>&1 | \
+docker logs matrix-tuwunel-deploy-letta-agent-mcp-1 2>&1 | \
   grep "Registered.*tools"
 ```
 
@@ -317,13 +317,13 @@ Registered 1 tools: ['matrix_agent_message']
 
 **Check 1**: Verify context enhancement is working
 ```bash
-docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
   grep "INTER-AGENT CONTEXT"
 ```
 
 **Check 2**: Verify message reached Letta API
 ```bash
-docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
   grep "SENDING TO LETTA API"
 ```
 

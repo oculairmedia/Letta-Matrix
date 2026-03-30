@@ -27,14 +27,14 @@ pytest test_agent_response_identity.py::test_different_agents_use_different_iden
 ## Verify Production Routing & Identity
 ```bash
 # Check logs for correct routing
-docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
   grep "AGENT ROUTING" | tail -5
 
 # Should show: Room !8I9YBvbr4KpXNedbph -> Agent agent-597b5756...
 # Should NOT show: agent-7659b796 (Personal Site)
 
 # Check agent identity in responses
-docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
+docker logs matrix-tuwunel-deploy-matrix-client-1 2>&1 | \
   grep "SEND_AS_AGENT" | tail -10
 
 # Should show: Successfully sent message as Meridian (agent_597b5756...)
@@ -47,7 +47,7 @@ docker logs matrix-synapse-deployment-matrix-client-1 2>&1 | \
 docker ps | grep matrix-client
 
 # Recent logs
-docker logs matrix-synapse-deployment-matrix-client-1 --tail 20
+docker logs matrix-tuwunel-deploy-matrix-client-1 --tail 20
 
 # Agent mappings
 cat matrix_client_data/agent_user_mappings.json | \

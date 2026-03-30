@@ -19,10 +19,10 @@ We created a sync script that migrates mappings from JSON to PostgreSQL and can 
 ```bash
 # 1. Copy the sync script to the container
 docker cp /opt/stacks/matrix-synapse-deployment/scripts/admin/sync_mappings_to_db.py \
-    matrix-synapse-deployment-matrix-client-1:/app/
+    matrix-tuwunel-deploy-matrix-client-1:/app/
 
 # 2. Run the sync
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py
 ```
 
@@ -30,25 +30,25 @@ docker exec matrix-synapse-deployment-matrix-client-1 \
 
 ### Check Sync Status (Dry Run)
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py --dry-run
 ```
 
 ### Verify Current Sync Status
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py --verify
 ```
 
 ### Sync Mappings to Database
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py
 ```
 
 ### Use Custom JSON File
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py --json-file /path/to/custom/mappings.json
 ```
 
@@ -135,7 +135,7 @@ db.upsert(
 
 Check if mappings are in sync:
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py --verify
 ```
 
@@ -158,15 +158,15 @@ Expected output when in sync:
 **Solution:**
 ```bash
 # 1. Verify database is out of sync
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py --verify
 
 # 2. Sync mappings
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py
 
 # 3. Verify sync completed
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py --verify
 ```
 
@@ -179,7 +179,7 @@ docker exec matrix-synapse-deployment-matrix-client-1 \
 **Solution:**
 Run the sync script from **inside the matrix-client container**, not from the host:
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py
 ```
 
@@ -191,7 +191,7 @@ docker exec matrix-synapse-deployment-matrix-client-1 \
 
 **Solution:**
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py
 ```
 
@@ -206,7 +206,7 @@ This will create all missing mappings in the database.
 **Solution:**
 ```bash
 # Sync will update room IDs from JSON to database
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 /app/sync_mappings_to_db.py
 ```
 
@@ -246,7 +246,7 @@ curl http://localhost:8004/agents/{agent_id}/room
 ### Direct Database Access
 ```bash
 # Connect to database
-docker exec -it matrix-synapse-deployment-matrix-client-1 \
+docker exec -it matrix-tuwunel-deploy-matrix-client-1 \
     python3 -c "
 from src.models.agent_mapping import AgentMappingDB
 db = AgentMappingDB()
@@ -259,7 +259,7 @@ for m in db.get_all():
 
 ### Query Specific Mapping
 ```bash
-docker exec matrix-synapse-deployment-matrix-client-1 \
+docker exec matrix-tuwunel-deploy-matrix-client-1 \
     python3 -c "
 from src.models.agent_mapping import AgentMappingDB
 db = AgentMappingDB()
