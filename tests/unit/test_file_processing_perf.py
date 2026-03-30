@@ -236,7 +236,7 @@ class TestFireAndForgetNotify:
         with patch.object(file_handler, '_notify', side_effect=slow_notify), \
              patch("src.matrix.file_handler.asyncio.ensure_future", side_effect=capture_notify_task), \
              patch.object(file_handler, '_download_matrix_file', new_callable=AsyncMock, return_value="/tmp/fake.pdf"), \
-             patch("src.matrix.file_handler.parse_document", new_callable=AsyncMock, return_value=mock_parse_result), \
+             patch("src.matrix.file_document_handler.parse_document", new_callable=AsyncMock, return_value=mock_parse_result), \
              patch.object(file_handler, '_ingest_to_haystack', new_callable=AsyncMock, return_value=True), \
              patch("os.path.exists", return_value=True), \
              patch("os.unlink"):
@@ -283,7 +283,7 @@ class TestFireAndForgetNotify:
         with patch.object(file_handler, '_notify', side_effect=failing_notify), \
              patch("src.matrix.file_handler.asyncio.ensure_future", side_effect=capture_notify_task), \
              patch.object(file_handler, '_download_matrix_file', new_callable=AsyncMock, return_value="/tmp/fake.pdf"), \
-             patch("src.matrix.file_handler.parse_document", new_callable=AsyncMock, return_value=mock_parse_result), \
+             patch("src.matrix.file_document_handler.parse_document", new_callable=AsyncMock, return_value=mock_parse_result), \
              patch.object(file_handler, '_ingest_to_haystack', new_callable=AsyncMock, return_value=True), \
              patch("os.path.exists", return_value=True), \
              patch("os.unlink"):

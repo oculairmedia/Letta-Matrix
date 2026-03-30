@@ -247,9 +247,9 @@ async def test_handle_document_upload_parses_and_returns_summary(
         )
         
         with patch.object(handler, "_downloaded_file", mock_downloaded_file), \
-             patch("src.matrix.file_handler.parse_document", new_callable=AsyncMock) as mock_parse, \
-             patch("src.matrix.file_handler.build_outline_record") as mock_build_outline, \
-             patch("src.matrix.file_handler.upsert_outline_record") as mock_upsert_outline, \
+             patch("src.matrix.file_document_handler.parse_document", new_callable=AsyncMock) as mock_parse, \
+             patch("src.matrix.file_document_handler.build_outline_record") as mock_build_outline, \
+             patch("src.matrix.file_document_handler.upsert_outline_record") as mock_upsert_outline, \
              patch.object(handler, "_ingest_to_haystack", new_callable=AsyncMock, return_value=True):
             
             mock_parse.return_value = parse_result
@@ -305,7 +305,7 @@ async def test_handle_document_upload_returns_none_on_parse_error(
         )
         
         with patch.object(handler, "_downloaded_file", mock_downloaded_file), \
-             patch("src.matrix.file_handler.parse_document", new_callable=AsyncMock) as mock_parse:
+             patch("src.matrix.file_document_handler.parse_document", new_callable=AsyncMock) as mock_parse:
             
             mock_parse.return_value = parse_result
             
@@ -358,7 +358,7 @@ async def test_handle_document_upload_returns_none_on_short_content(
         )
         
         with patch.object(handler, "_downloaded_file", mock_downloaded_file), \
-             patch("src.matrix.file_handler.parse_document", new_callable=AsyncMock) as mock_parse:
+             patch("src.matrix.file_document_handler.parse_document", new_callable=AsyncMock) as mock_parse:
             
             mock_parse.return_value = parse_result
             
@@ -411,9 +411,9 @@ async def test_handle_document_upload_includes_caption_in_agent_message(
         )
         
         with patch.object(handler, "_downloaded_file", mock_downloaded_file), \
-             patch("src.matrix.file_handler.parse_document", new_callable=AsyncMock) as mock_parse, \
-             patch("src.matrix.file_handler.build_outline_record") as mock_build_outline, \
-             patch("src.matrix.file_handler.upsert_outline_record") as mock_upsert_outline, \
+             patch("src.matrix.file_document_handler.parse_document", new_callable=AsyncMock) as mock_parse, \
+             patch("src.matrix.file_document_handler.build_outline_record") as mock_build_outline, \
+             patch("src.matrix.file_document_handler.upsert_outline_record") as mock_upsert_outline, \
              patch.object(handler, "_ingest_to_haystack", new_callable=AsyncMock, return_value=True):
             
             mock_parse.return_value = parse_result
