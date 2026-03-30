@@ -16,7 +16,7 @@ import * as sdk from "matrix-js-sdk";
 import { createServer, IncomingMessage, ServerResponse } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { fetchAgentMappings } from "./agent-mappings.js";
-import { RegistrationDB } from "./db.js";
+import { RegistrationDB, buildDatabaseUrlCandidates } from "./db.js";
 
 interface OpenCodeRegistration {
   id: string;
@@ -952,13 +952,30 @@ async function main(): Promise<void> {
   if (!databaseUrl) {
     console.warn("[Bridge] DATABASE_URL not set, running with in-memory registrations only");
   } else {
-    try {
-      registrationDb = new RegistrationDB(databaseUrl);
-      await registrationDb.init();
-      await restoreRegistrationsFromDb();
-    } catch (err) {
-      registrationDb = null;
-      console.warn("[Bridge] PostgreSQL unavailable, running with in-memory registrations only:", err);
+    const databaseUrlCandidates = buildDatabaseUrlCandidates(databaseUrl);
+    let initialized = false;
+    let lastError: unknown = null;
+
+    for (let index = 0; index < databaseUrlCandidates.length; index += 1) {
+      const candidateUrl = databaseUrlCandidates[index];
+      try {
+        if (index > 0) {
+          console.warn(`[Bridge] Retrying PostgreSQL with fallback URL (${index + 1}/${databaseUrlCandidates.length})`);
+        }
+
+        registrationDb = new RegistrationDB(candidateUrl);
+        await registrationDb.init();
+        await restoreRegistrationsFromDb();
+        initialized = true;
+        break;
+      } catch (err) {
+        lastError = err;
+        registrationDb = null;
+      }
+    }
+
+    if (!initialized) {
+      console.warn("[Bridge] PostgreSQL unavailable, running with in-memory registrations only:", lastError);
     }
   }
 

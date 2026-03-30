@@ -1,5 +1,27 @@
 import pg from "pg";
 
+export function buildDatabaseUrlCandidates(databaseUrl: string): string[] {
+  const candidates = new Set<string>([databaseUrl]);
+
+  try {
+    const parsed = new URL(databaseUrl);
+    const host = parsed.hostname;
+    const fallbackHosts = ["127.0.0.1", "localhost", "host.docker.internal"];
+
+    if (!fallbackHosts.includes(host)) {
+      for (const fallbackHost of fallbackHosts) {
+        const fallback = new URL(databaseUrl);
+        fallback.hostname = fallbackHost;
+        candidates.add(fallback.toString());
+      }
+    }
+  } catch {
+    return [databaseUrl];
+  }
+
+  return Array.from(candidates);
+}
+
 export interface RegistrationRow {
   directory: string;
   rooms: string[];
