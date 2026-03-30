@@ -247,8 +247,18 @@ class IdentityClientPool:
         room_id: str,
         message: str,
         msgtype: str = "m.text",
+        thread_event_id: Optional[str] = None,
+        thread_latest_event_id: Optional[str] = None,
     ) -> Optional[str]:
         content: Dict[str, object] = {"msgtype": msgtype, "body": message}
+        if thread_event_id:
+            fallback_event_id = thread_latest_event_id or thread_event_id
+            content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_event_id,
+                "is_falling_back": True,
+                "m.in_reply_to": {"event_id": fallback_event_id},
+            }
         return await self._send_with_recovery(identity_id, room_id, content)
 
     async def send_as_agent(
@@ -257,9 +267,18 @@ class IdentityClientPool:
         room_id: str,
         message: str,
         msgtype: str = "m.text",
+        thread_event_id: Optional[str] = None,
+        thread_latest_event_id: Optional[str] = None,
     ) -> Optional[str]:
         identity_id = f"letta_{agent_id}"
-        return await self.send_message(identity_id, room_id, message, msgtype)
+        return await self.send_message(
+            identity_id,
+            room_id,
+            message,
+            msgtype,
+            thread_event_id=thread_event_id,
+            thread_latest_event_id=thread_latest_event_id,
+        )
 
     async def edit_message(
         self,
