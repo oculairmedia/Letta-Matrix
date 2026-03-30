@@ -1,0 +1,27 @@
+[
+  {
+    "document_id": "!test:matrix.org:$event123",
+    "filename": "report.pdf",
+    "room_id": "!test:matrix.org",
+    "sender": "@user:matrix.org",
+    "event_id": "$event123",
+    "page_count": 5,
+    "was_ocr": false,
+    "char_count": 1300,
+    "has_heading_signals": false,
+    "sections": [
+      {
+        "order": 1,
+        "level": 1,
+        "title": "Good content Good content Good content Good content Good content Good content Good content Good content Good content Goo",
+        "line": null
+      }
+    ],
+    "key_topics": [
+      "good",
+      "content"
+    ],
+    "document_type": "pdf",
+    "ingested_at": "2026-03-30T01:49:37.515724+00:00"
+  }
+]
