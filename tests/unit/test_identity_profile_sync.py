@@ -26,9 +26,9 @@ def _make_identity(
 @pytest.mark.asyncio
 async def test_sync_profile_noop_when_display_name_none():
     """_sync_identity_profile should return immediately when display_name is None."""
-    from src.api.routes.identity import _sync_identity_profile
+    from src.api.routes._identity_helpers import _sync_identity_profile
 
-    with patch("src.api.routes.identity.get_identity_service") as mock_svc:
+    with patch("src.api.routes._identity_helpers.get_identity_service") as mock_svc:
         await _sync_identity_profile("id1", None)
         mock_svc.assert_not_called()
 
@@ -37,9 +37,9 @@ async def test_sync_profile_noop_when_display_name_none():
 @pytest.mark.asyncio
 async def test_sync_profile_raises_404_when_identity_missing():
     """_sync_identity_profile raises 404 if identity not found."""
-    from src.api.routes.identity import _sync_identity_profile
+    from src.api.routes._identity_helpers import _sync_identity_profile
 
-    with patch("src.api.routes.identity.get_identity_service") as mock_svc:
+    with patch("src.api.routes._identity_helpers.get_identity_service") as mock_svc:
         mock_svc.return_value.get.return_value = None
         with pytest.raises(HTTPException) as exc_info:
             await _sync_identity_profile("missing_id", "New Name")
@@ -50,14 +50,14 @@ async def test_sync_profile_raises_404_when_identity_missing():
 @pytest.mark.asyncio
 async def test_sync_profile_uses_token_when_healthy():
     """When monitor reports healthy and token exists, use set_user_display_name."""
-    from src.api.routes.identity import _sync_identity_profile
+    from src.api.routes._identity_helpers import _sync_identity_profile
 
     identity = _make_identity()
 
     with (
-        patch("src.api.routes.identity.get_identity_service") as mock_svc,
-        patch("src.api.routes.identity.get_identity_token_health_monitor") as mock_monitor_fn,
-        patch("src.api.routes.identity.MatrixUserManager") as MockUM,
+        patch("src.api.routes._identity_helpers.get_identity_service") as mock_svc,
+        patch("src.api.routes._identity_helpers.get_identity_token_health_monitor") as mock_monitor_fn,
+        patch("src.api.routes._identity_helpers.MatrixUserManager") as MockUM,
     ):
         mock_svc.return_value.get.return_value = identity
         mock_monitor = mock_monitor_fn.return_value
@@ -79,14 +79,14 @@ async def test_sync_profile_uses_token_when_healthy():
 @pytest.mark.asyncio
 async def test_sync_profile_falls_back_to_password():
     """When token sync fails, fall back to password-based update_display_name."""
-    from src.api.routes.identity import _sync_identity_profile
+    from src.api.routes._identity_helpers import _sync_identity_profile
 
     identity = _make_identity()
 
     with (
-        patch("src.api.routes.identity.get_identity_service") as mock_svc,
-        patch("src.api.routes.identity.get_identity_token_health_monitor") as mock_monitor_fn,
-        patch("src.api.routes.identity.MatrixUserManager") as MockUM,
+        patch("src.api.routes._identity_helpers.get_identity_service") as mock_svc,
+        patch("src.api.routes._identity_helpers.get_identity_token_health_monitor") as mock_monitor_fn,
+        patch("src.api.routes._identity_helpers.MatrixUserManager") as MockUM,
     ):
         mock_svc.return_value.get.return_value = identity
         mock_monitor = mock_monitor_fn.return_value
@@ -108,14 +108,14 @@ async def test_sync_profile_falls_back_to_password():
 @pytest.mark.asyncio
 async def test_sync_profile_falls_back_to_password_when_token_unhealthy():
     """When monitor says token unhealthy (no token), skip token path, try password."""
-    from src.api.routes.identity import _sync_identity_profile
+    from src.api.routes._identity_helpers import _sync_identity_profile
 
     identity = _make_identity(token="")
 
     with (
-        patch("src.api.routes.identity.get_identity_service") as mock_svc,
-        patch("src.api.routes.identity.get_identity_token_health_monitor") as mock_monitor_fn,
-        patch("src.api.routes.identity.MatrixUserManager") as MockUM,
+        patch("src.api.routes._identity_helpers.get_identity_service") as mock_svc,
+        patch("src.api.routes._identity_helpers.get_identity_token_health_monitor") as mock_monitor_fn,
+        patch("src.api.routes._identity_helpers.MatrixUserManager") as MockUM,
     ):
         mock_svc.return_value.get.return_value = identity
         mock_monitor = mock_monitor_fn.return_value
@@ -135,14 +135,14 @@ async def test_sync_profile_falls_back_to_password_when_token_unhealthy():
 @pytest.mark.asyncio
 async def test_sync_profile_raises_502_when_all_methods_fail():
     """When both token and password sync fail, raise 502."""
-    from src.api.routes.identity import _sync_identity_profile
+    from src.api.routes._identity_helpers import _sync_identity_profile
 
     identity = _make_identity()
 
     with (
-        patch("src.api.routes.identity.get_identity_service") as mock_svc,
-        patch("src.api.routes.identity.get_identity_token_health_monitor") as mock_monitor_fn,
-        patch("src.api.routes.identity.MatrixUserManager") as MockUM,
+        patch("src.api.routes._identity_helpers.get_identity_service") as mock_svc,
+        patch("src.api.routes._identity_helpers.get_identity_token_health_monitor") as mock_monitor_fn,
+        patch("src.api.routes._identity_helpers.MatrixUserManager") as MockUM,
     ):
         mock_svc.return_value.get.return_value = identity
         mock_monitor = mock_monitor_fn.return_value
@@ -161,14 +161,14 @@ async def test_sync_profile_raises_502_when_all_methods_fail():
 @pytest.mark.asyncio
 async def test_sync_profile_no_password_skips_fallback():
     """When identity has no password_hash, password fallback is skipped."""
-    from src.api.routes.identity import _sync_identity_profile
+    from src.api.routes._identity_helpers import _sync_identity_profile
 
     identity = _make_identity(password=None)
 
     with (
-        patch("src.api.routes.identity.get_identity_service") as mock_svc,
-        patch("src.api.routes.identity.get_identity_token_health_monitor") as mock_monitor_fn,
-        patch("src.api.routes.identity.MatrixUserManager") as MockUM,
+        patch("src.api.routes._identity_helpers.get_identity_service") as mock_svc,
+        patch("src.api.routes._identity_helpers.get_identity_token_health_monitor") as mock_monitor_fn,
+        patch("src.api.routes._identity_helpers.MatrixUserManager") as MockUM,
     ):
         mock_svc.return_value.get.return_value = identity
         mock_monitor = mock_monitor_fn.return_value
@@ -188,14 +188,14 @@ async def test_sync_profile_no_password_skips_fallback():
 @pytest.mark.asyncio
 async def test_sync_profile_refreshes_token_after_password_sync():
     """After successful password-based sync, monitor.ensure_identity_healthy is called again."""
-    from src.api.routes.identity import _sync_identity_profile
+    from src.api.routes._identity_helpers import _sync_identity_profile
 
     identity = _make_identity()
 
     with (
-        patch("src.api.routes.identity.get_identity_service") as mock_svc,
-        patch("src.api.routes.identity.get_identity_token_health_monitor") as mock_monitor_fn,
-        patch("src.api.routes.identity.MatrixUserManager") as MockUM,
+        patch("src.api.routes._identity_helpers.get_identity_service") as mock_svc,
+        patch("src.api.routes._identity_helpers.get_identity_token_health_monitor") as mock_monitor_fn,
+        patch("src.api.routes._identity_helpers.MatrixUserManager") as MockUM,
     ):
         mock_svc.return_value.get.return_value = identity
         mock_monitor = mock_monitor_fn.return_value

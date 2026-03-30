@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.api.routes.identity import (
+from src.api.routes._identity_helpers import (
     _provision_login,
     _send_admin_password_reset_command,
     _reset_password_and_verify_login,
@@ -43,7 +43,7 @@ async def test_provision_login_retries_then_succeeds():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("src.api.routes.identity.aiohttp.ClientSession", return_value=session):
+    with patch("src.api.routes._identity_helpers.aiohttp.ClientSession", return_value=session):
         token = await _provision_login("https://matrix.test", "agent_test", "pass", retries=2)
 
     assert token == "tok_123"
@@ -68,7 +68,7 @@ async def test_send_admin_reset_clears_token_cache_on_401_then_recovers():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("src.api.routes.identity.aiohttp.ClientSession", return_value=session):
+    with patch("src.api.routes._identity_helpers.aiohttp.ClientSession", return_value=session):
         ok = await _send_admin_password_reset_command(
             user_manager,
             "https://matrix.test",
@@ -86,9 +86,9 @@ async def test_reset_password_and_verify_login_retries_three_times():
     user_manager = MagicMock()
 
     with (
-        patch("src.api.routes.identity._send_admin_password_reset_command", new=AsyncMock(return_value=True)) as reset_cmd,
-        patch("src.api.routes.identity._provision_login", new=AsyncMock(side_effect=[None, None, "token_final"])) as login_fn,
-        patch("src.api.routes.identity.asyncio.sleep", new=AsyncMock(return_value=None)),
+        patch("src.api.routes._identity_helpers._send_admin_password_reset_command", new=AsyncMock(return_value=True)) as reset_cmd,
+        patch("src.api.routes._identity_helpers._provision_login", new=AsyncMock(side_effect=[None, None, "token_final"])) as login_fn,
+        patch("src.api.routes._identity_helpers.asyncio.sleep", new=AsyncMock(return_value=None)),
     ):
         token = await _reset_password_and_verify_login(
             user_manager,

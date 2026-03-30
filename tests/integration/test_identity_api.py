@@ -290,9 +290,9 @@ class TestSendAsIdentityEndpoints:
     
     def test_send_as_identity_inactive(self, client, sample_identity):
         client.post("/api/v1/identities", json=sample_identity)
-        
-        with patch('src.api.routes.identity.get_identity_client_pool') as mock_pool:
-            mock_pool.return_value.close_client = AsyncMock()
+
+        with patch('src.api.routes.identity.get_identity_client_pool') as mock_pool_del:
+            mock_pool_del.return_value.close_client = AsyncMock()
             client.delete(f"/api/v1/identities/{sample_identity['id']}")
         
         request = {
@@ -309,8 +309,8 @@ class TestSendAsIdentityEndpoints:
     
     def test_send_as_identity_success(self, client, sample_identity):
         client.post("/api/v1/identities", json=sample_identity)
-        
-        with patch('src.api.routes.identity.get_identity_client_pool') as mock_pool:
+
+        with patch('src.api.routes.identity_messaging.get_identity_client_pool') as mock_pool:
             mock_pool_instance = AsyncMock()
             mock_pool_instance.send_message = AsyncMock(return_value="$event123")
             mock_pool.return_value = mock_pool_instance
@@ -329,8 +329,8 @@ class TestSendAsIdentityEndpoints:
     
     def test_send_as_agent_success(self, client, sample_letta_identity):
         client.post("/api/v1/identities", json=sample_letta_identity)
-        
-        with patch('src.api.routes.identity.get_identity_client_pool') as mock_pool:
+
+        with patch('src.api.routes.identity_messaging.get_identity_client_pool') as mock_pool:
             mock_pool_instance = AsyncMock()
             mock_pool_instance.send_as_agent = AsyncMock(return_value="$event456")
             mock_pool.return_value = mock_pool_instance
@@ -350,7 +350,7 @@ class TestSendAsIdentityEndpoints:
     def test_edit_as_agent_success(self, client, sample_letta_identity):
         client.post("/api/v1/identities", json=sample_letta_identity)
 
-        with patch('src.api.routes.identity.get_identity_client_pool') as mock_pool:
+        with patch('src.api.routes.identity_messaging.get_identity_client_pool') as mock_pool:
             mock_pool_instance = AsyncMock()
             mock_pool_instance.edit_as_agent = AsyncMock(return_value="$event789")
             mock_pool.return_value = mock_pool_instance
@@ -530,9 +530,9 @@ class TestIdentitySyncNamesEndpoint:
         client.post("/api/v1/identities", json=sample_letta_identity)
 
         with (
-            patch("src.api.routes.identity.LettaService") as mock_letta_service,
-            patch("src.api.routes.identity._get_matrix_display_name", new_callable=AsyncMock, return_value="Old Name"),
-            patch("src.api.routes.identity._sync_identity_profile", new_callable=AsyncMock) as mock_sync_profile,
+            patch("src.api.routes.identity_sync.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity_sync._get_matrix_display_name", new_callable=AsyncMock, return_value="Old Name"),
+            patch("src.api.routes.identity_sync._sync_identity_profile", new_callable=AsyncMock) as mock_sync_profile,
             patch("src.models.agent_mapping.AgentMappingDB") as mock_mapping_db,
         ):
             mock_letta_service.return_value.list_agents.return_value = [
@@ -568,9 +568,9 @@ class TestIdentitySyncNamesEndpoint:
         client.post("/api/v1/identities", json=sample_letta_identity)
 
         with (
-            patch("src.api.routes.identity.LettaService") as mock_letta_service,
-            patch("src.api.routes.identity._get_matrix_display_name", new_callable=AsyncMock, return_value="Legacy Name"),
-            patch("src.api.routes.identity._sync_identity_profile", new_callable=AsyncMock) as mock_sync_profile,
+            patch("src.api.routes.identity_sync.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity_sync._get_matrix_display_name", new_callable=AsyncMock, return_value="Legacy Name"),
+            patch("src.api.routes.identity_sync._sync_identity_profile", new_callable=AsyncMock) as mock_sync_profile,
             patch("src.models.agent_mapping.AgentMappingDB") as mock_mapping_db,
         ):
             mock_letta_service.return_value.list_agents.return_value = [
@@ -602,8 +602,8 @@ class TestIdentitySyncNamesEndpoint:
 
     def test_sync_names_counts_missing_identity(self, client):
         with (
-            patch("src.api.routes.identity.LettaService") as mock_letta_service,
-            patch("src.api.routes.identity._get_matrix_display_name", new_callable=AsyncMock, return_value=None),
+            patch("src.api.routes.identity_sync.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity_sync._get_matrix_display_name", new_callable=AsyncMock, return_value=None),
             patch("src.models.agent_mapping.AgentMappingDB") as mock_mapping_db,
         ):
             mock_letta_service.return_value.list_agents.return_value = [
@@ -635,9 +635,9 @@ class TestIdentityProvisionHardening:
         mock_manager.create_matrix_user = AsyncMock(return_value=True)
 
         with (
-            patch("src.core.user_manager.MatrixUserManager", return_value=mock_manager),
-            patch("src.api.routes.identity._provision_login", new=AsyncMock(side_effect=[None, "token_created"])),
-            patch("src.api.routes.identity._reset_password_and_verify_login", new=AsyncMock(return_value=None)) as reset_login,
+            patch("src.api.routes.internal_identity.MatrixUserManager", return_value=mock_manager),
+            patch("src.api.routes.internal_identity._provision_login", new=AsyncMock(side_effect=[None, "token_created"])),
+            patch("src.api.routes.internal_identity._reset_password_and_verify_login", new=AsyncMock(return_value=None)) as reset_login,
         ):
             response = client.post(
                 "/api/v1/internal/identities/provision",
@@ -664,10 +664,10 @@ class TestIdentityProvisionHardening:
         mock_manager.create_matrix_user = AsyncMock(return_value=False)
 
         with (
-            patch("src.core.user_manager.MatrixUserManager", return_value=mock_manager),
-            patch("src.api.routes.identity._provision_login", new=AsyncMock(side_effect=[None, None])),
+            patch("src.api.routes.internal_identity.MatrixUserManager", return_value=mock_manager),
+            patch("src.api.routes.internal_identity._provision_login", new=AsyncMock(side_effect=[None, None])),
             patch(
-                "src.api.routes.identity._reset_password_and_verify_login",
+                "src.api.routes.internal_identity._reset_password_and_verify_login",
                 new=AsyncMock(return_value="token_after_reset"),
             ) as reset_login,
         ):
@@ -696,9 +696,9 @@ class TestIdentityProvisionHardening:
         mock_manager.create_matrix_user = AsyncMock(return_value=False)
 
         with (
-            patch("src.core.user_manager.MatrixUserManager", return_value=mock_manager),
-            patch("src.api.routes.identity._provision_login", new=AsyncMock(return_value=None)),
-            patch("src.api.routes.identity._reset_password_and_verify_login", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.internal_identity.MatrixUserManager", return_value=mock_manager),
+            patch("src.api.routes.internal_identity._provision_login", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.internal_identity._reset_password_and_verify_login", new=AsyncMock(return_value=None)),
         ):
             response = client.post(
                 "/api/v1/internal/identities/provision",
@@ -726,8 +726,8 @@ class TestIdentityHealthEndpoint:
         mock_monitor._validate_identity_token = AsyncMock(return_value=True)
 
         with (
-            patch("src.api.routes.identity.get_identity_token_health_monitor", return_value=mock_monitor),
-            patch("src.api.routes.identity.get_all_mappings", return_value={
+            patch("src.api.routes.identity_health.get_identity_token_health_monitor", return_value=mock_monitor),
+            patch("src.api.routes.identity_health.get_all_mappings", return_value={
                 "agent-1": {
                     "agent_name": "Meridian",
                     "matrix_password": "pw-1",
@@ -735,8 +735,8 @@ class TestIdentityHealthEndpoint:
                     "room_id": "!room:matrix.test",
                 }
             }),
-            patch("src.api.routes.identity.LettaService") as mock_letta_service,
-            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value="Meridian")),
+            patch("src.api.routes.identity_health.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity_health._get_matrix_display_name", new=AsyncMock(return_value="Meridian")),
         ):
             mock_letta_service.return_value.list_agents.return_value = [
                 SimpleNamespace(id="agent-1", name="Meridian")
@@ -789,9 +789,9 @@ class TestIdentityHealthEndpoint:
         ]
 
         with (
-            patch("src.api.routes.identity.get_identity_token_health_monitor", return_value=mock_monitor),
-            patch("src.api.routes.identity.get_dm_room_service", return_value=mock_dm_service),
-            patch("src.api.routes.identity.get_all_mappings", return_value={
+            patch("src.api.routes.identity_health.get_identity_token_health_monitor", return_value=mock_monitor),
+            patch("src.api.routes.identity_health.get_dm_room_service", return_value=mock_dm_service),
+            patch("src.api.routes.identity_health.get_all_mappings", return_value={
                 "agent-2": {
                     "agent_name": "Mapping Name",
                     "matrix_password": "pw-mapping",
@@ -799,8 +799,8 @@ class TestIdentityHealthEndpoint:
                     "room_id": "!room:matrix.test",
                 }
             }),
-            patch("src.api.routes.identity.LettaService") as mock_letta_service,
-            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value="Matrix Name")),
+            patch("src.api.routes.identity_health.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity_health._get_matrix_display_name", new=AsyncMock(return_value="Matrix Name")),
         ):
             mock_letta_service.return_value.list_agents.return_value = [
                 SimpleNamespace(id="agent-2", name="Letta Name")
@@ -831,10 +831,10 @@ class TestIdentityHealthEndpoint:
         mock_monitor._validate_identity_token = AsyncMock(return_value=True)
 
         with (
-            patch("src.api.routes.identity.get_identity_token_health_monitor", return_value=mock_monitor),
-            patch("src.api.routes.identity.get_all_mappings", return_value={}),
-            patch("src.api.routes.identity.LettaService") as mock_letta_service,
-            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.identity_health.get_identity_token_health_monitor", return_value=mock_monitor),
+            patch("src.api.routes.identity_health.get_all_mappings", return_value={}),
+            patch("src.api.routes.identity_health.LettaService") as mock_letta_service,
+            patch("src.api.routes.identity_health._get_matrix_display_name", new=AsyncMock(return_value=None)),
         ):
             mock_letta_service.return_value.list_agents.return_value = [
                 SimpleNamespace(id="agent-3", name="Orphan")
@@ -875,9 +875,9 @@ class TestDMRoomNameReconciliation:
         )
 
         with (
-            patch("src.api.routes.identity._get_room_name", new=AsyncMock(return_value="Wrong Name")),
-            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value="Not Synced")),
-            patch("src.api.routes.identity._sync_identity_profile", new=AsyncMock()) as sync_profile,
+            patch("src.api.routes.dm_rooms._get_room_name", new=AsyncMock(return_value="Wrong Name")),
+            patch("src.api.routes.dm_rooms._get_matrix_display_name", new=AsyncMock(return_value="Not Synced")),
+            patch("src.api.routes.dm_rooms._sync_identity_profile", new=AsyncMock()) as sync_profile,
         ):
             response = client.post("/api/v1/dm-rooms/reconcile-names", json={"dry_run": True})
 
@@ -920,9 +920,9 @@ class TestDMRoomNameReconciliation:
         )
 
         with (
-            patch("src.api.routes.identity._get_room_name", new=AsyncMock(return_value="Agent Twelve ↔ User Twelve")),
-            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value="Outdated")),
-            patch("src.api.routes.identity._sync_identity_profile", new=AsyncMock()) as sync_profile,
+            patch("src.api.routes.dm_rooms._get_room_name", new=AsyncMock(return_value="Agent Twelve ↔ User Twelve")),
+            patch("src.api.routes.dm_rooms._get_matrix_display_name", new=AsyncMock(return_value="Outdated")),
+            patch("src.api.routes.dm_rooms._sync_identity_profile", new=AsyncMock()) as sync_profile,
         ):
             response = client.post(
                 "/api/v1/dm-rooms/reconcile-names",
@@ -966,8 +966,8 @@ class TestDMRoomNameReconciliation:
         )
 
         with (
-            patch("src.api.routes.identity._get_room_name", new=AsyncMock(return_value=None)),
-            patch("src.api.routes.identity._get_matrix_display_name", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.dm_rooms._get_room_name", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.dm_rooms._get_matrix_display_name", new=AsyncMock(return_value=None)),
         ):
             response = client.post("/api/v1/dm-rooms/reconcile-names", json={"dry_run": True})
 
