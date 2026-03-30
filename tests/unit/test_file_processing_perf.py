@@ -215,6 +215,12 @@ class TestFireAndForgetNotify:
         than it would if notifications were awaited inline.
         """
         notify_delay = 0.5  # 500ms per notification
+        notify_tasks = []
+
+        def capture_notify_task(coro):
+            task = asyncio.create_task(coro)
+            notify_tasks.append(task)
+            return task
 
         async def slow_notify(room_id, message):
             await asyncio.sleep(notify_delay)
@@ -228,6 +234,7 @@ class TestFireAndForgetNotify:
         )
 
         with patch.object(file_handler, '_notify', side_effect=slow_notify), \
+             patch("src.matrix.file_handler.asyncio.ensure_future", side_effect=capture_notify_task), \
              patch.object(file_handler, '_download_matrix_file', new_callable=AsyncMock, return_value="/tmp/fake.pdf"), \
              patch("src.matrix.file_handler.parse_document", new_callable=AsyncMock, return_value=mock_parse_result), \
              patch.object(file_handler, '_ingest_to_haystack', new_callable=AsyncMock, return_value=True), \
@@ -251,12 +258,19 @@ class TestFireAndForgetNotify:
                 f"If notifications block, this would take >= {notify_delay * 2:.1f}s."
             )
 
-            # Let background tasks drain so they don't leak into other tests
-            await asyncio.sleep(0.05)
+            if notify_tasks:
+                await asyncio.gather(*notify_tasks, return_exceptions=True)
 
     @pytest.mark.asyncio
     async def test_notify_failure_does_not_break_pipeline(self, file_handler, metadata):
         """If a fire-and-forget notification fails, document processing should still succeed."""
+        notify_tasks = []
+
+        def capture_notify_task(coro):
+            task = asyncio.create_task(coro)
+            notify_tasks.append(task)
+            return task
+
         async def failing_notify(room_id, message):
             raise ConnectionError("Matrix server unavailable")
 
@@ -267,6 +281,7 @@ class TestFireAndForgetNotify:
         )
 
         with patch.object(file_handler, '_notify', side_effect=failing_notify), \
+             patch("src.matrix.file_handler.asyncio.ensure_future", side_effect=capture_notify_task), \
              patch.object(file_handler, '_download_matrix_file', new_callable=AsyncMock, return_value="/tmp/fake.pdf"), \
              patch("src.matrix.file_handler.parse_document", new_callable=AsyncMock, return_value=mock_parse_result), \
              patch.object(file_handler, '_ingest_to_haystack', new_callable=AsyncMock, return_value=True), \
@@ -281,3 +296,50 @@ class TestFireAndForgetNotify:
             assert result is not None, (
                 "Document processing should succeed even when notifications fail"
             )
+
+            if notify_tasks:
+                await asyncio.gather(*notify_tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_warmup_embedder_success_is_non_fatal(self, file_handler):
+        ingest_response = MagicMock(status=200)
+        ingest_response.json = AsyncMock(return_value={"status": "ok", "chunks_stored": 1})
+
+        cleanup_response = MagicMock(status=200)
+        cleanup_response.text = AsyncMock(return_value="ok")
+
+        ingest_cm = MagicMock()
+        ingest_cm.__aenter__ = AsyncMock(return_value=ingest_response)
+        ingest_cm.__aexit__ = AsyncMock(return_value=None)
+
+        cleanup_cm = MagicMock()
+        cleanup_cm.__aenter__ = AsyncMock(return_value=cleanup_response)
+        cleanup_cm.__aexit__ = AsyncMock(return_value=None)
+
+        session = MagicMock()
+        session.post = MagicMock(side_effect=[ingest_cm, cleanup_cm])
+
+        with patch.object(file_handler, '_get_http_session', new_callable=AsyncMock, return_value=session):
+            ok = await file_handler.warm_up_ingest_embedder()
+
+        assert ok is True
+        assert file_handler._ingest_warmup_succeeded is True
+        assert session.post.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_warmup_embedder_failure_does_not_raise(self, file_handler):
+        failed_response = MagicMock(status=500)
+        failed_response.text = AsyncMock(return_value="failure")
+
+        failed_cm = MagicMock()
+        failed_cm.__aenter__ = AsyncMock(return_value=failed_response)
+        failed_cm.__aexit__ = AsyncMock(return_value=None)
+
+        session = MagicMock()
+        session.post = MagicMock(return_value=failed_cm)
+
+        with patch.object(file_handler, '_get_http_session', new_callable=AsyncMock, return_value=session):
+            ok = await file_handler.warm_up_ingest_embedder()
+
+        assert ok is False
+        assert file_handler._ingest_warmup_succeeded is False

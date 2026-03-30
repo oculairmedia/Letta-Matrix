@@ -19,6 +19,7 @@ import functools
 import logging
 import os
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -43,6 +44,7 @@ from src.matrix.formatter import wrap_opencode_routing
 from src.matrix.letta_source_manager import LettaSourceManager  # pyright: ignore[reportMissingImports]
 from src.matrix.config import LettaApiError
 from src.core.retry import retry_async
+from src.core.document_outline_index import build_outline_record, upsert_outline_record
 
 # Import Letta SDK
 from letta_client import Letta
@@ -108,6 +110,9 @@ class LettaFileHandler:
         self.retry_delay = retry_delay
         self._pending_cleanup_event_ids: list = []  # Status message event_ids to edit/delete after agent responds
         self._status_summary: Optional[str] = None  # Final compact summary to replace status messages
+        self._ingest_warmup_attempted = False
+        self._ingest_warmup_succeeded = False
+        self._first_ingest_logged = False
 
         # Temporal async file processing
         self._temporal_client = None  # Lazy-initialized
@@ -573,6 +578,21 @@ class LettaFileHandler:
             page_info = f" ({result.page_count} pages)" if result.page_count else ""
             ocr_info = " (OCR)" if result.was_ocr else ""
             char_count = len(result.text)
+
+            outline_record = build_outline_record(
+                document_id=f"{room_id}:{metadata.event_id}",
+                filename=metadata.file_name,
+                room_id=room_id,
+                sender=metadata.sender or "",
+                event_id=metadata.event_id,
+                text=result.text,
+                page_count=result.page_count,
+                was_ocr=result.was_ocr,
+            )
+            try:
+                upsert_outline_record(outline_record)
+            except (RuntimeError, ValueError, TypeError, OSError) as outline_error:
+                logger.warning(f"Failed to persist document outline for {metadata.file_name}: {outline_error}")
             
             # Ingest into shared Haystack document store via Hayhooks
             ingest_success = await self._ingest_to_haystack(
@@ -749,6 +769,11 @@ class LettaFileHandler:
         Returns:
             True on successful ingestion, False on failure
         """
+        if not self._ingest_warmup_attempted:
+            await self.warm_up_ingest_embedder()
+
+        ingest_started_at = time.monotonic()
+
         hayhooks_url = os.getenv(
             "HAYHOOKS_INGEST_URL",
             "http://192.168.50.90:1416/ingest_document/run"
@@ -861,8 +886,11 @@ class LettaFileHandler:
 
             logger.info(
                 f"Document '{filename}' ingested successfully: "
-                f"{total_chunks} chunks stored in Weaviate"
+                f"{total_chunks} chunks stored in Weaviate "
+                f"(ingest_ms={(time.monotonic() - ingest_started_at) * 1000:.1f}, "
+                f"first_ingest={not self._first_ingest_logged}, warmup={self._ingest_warmup_succeeded})"
             )
+            self._first_ingest_logged = True
             return True
                         
         except asyncio.TimeoutError:
@@ -873,6 +901,99 @@ class LettaFileHandler:
             return False
         except (ValueError, KeyError, TypeError, RuntimeError) as e:
             logger.error(f"Unexpected error ingesting {filename} to Haystack: {e}", exc_info=True)
+            return False
+
+    async def warm_up_ingest_embedder(self) -> bool:
+        if self._ingest_warmup_attempted:
+            return self._ingest_warmup_succeeded
+
+        self._ingest_warmup_attempted = True
+
+        enabled = os.getenv("HAYHOOKS_EMBEDDER_WARMUP_ENABLED", "true").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+        if not enabled:
+            logger.info("[HAYHOOKS-WARMUP] Warm-up disabled")
+            return False
+
+        hayhooks_url = os.getenv(
+            "HAYHOOKS_INGEST_URL",
+            "http://192.168.50.90:1416/ingest_document/run",
+        )
+        delete_by_filename_url = os.getenv(
+            "HAYHOOKS_DELETE_BY_FILENAME_URL",
+            hayhooks_url.replace("/ingest_document/run", "/delete_by_filename/run"),
+        )
+        warmup_filename = os.getenv(
+            "HAYHOOKS_EMBEDDER_WARMUP_FILENAME",
+            f"__embedder_warmup__{uuid.uuid4().hex}.txt",
+        )
+        warmup_text = os.getenv("HAYHOOKS_EMBEDDER_WARMUP_TEXT", "warmup")
+        warmup_room_id = os.getenv("HAYHOOKS_EMBEDDER_WARMUP_ROOM_ID", "!warmup:matrix.local")
+        warmup_sender = os.getenv("HAYHOOKS_EMBEDDER_WARMUP_SENDER", "@warmup:matrix.local")
+
+        started_at = time.monotonic()
+        try:
+            session = await self._get_http_session()
+            payload = {
+                "text": warmup_text,
+                "filename": warmup_filename,
+                "room_id": warmup_room_id,
+                "sender": warmup_sender,
+            }
+
+            async with session.post(
+                hayhooks_url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.warning(
+                        f"[HAYHOOKS-WARMUP] Warm-up ingest failed: HTTP {response.status} - {error_text[:300]}"
+                    )
+                    return False
+
+                result = await response.json()
+                result_data = result
+                if isinstance(result.get("result"), str):
+                    import json
+
+                    result_data = json.loads(result["result"])
+
+                if result_data.get("status") != "ok":
+                    logger.warning(
+                        f"[HAYHOOKS-WARMUP] Warm-up ingest returned non-ok status: {result_data}"
+                    )
+                    return False
+
+            self._ingest_warmup_succeeded = True
+            logger.info(
+                f"[HAYHOOKS-WARMUP] Warm-up completed in {(time.monotonic() - started_at) * 1000:.1f}ms"
+            )
+
+            cleanup_enabled = os.getenv("HAYHOOKS_EMBEDDER_WARMUP_CLEANUP", "true").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+            if cleanup_enabled:
+                async with session.post(
+                    delete_by_filename_url,
+                    json={"source_filename": warmup_filename, "room_id": warmup_room_id},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as delete_response:
+                    if delete_response.status != 200:
+                        delete_error = await delete_response.text()
+                        logger.warning(
+                            f"[HAYHOOKS-WARMUP] Cleanup failed: HTTP {delete_response.status} - {delete_error[:300]}"
+                        )
+
+            return True
+        except (asyncio.TimeoutError, aiohttp.ClientError, ValueError, KeyError, TypeError, RuntimeError) as e:
+            logger.warning(f"[HAYHOOKS-WARMUP] Warm-up failed (non-fatal): {e}")
             return False
 
     async def ensure_search_tool_attached(self, agent_id: str) -> None:
