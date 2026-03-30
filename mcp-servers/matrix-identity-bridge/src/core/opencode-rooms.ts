@@ -9,6 +9,17 @@ import path from 'path';
 import type { ToolContext } from './tool-context.js';
 import type { MatrixIdentity } from '../types/index.js';
 
+export interface ActiveOpenCodeInstanceRoutingTarget {
+  directory: string;
+  identity: MatrixIdentity;
+  rooms: string[];
+}
+
+interface TalkToOpenCodeRoomDeps {
+  getOrCreateRoom: typeof getOrCreateOpenCodeRoom;
+  updateRegistration: typeof updateBridgeRegistration;
+}
+
 export interface OpenCodeRoomMapping {
   directory: string;
   room_id: string;
@@ -186,6 +197,38 @@ export const getOpenCodeRoom = async (directory: string): Promise<string | undef
   const roomKey = deriveRoomKey(directory);
   const mappings = await loadOpenCodeRoomMappings();
   return mappings[roomKey]?.room_id;
+};
+
+export const resolveTalkToOpenCodeRoomId = async (
+  explicitRoomId: string | undefined,
+  instance: ActiveOpenCodeInstanceRoutingTarget,
+  senderIdentity: MatrixIdentity,
+  ctx: ToolContext,
+  deps?: TalkToOpenCodeRoomDeps,
+): Promise<string> => {
+  const helpers: TalkToOpenCodeRoomDeps = deps ?? {
+    getOrCreateRoom: getOrCreateOpenCodeRoom,
+    updateRegistration: updateBridgeRegistration,
+  };
+
+  if (explicitRoomId) {
+    await helpers.updateRegistration(instance.directory, explicitRoomId);
+    return explicitRoomId;
+  }
+
+  const existingRoomId = instance.rooms.length > 0 ? instance.rooms[0] : undefined;
+  if (existingRoomId) {
+    return existingRoomId;
+  }
+
+  const createdRoomId = await helpers.getOrCreateRoom(
+    instance.directory,
+    instance.identity,
+    senderIdentity,
+    ctx,
+  );
+  await helpers.updateRegistration(instance.directory, createdRoomId);
+  return createdRoomId;
 };
 
 /**

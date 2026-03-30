@@ -14,7 +14,7 @@ import { IdentityManager } from '../core/identity-manager.js';
 import { getCallerContext, resolveCallerIdentity, resolveCallerIdentityId } from '../core/caller-context.js';
 import type { CallerContext } from '../core/caller-context.js';
 import { getOrCreateAgentRoom } from '../core/agent-rooms.js';
-import { getOrCreateOpenCodeRoom, updateBridgeRegistration } from '../core/opencode-rooms.js';
+import { getOrCreateOpenCodeRoom, resolveTalkToOpenCodeRoomId, updateBridgeRegistration } from '../core/opencode-rooms.js';
 import { autoRegisterWithBridge } from '../core/opencode-bridge.js';
 import { getAdminToken, getAdminConfig } from '../core/admin-auth.js';
 import type { MatrixEvent, MatrixIdentity } from '../types/index.js';
@@ -1292,17 +1292,12 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           });
         }
         
-        let targetRoomId = instance.rooms.length > 0 ? instance.rooms[0] : undefined;
-        
-        if (!targetRoomId) {
-          targetRoomId = await getOrCreateOpenCodeRoom(
-            instance.directory,
-            instance.identity,
-            senderIdentity,
-            ctx
-          );
-          await updateBridgeRegistration(instance.directory, targetRoomId);
-        }
+        const targetRoomId = await resolveTalkToOpenCodeRoomId(
+          input.room_id,
+          instance,
+          senderIdentity,
+          ctx,
+        );
         
         // Get client and join room (parallel: client pool + join are independent until send)
         const senderClient = await ctx.clientPool.getClient(senderIdentity);
