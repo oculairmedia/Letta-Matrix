@@ -170,6 +170,7 @@ async def send_to_letta_api_streaming(
             config,
             logger,
             msgtype=msgtype,
+            reply_to_event_id=reply_to_event_id,
             thread_event_id=thread_event_id,
             thread_latest_event_id=thread_latest_event_id,
         )
