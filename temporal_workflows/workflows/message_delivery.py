@@ -50,6 +50,10 @@ class MessageDeliveryInput:
     max_retries: int = 5
     # Source metadata for Letta
     source_channel: str = "matrix"
+    # Reply / thread context for Matrix responses
+    reply_to_event_id: Optional[str] = None
+    thread_root_event_id: Optional[str] = None
+    thread_latest_event_id: Optional[str] = None
 
 
 @dataclass

@@ -77,6 +77,9 @@ async def _dispatch_via_temporal(
     event_id: str,
     conversation_id: str = "",
     is_streaming: bool = False,
+    reply_to_event_id: Optional[str] = None,
+    thread_root_event_id: Optional[str] = None,
+    thread_latest_event_id: Optional[str] = None,
     config: Config,
     logger: logging.Logger,
 ) -> bool:
@@ -108,6 +111,9 @@ async def _dispatch_via_temporal(
                 conversation_id=conversation_id,
                 is_streaming=is_streaming,
                 source_channel="matrix",
+                reply_to_event_id=reply_to_event_id,
+                thread_root_event_id=thread_root_event_id,
+                thread_latest_event_id=thread_latest_event_id,
             ),
             id=workflow_id,
             task_queue=os.getenv("TEMPORAL_TASK_QUEUE", "matrix-file-queue"),
@@ -341,6 +347,9 @@ async def process_letta_message(ctx: MessageContext) -> None:
                 event_id=original_event_id or "",
                 conversation_id="",
                 is_streaming=config.letta_streaming_enabled,
+                reply_to_event_id=original_event_id,
+                thread_root_event_id=thread_root_event_id_for_routing,
+                thread_latest_event_id=thread_latest_event_id_for_routing,
                 config=config,
                 logger=logger,
             )
@@ -446,6 +455,18 @@ async def process_letta_message(ctx: MessageContext) -> None:
                             "msgtype": "m.notice",
                             "body": letta_response,
                         }
+                        if thread_root_event_id_for_routing:
+                            fallback_eid = thread_latest_event_id_for_routing or thread_root_event_id_for_routing
+                            message_content["m.relates_to"] = {
+                                "rel_type": "m.thread",
+                                "event_id": thread_root_event_id_for_routing,
+                                "is_falling_back": True,
+                                "m.in_reply_to": {"event_id": fallback_eid},
+                            }
+                        elif original_event_id:
+                            message_content["m.relates_to"] = {
+                                "m.in_reply_to": {"event_id": original_event_id},
+                            }
                         await client.room_send(
                             room_id, "m.room.message", message_content
                         )
