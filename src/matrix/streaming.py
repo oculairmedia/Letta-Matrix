@@ -441,13 +441,17 @@ class StreamingMessageHandler:
         room_id: str,
         delete_progress: bool = False,
         send_final_message: Optional[Callable[..., Any]] = None,
+        thread_root_event_id: Optional[str] = None,
     ):
         self.send_message = send_message
         self.delete_message = delete_message
         self.room_id = room_id
         self.delete_progress = delete_progress
         self.send_final_message = send_final_message or send_message
+        self.thread_root_event_id = thread_root_event_id
         self._progress_event_id: Optional[str] = None
+        self._latest_thread_event_id: Optional[str] = None
+        self._tool_call_count = 0
 
         self._pending_final_content: Optional[str] = None
         self._self_delivered_to_current_room: bool = False
@@ -477,13 +481,45 @@ class StreamingMessageHandler:
             return not target_room
         return False
 
-    async def _send_with_msgtype(self, text: str, msgtype: str) -> str:
+    async def _send_with_msgtype(self, text: str, msgtype: str, *, threaded: bool = False) -> str:
+        thread_kwargs: Dict[str, Any] = {}
+        if threaded and self.thread_root_event_id:
+            thread_kwargs = {
+                "thread_event_id": self.thread_root_event_id,
+                "thread_latest_event_id": self._latest_thread_event_id,
+            }
         if msgtype == "m.text":
-            return await self.send_message(self.room_id, text)
+            try:
+                event_id = await self.send_message(self.room_id, text, **thread_kwargs)
+            except TypeError:
+                event_id = await self.send_message(self.room_id, text)
+            if thread_kwargs and event_id:
+                self._latest_thread_event_id = event_id
+            return event_id
         try:
-            return await self.send_message(self.room_id, text, msgtype=msgtype)
+            event_id = await self.send_message(self.room_id, text, msgtype=msgtype, **thread_kwargs)
         except TypeError:
-            return await self.send_message(self.room_id, text)
+            event_id = await self.send_message(self.room_id, text)
+        if thread_kwargs and event_id:
+            self._latest_thread_event_id = event_id
+        return event_id
+
+    async def _send_final(self, content: str) -> str:
+        threaded = bool(self.thread_root_event_id)
+        if threaded:
+            try:
+                event_id = await self.send_final_message(
+                    self.room_id,
+                    content,
+                    thread_event_id=self.thread_root_event_id,
+                    thread_latest_event_id=self._latest_thread_event_id,
+                )
+            except TypeError:
+                event_id = await self.send_final_message(self.room_id, content)
+            if event_id:
+                self._latest_thread_event_id = event_id
+            return event_id
+        return await self.send_final_message(self.room_id, content)
 
     async def handle_event(self, event: StreamEvent) -> Optional[str]:
         if self.delete_progress and self._progress_event_id and (event.is_progress or event.is_final or event.is_error):
@@ -508,6 +544,7 @@ class StreamingMessageHandler:
 
         if event.is_progress:
             if event.type == StreamEventType.TOOL_CALL:
+                self._tool_call_count += 1
                 if self._is_self_delivery_to_current_room(event):
                     logger.info(
                         f"[Streaming] Detected self-delivery tool call "
@@ -525,7 +562,7 @@ class StreamingMessageHandler:
                         self._progress_event_id,
                         progress_delete_error,
                     )
-            eid = await self._send_with_msgtype(progress_text, "m.notice")
+            eid = await self._send_with_msgtype(progress_text, "m.notice", threaded=True)
             self._progress_event_id = eid
             return eid
 
@@ -581,13 +618,13 @@ class StreamingMessageHandler:
         if self._pending_final_content is not None:
             content = self._pending_final_content
             self._pending_final_content = None
-            return await self.send_final_message(self.room_id, content)
+            return await self._send_final(content)
 
         return None
 
     async def cleanup(self):
         if self._pending_final_content is not None and not self._self_delivered_to_current_room:
-            await self.send_final_message(self.room_id, self._pending_final_content)
+            await self._send_final(self._pending_final_content)
             self._pending_final_content = None
             return
         if self.delete_progress and self._progress_event_id:
@@ -598,8 +635,7 @@ class StreamingMessageHandler:
             self._progress_event_id = None
 
     async def show_progress(self, line: str) -> Optional[str]:
-        """No-op for non-live-edit handler."""
-        return None
+        return await self._send_with_msgtype(line, "m.notice", threaded=True)
 
     async def update_last_progress(self, line: str) -> None:
         """No-op for non-live-edit handler."""
@@ -629,16 +665,20 @@ class LiveEditStreamingHandler:
         room_id: str,
         send_final_message: Optional[Callable[..., Any]] = None,
         delete_message: Optional[Callable[[str, str], Any]] = None,
+        thread_root_event_id: Optional[str] = None,
     ):
         self.send_message = send_message
         self.edit_message = edit_message
         self.delete_message = delete_message
         self.room_id = room_id
         self.send_final_message = send_final_message or send_message
+        self.thread_root_event_id = thread_root_event_id
 
         self._event_id: Optional[str] = None
+        self._latest_thread_event_id: Optional[str] = None
         self._lines: List[str] = []
         self._last_edit_time: float = 0
+        self._tool_call_count = 0
 
         self._pending_final_content: Optional[str] = None
         self._self_delivered_to_current_room: bool = False
@@ -668,13 +708,28 @@ class LiveEditStreamingHandler:
             return not target_room
         return False
 
-    async def _send_with_msgtype(self, text: str, msgtype: str) -> str:
+    async def _send_with_msgtype(self, text: str, msgtype: str, *, threaded: bool = False) -> str:
+        thread_kwargs: Dict[str, Any] = {}
+        if threaded and self.thread_root_event_id:
+            thread_kwargs = {
+                "thread_event_id": self.thread_root_event_id,
+                "thread_latest_event_id": self._latest_thread_event_id,
+            }
         if msgtype == "m.text":
-            return await self.send_message(self.room_id, text)
+            try:
+                event_id = await self.send_message(self.room_id, text, **thread_kwargs)
+            except TypeError:
+                event_id = await self.send_message(self.room_id, text)
+            if thread_kwargs and event_id:
+                self._latest_thread_event_id = event_id
+            return event_id
         try:
-            return await self.send_message(self.room_id, text, msgtype=msgtype)
+            event_id = await self.send_message(self.room_id, text, msgtype=msgtype, **thread_kwargs)
         except TypeError:
-            return await self.send_message(self.room_id, text)
+            event_id = await self.send_message(self.room_id, text)
+        if thread_kwargs and event_id:
+            self._latest_thread_event_id = event_id
+        return event_id
 
     async def _edit_with_msgtype(self, event_id: str, text: str, msgtype: str) -> None:
         if msgtype == "m.text":
@@ -733,6 +788,7 @@ class LiveEditStreamingHandler:
 
         if event.is_progress:
             if event.type == StreamEventType.TOOL_CALL:
+                self._tool_call_count += 1
                 if self._is_self_delivery_to_current_room(event):
                     logger.info(
                         f"[LiveEdit] Detected self-delivery tool call "
@@ -745,7 +801,7 @@ class LiveEditStreamingHandler:
 
             if self._event_id is None:
                 body = self._build_body()
-                eid = await self._send_with_msgtype(body, "m.notice")
+                eid = await self._send_with_msgtype(body, "m.notice", threaded=True)
                 self._event_id = eid
                 self._last_edit_time = time.monotonic()
                 return eid
@@ -782,6 +838,18 @@ class LiveEditStreamingHandler:
             return eid
 
         # No progress message existed — send fresh
+        if self.thread_root_event_id:
+            try:
+                eid = await self.send_final_message(
+                    self.room_id,
+                    content,
+                    thread_event_id=self.thread_root_event_id,
+                    thread_latest_event_id=self._latest_thread_event_id,
+                )
+            except TypeError:
+                eid = await self.send_final_message(self.room_id, content)
+            self._latest_thread_event_id = eid
+            return eid
         eid = await self.send_final_message(self.room_id, content)
         return eid
 
@@ -808,7 +876,7 @@ class LiveEditStreamingHandler:
         self._lines.append(line)
         if self._event_id is None:
             body = self._build_body()
-            eid = await self._send_with_msgtype(body, "m.notice")
+            eid = await self._send_with_msgtype(body, "m.notice", threaded=True)
             self._event_id = eid
             self._last_edit_time = time.monotonic()
             return eid

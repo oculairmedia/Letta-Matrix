@@ -981,6 +981,81 @@ class TestDeferredFinalization:
         )
 
 
+class TestThreadedStreamingBehavior:
+    @pytest.mark.asyncio
+    async def test_progress_messages_include_thread_context(self):
+        send_mock = AsyncMock(side_effect=["$evt_1", "$evt_2"])
+        delete_mock = AsyncMock()
+        handler = StreamingMessageHandler(
+            send_message=send_mock,
+            delete_message=delete_mock,
+            room_id="!test:matrix.example.com",
+            thread_root_event_id="$root",
+        )
+
+        await handler.handle_event(
+            StreamEvent(type=StreamEventType.TOOL_CALL, metadata={"tool_name": "search"})
+        )
+        await handler.handle_event(
+            StreamEvent(type=StreamEventType.TOOL_RETURN, metadata={"tool_name": "search", "status": "success"})
+        )
+
+        first_kwargs = send_mock.await_args_list[0].kwargs
+        second_kwargs = send_mock.await_args_list[1].kwargs
+        assert first_kwargs["thread_event_id"] == "$root"
+        assert first_kwargs["thread_latest_event_id"] is None
+        assert second_kwargs["thread_event_id"] == "$root"
+        assert second_kwargs["thread_latest_event_id"] == "$evt_1"
+
+    @pytest.mark.asyncio
+    async def test_final_message_is_threaded_after_tool_calls(self):
+        send_mock = AsyncMock(return_value="$evt_progress")
+        final_mock = AsyncMock(return_value="$evt_final")
+        delete_mock = AsyncMock()
+
+        handler = StreamingMessageHandler(
+            send_message=send_mock,
+            delete_message=delete_mock,
+            room_id="!test:matrix.example.com",
+            send_final_message=final_mock,
+            thread_root_event_id="$root",
+        )
+
+        await handler.handle_event(
+            StreamEvent(type=StreamEventType.TOOL_CALL, metadata={"tool_name": "search"})
+        )
+        await handler.handle_event(StreamEvent(type=StreamEventType.ASSISTANT, content="Final"))
+        await handler.handle_event(StreamEvent(type=StreamEventType.STOP, content="end_turn"))
+
+        final_await_args = final_mock.await_args
+        assert final_await_args is not None
+        final_kwargs = final_await_args.kwargs
+        assert final_kwargs["thread_event_id"] == "$root"
+        assert final_kwargs["thread_latest_event_id"] == "$evt_progress"
+
+    @pytest.mark.asyncio
+    async def test_simple_final_message_threads_when_thread_root_exists(self):
+        send_mock = AsyncMock(return_value="$evt_progress")
+        final_mock = AsyncMock(return_value="$evt_final")
+        delete_mock = AsyncMock()
+
+        handler = StreamingMessageHandler(
+            send_message=send_mock,
+            delete_message=delete_mock,
+            room_id="!test:matrix.example.com",
+            send_final_message=final_mock,
+            thread_root_event_id="$root",
+        )
+
+        await handler.handle_event(StreamEvent(type=StreamEventType.ASSISTANT, content="Direct answer"))
+        await handler.handle_event(StreamEvent(type=StreamEventType.STOP, content="end_turn"))
+
+        final_await_args = final_mock.await_args
+        assert final_await_args is not None
+        assert final_await_args.kwargs["thread_event_id"] == "$root"
+        assert final_await_args.kwargs["thread_latest_event_id"] is None
+
+
 class TestSelfDeliveryDetection:
     """Tests for self-delivery detection and suppression"""
     
