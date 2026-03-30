@@ -142,8 +142,13 @@ async def _resolve_conversation_id(
     sender_id: str,
     room_member_count: int,
     logger: logging.Logger,
+    thread_root_event_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Resolve or create a conversation_id for context isolation."""
+    """Resolve or create a conversation_id for context isolation.
+
+    When *thread_root_event_id* is provided the conversation is scoped to that
+    Matrix thread, isolating it from the main-timeline conversation.
+    """
     if not config.letta_conversations_enabled:
         return None
     try:
@@ -164,9 +169,11 @@ async def _resolve_conversation_id(
             agent_id=agent_id,
             room_member_count=room_member_count,
             user_mxid=sender_id if room_member_count == 2 else None,
+            thread_event_id=thread_root_event_id,
         )
+        thread_tag = f" (thread={thread_root_event_id[:20]})" if thread_root_event_id else ""
         logger.info(
-            f"[CONVERSATIONS] Using conversation {conversation_id} (created={created})"
+            f"[CONVERSATIONS] Using conversation {conversation_id} (created={created}){thread_tag}"
         )
         return conversation_id
     except (ImportError, RuntimeError, ValueError, TypeError, aiohttp.ClientError, asyncio.TimeoutError) as e:

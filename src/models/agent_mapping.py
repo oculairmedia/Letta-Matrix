@@ -186,6 +186,26 @@ def init_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE portal_agent_links ADD COLUMN triage_agent_id TEXT DEFAULT NULL"))
 
+    # Migration: add thread_event_id to room_conversations for thread isolation
+    if 'room_conversations' in inspector.get_table_names():
+        rc_cols = {col['name'] for col in inspector.get_columns('room_conversations')}
+        if 'thread_event_id' not in rc_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE room_conversations ADD COLUMN thread_event_id VARCHAR(255) DEFAULT NULL"))
+                # SQLite cannot DROP constraints, so we skip constraint migration on SQLite.
+                # The new unique constraint will be enforced by the ORM; for PostgreSQL we
+                # swap the constraint explicitly.
+                if engine.dialect.name != 'sqlite':
+                    try:
+                        conn.execute(text("ALTER TABLE room_conversations DROP CONSTRAINT IF EXISTS uq_room_agent_user"))
+                        conn.execute(text(
+                            "ALTER TABLE room_conversations ADD CONSTRAINT uq_room_agent_user_thread "
+                            "UNIQUE (room_id, agent_id, user_mxid, thread_event_id)"
+                        ))
+                    except Exception:
+                        pass  # Constraint may already be updated
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_room_conv_thread ON room_conversations (thread_event_id)"))
+
 
 # Database operations helper class
 class AgentMappingDB:

@@ -94,6 +94,93 @@ class ConversationService:
         logger.info(f"Created Letta conversation {conversation.id} for agent {agent_id}")
         return conversation.id
 
+    # ── Thread Context Seeding ─────────────────────────────────────────
+
+    # Maximum number of recent messages to fetch from the main-timeline
+    # conversation when seeding a new thread conversation.
+    THREAD_SEED_MESSAGE_LIMIT = 15
+
+    def _seed_thread_conversation(
+        self,
+        thread_conversation_id: str,
+        main_conversation_id: str,
+        agent_id: str,
+    ) -> None:
+        """
+        Seed a newly created thread conversation with context from the
+        main-timeline conversation.
+
+        Fetches the last N messages from the main conversation and injects
+        a condensed summary into the thread conversation so the agent has
+        context about what was being discussed.
+        """
+        try:
+            # Fetch recent messages from main conversation
+            messages = self.letta.agents.messages.list(
+                agent_id=agent_id,
+                conversation_id=main_conversation_id,
+                limit=self.THREAD_SEED_MESSAGE_LIMIT,
+            )
+
+            if not messages:
+                logger.debug(
+                    f"[THREAD-SEED] No messages in main conversation {main_conversation_id}, "
+                    "skipping seed"
+                )
+                return
+
+            # Build a condensed context summary from recent messages
+            context_lines = []
+            for msg in messages:
+                role = getattr(msg, "role", None) or getattr(msg, "message_type", "unknown")
+                text = getattr(msg, "text", None) or getattr(msg, "content", None)
+                if not text or not isinstance(text, str):
+                    continue
+                # Skip tool calls/results and internal messages
+                if role in ("tool", "tool_call", "tool_result", "system"):
+                    continue
+                # Truncate long messages
+                preview = text[:300] + "..." if len(text) > 300 else text
+                label = "User" if role in ("user", "human") else "Agent"
+                context_lines.append(f"[{label}]: {preview}")
+
+            if not context_lines:
+                logger.debug(
+                    f"[THREAD-SEED] No displayable messages in main conversation, skipping seed"
+                )
+                return
+
+            # Limit to most recent messages
+            context_lines = context_lines[-10:]
+
+            seed_text = (
+                "[Thread Context] This conversation is a thread branching off from "
+                "the main timeline. Here's a summary of recent main-timeline messages "
+                "for context:\n\n"
+                + "\n".join(context_lines)
+                + "\n\n---\nThe user has now started a thread. Respond within "
+                "this thread's context. Your core memory is shared with the main "
+                "timeline, so any important insights you learn here will be available "
+                "there too."
+            )
+
+            # Send the seed as a user message to establish context
+            self.letta.conversations.messages.create(
+                conversation_id=thread_conversation_id,
+                input=seed_text,
+            )
+            logger.info(
+                f"[THREAD-SEED] Seeded thread conversation {thread_conversation_id} "
+                f"with {len(context_lines)} messages from {main_conversation_id}"
+            )
+
+        except (APIError, NotFoundError, RuntimeError, TypeError, ValueError) as e:
+            # Seeding is best-effort — don't fail the conversation creation
+            logger.warning(
+                f"[THREAD-SEED] Failed to seed thread conversation "
+                f"{thread_conversation_id}: {e}"
+            )
+
     def _verify_letta_conversation(self, conversation_id: str) -> bool:
         """
         Verify a conversation still exists in Letta.
@@ -120,6 +207,7 @@ class ConversationService:
         room_member_count: int = 3,
         user_mxid: Optional[str] = None,
         room_name: Optional[str] = None,
+        thread_event_id: Optional[str] = None,
     ) -> Tuple[str, bool]:
         """
         Get or create a conversation for a room+agent pair.
@@ -130,6 +218,8 @@ class ConversationService:
         - Letta conversation creation if needed
         - Race condition handling via unique constraint
         - Stale conversation recovery (DB record exists but Letta deleted)
+        - Thread isolation: when thread_event_id is set, a separate conversation
+          is created for that Matrix thread
         
         Args:
             room_id: Matrix room ID
@@ -137,11 +227,14 @@ class ConversationService:
             room_member_count: Number of members in room (for strategy detection)
             user_mxid: User MXID (required for per-user strategy)
             room_name: Optional room name for conversation summary
+            thread_event_id: Matrix thread root event ID for thread isolation
             
         Returns:
             Tuple of (conversation_id, created: bool)
         """
         strategy = await self.get_conversation_strategy(room_id, room_member_count)
+        if thread_event_id:
+            strategy = "per-thread"
         
         lookup_user = user_mxid if strategy == "per-user" else None
         
@@ -149,22 +242,26 @@ class ConversationService:
             room_id=room_id,
             agent_id=agent_id,
             user_mxid=lookup_user,
+            thread_event_id=thread_event_id,
         )
         
         if existing:
             if self._verify_letta_conversation(existing.conversation_id):
-                self.room_conv_db.update_last_message(room_id, agent_id, lookup_user)
+                self.room_conv_db.update_last_message(room_id, agent_id, lookup_user, thread_event_id)
                 return existing.conversation_id, False
             else:
                 logger.warning(
                     f"Stale conversation {existing.conversation_id} for room {room_id}, "
                     f"agent {agent_id} - recreating"
                 )
-                self.room_conv_db.delete(room_id, agent_id, lookup_user)
+                self.room_conv_db.delete(room_id, agent_id, lookup_user, thread_event_id)
         
         summary = f"Matrix room: {room_name or room_id}"
         if strategy == "per-user" and user_mxid:
             summary = f"{summary} (user: {user_mxid})"
+        elif strategy == "per-thread" and thread_event_id:
+            short_id = thread_event_id[:20] if len(thread_event_id) > 20 else thread_event_id
+            summary = f"{summary} (thread: {short_id})"
         
         try:
             conversation_id = self._create_letta_conversation(agent_id, summary)
@@ -179,7 +276,24 @@ class ConversationService:
                 conversation_id=conversation_id,
                 strategy=strategy,
                 user_mxid=lookup_user,
+                thread_event_id=thread_event_id,
             )
+
+            # Seed new thread conversations with main-timeline context
+            if thread_event_id:
+                main_conv = self.room_conv_db.get_by_room_and_agent(
+                    room_id=room_id,
+                    agent_id=agent_id,
+                    user_mxid=lookup_user,
+                    thread_event_id=None,  # main timeline
+                )
+                if main_conv:
+                    self._seed_thread_conversation(
+                        thread_conversation_id=conversation_id,
+                        main_conversation_id=main_conv.conversation_id,
+                        agent_id=agent_id,
+                    )
+
             return conversation_id, True
             
         except IntegrityError:
@@ -191,6 +305,7 @@ class ConversationService:
                 room_id=room_id,
                 agent_id=agent_id,
                 user_mxid=lookup_user,
+                thread_event_id=thread_event_id,
             )
             if existing:
                 return existing.conversation_id, False

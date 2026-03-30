@@ -171,17 +171,21 @@ class TestRoomConversation:
         assert result is False
 
     def test_unique_constraint_room_agent_with_user(self, room_conv_db):
-        """Test unique constraint with explicit user_mxid (SQLite treats NULL as distinct)."""
+        """Test unique constraint with explicit user_mxid and thread_event_id.
+
+        SQLite treats NULL as distinct in unique constraints, so we must
+        supply non-NULL thread_event_id values to trigger the constraint.
+        """
         room_conv_db.create(
             "!room1:matrix.test", "agent-001", "conv-001",
-            strategy="per-user", user_mxid="@user:test"
+            strategy="per-user", user_mxid="@user:test", thread_event_id="$thread-1"
         )
         
         from sqlalchemy.exc import IntegrityError
         with pytest.raises(IntegrityError):
             room_conv_db.create(
                 "!room1:matrix.test", "agent-001", "conv-002",
-                strategy="per-user", user_mxid="@user:test"
+                strategy="per-user", user_mxid="@user:test", thread_event_id="$thread-1"
             )
 
     def test_per_user_isolation(self, room_conv_db):
@@ -224,6 +228,130 @@ class TestRoomConversation:
         assert d["conversation_id"] == "conv-001"
         assert d["strategy"] == "per-room"
         assert "created_at" in d
+
+    # ── Thread Isolation Tests ────────────────────────────────────────
+
+    def test_thread_conversation_isolation(self, room_conv_db):
+        """Main-timeline and thread conversations should be separate."""
+        room_conv_db.create(
+            room_id="!room1:matrix.test",
+            agent_id="agent-001",
+            conversation_id="conv-main",
+            strategy="per-room",
+        )
+        room_conv_db.create(
+            room_id="!room1:matrix.test",
+            agent_id="agent-001",
+            conversation_id="conv-thread-1",
+            strategy="per-thread",
+            thread_event_id="$thread-root-1",
+        )
+
+        main = room_conv_db.get_by_room_and_agent(
+            "!room1:matrix.test", "agent-001", thread_event_id=None
+        )
+        thread = room_conv_db.get_by_room_and_agent(
+            "!room1:matrix.test", "agent-001", thread_event_id="$thread-root-1"
+        )
+
+        assert main is not None
+        assert thread is not None
+        assert main.conversation_id == "conv-main"
+        assert thread.conversation_id == "conv-thread-1"
+        assert main.conversation_id != thread.conversation_id
+
+    def test_multiple_threads_get_separate_conversations(self, room_conv_db):
+        """Each Matrix thread should map to its own conversation."""
+        room_conv_db.create(
+            "!room1:matrix.test", "agent-001", "conv-thread-A",
+            strategy="per-thread", thread_event_id="$thread-A",
+        )
+        room_conv_db.create(
+            "!room1:matrix.test", "agent-001", "conv-thread-B",
+            strategy="per-thread", thread_event_id="$thread-B",
+        )
+
+        a = room_conv_db.get_by_room_and_agent(
+            "!room1:matrix.test", "agent-001", thread_event_id="$thread-A"
+        )
+        b = room_conv_db.get_by_room_and_agent(
+            "!room1:matrix.test", "agent-001", thread_event_id="$thread-B"
+        )
+
+        assert a.conversation_id == "conv-thread-A"
+        assert b.conversation_id == "conv-thread-B"
+
+    def test_thread_to_dict_includes_thread_event_id(self, room_conv_db):
+        """to_dict should include thread_event_id."""
+        conv = room_conv_db.create(
+            room_id="!room1:matrix.test",
+            agent_id="agent-001",
+            conversation_id="conv-thread-1",
+            strategy="per-thread",
+            thread_event_id="$thread-root-1",
+        )
+
+        d = conv.to_dict()
+        assert d["thread_event_id"] == "$thread-root-1"
+        assert d["strategy"] == "per-thread"
+
+    def test_thread_repr_includes_thread_info(self, room_conv_db):
+        """__repr__ should include thread info when set."""
+        conv = room_conv_db.create(
+            room_id="!room1:matrix.test",
+            agent_id="agent-001",
+            conversation_id="conv-thread-1",
+            strategy="per-thread",
+            thread_event_id="$thread-root-1",
+        )
+
+        r = repr(conv)
+        assert "thread=$thread-root-1" in r
+
+    def test_update_last_message_with_thread(self, room_conv_db):
+        """update_last_message should find the correct thread conversation."""
+        room_conv_db.create(
+            "!room1:matrix.test", "agent-001", "conv-main", strategy="per-room",
+        )
+        room_conv_db.create(
+            "!room1:matrix.test", "agent-001", "conv-thread",
+            strategy="per-thread", thread_event_id="$thread-1",
+        )
+
+        import time
+        time.sleep(0.01)
+
+        updated = room_conv_db.update_last_message(
+            "!room1:matrix.test", "agent-001", thread_event_id="$thread-1"
+        )
+        assert updated is not None
+        assert updated.conversation_id == "conv-thread"
+
+    def test_delete_thread_conversation(self, room_conv_db):
+        """Deleting a thread conversation should not affect main."""
+        room_conv_db.create(
+            "!room1:matrix.test", "agent-001", "conv-main", strategy="per-room",
+        )
+        room_conv_db.create(
+            "!room1:matrix.test", "agent-001", "conv-thread",
+            strategy="per-thread", thread_event_id="$thread-1",
+        )
+
+        result = room_conv_db.delete(
+            "!room1:matrix.test", "agent-001", thread_event_id="$thread-1"
+        )
+        assert result is True
+
+        main = room_conv_db.get_by_room_and_agent(
+            "!room1:matrix.test", "agent-001", thread_event_id=None
+        )
+        assert main is not None
+        assert main.conversation_id == "conv-main"
+
+        thread = room_conv_db.get_by_room_and_agent(
+            "!room1:matrix.test", "agent-001", thread_event_id="$thread-1"
+        )
+        assert thread is None
 
 
 class TestInterAgentConversation:

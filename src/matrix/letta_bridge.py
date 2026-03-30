@@ -146,9 +146,10 @@ async def send_to_letta_api_streaming(
         f"[STREAMING] Sending message with streaming to agent {agent_name_found}"
     )
 
-    # Resolve conversation
+    # Resolve conversation (thread_root_event_id triggers per-thread isolation)
     conversation_id = await _resolve_conversation_id(
-        config, room_id, agent_id_to_use, sender_id, room_member_count, logger
+        config, room_id, agent_id_to_use, sender_id, room_member_count, logger,
+        thread_root_event_id=thread_root_event_id,
     )
     set_api_mode(1 if conversation_id else 0)
 

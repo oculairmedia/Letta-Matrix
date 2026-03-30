@@ -26,9 +26,16 @@ class RoomConversation(Base):
     This enables context isolation: messages in Room A don't appear
     in Room B's agent context.
     
-    Strategy field supports future per-user isolation in DMs:
+    Strategy field supports per-user isolation in DMs:
     - 'per-room': One conversation per room (default for group rooms)
     - 'per-user': One conversation per user in DMs
+    - 'per-thread': One conversation per Matrix thread (auto-set when
+      thread_event_id is provided)
+    
+    Thread isolation: when thread_event_id is set, the conversation is
+    scoped to that specific Matrix thread. Main-timeline messages have
+    thread_event_id=NULL. This allows side-conversations in threads to
+    stay isolated from the main timeline context.
     """
     __tablename__ = 'room_conversations'
 
@@ -41,13 +48,15 @@ class RoomConversation(Base):
     last_message_at = Column(DateTime, default=datetime.utcnow, nullable=True)
     
     user_mxid = Column(String(255), nullable=True)
+    thread_event_id = Column(String(255), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint('room_id', 'agent_id', 'user_mxid', name='uq_room_agent_user'),
+        UniqueConstraint('room_id', 'agent_id', 'user_mxid', 'thread_event_id', name='uq_room_agent_user_thread'),
         Index('idx_room_conv_room_id', 'room_id'),
         Index('idx_room_conv_agent_id', 'agent_id'),
         Index('idx_room_conv_last_msg', 'last_message_at'),
         Index('idx_room_conv_conversation_id', 'conversation_id'),
+        Index('idx_room_conv_thread', 'thread_event_id'),
     )
 
     def to_dict(self) -> dict:
@@ -59,14 +68,16 @@ class RoomConversation(Base):
             "conversation_id": self.conversation_id,
             "strategy": self.strategy,
             "user_mxid": self.user_mxid,
+            "thread_event_id": self.thread_event_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_message_at": self.last_message_at.isoformat() if self.last_message_at else None,
         }
 
     def __repr__(self):
+        thread_info = f", thread={self.thread_event_id}" if self.thread_event_id else ""
         return (
             f"<RoomConversation(room_id={self.room_id}, agent_id={self.agent_id}, "
-            f"conversation_id={self.conversation_id}, strategy={self.strategy})>"
+            f"conversation_id={self.conversation_id}, strategy={self.strategy}{thread_info})>"
         )
 
 
@@ -133,7 +144,8 @@ class RoomConversationDB:
         self,
         room_id: str,
         agent_id: str,
-        user_mxid: Optional[str] = None
+        user_mxid: Optional[str] = None,
+        thread_event_id: Optional[str] = None,
     ) -> Optional[RoomConversation]:
         """
         Get conversation for a room/agent pair.
@@ -142,6 +154,7 @@ class RoomConversationDB:
             room_id: Matrix room ID
             agent_id: Letta agent ID
             user_mxid: Optional user MXID for per-user strategy
+            thread_event_id: Optional Matrix thread root event ID for thread isolation
             
         Returns:
             RoomConversation or None if not found
@@ -152,7 +165,8 @@ class RoomConversationDB:
             conv = session.query(RoomConversation).filter_by(
                 room_id=room_id,
                 agent_id=agent_id,
-                user_mxid=user_mxid
+                user_mxid=user_mxid,
+                thread_event_id=thread_event_id,
             ).first()
             if conv:
                 session.expunge(conv)
@@ -208,7 +222,8 @@ class RoomConversationDB:
         agent_id: str,
         conversation_id: str,
         strategy: str = 'per-room',
-        user_mxid: Optional[str] = None
+        user_mxid: Optional[str] = None,
+        thread_event_id: Optional[str] = None,
     ) -> RoomConversation:
         """
         Create a new room conversation mapping.
@@ -217,8 +232,9 @@ class RoomConversationDB:
             room_id: Matrix room ID
             agent_id: Letta agent ID
             conversation_id: Letta conversation ID
-            strategy: 'per-room' or 'per-user'
+            strategy: 'per-room', 'per-user', or 'per-thread'
             user_mxid: User MXID (required for per-user strategy)
+            thread_event_id: Matrix thread root event ID (for thread isolation)
             
         Returns:
             Created RoomConversation
@@ -231,6 +247,7 @@ class RoomConversationDB:
                 conversation_id=conversation_id,
                 strategy=strategy,
                 user_mxid=user_mxid,
+                thread_event_id=thread_event_id,
                 last_message_at=datetime.utcnow()
             )
             session.add(conv)
@@ -247,7 +264,8 @@ class RoomConversationDB:
         agent_id: str,
         conversation_id: str,
         strategy: str = 'per-room',
-        user_mxid: Optional[str] = None
+        user_mxid: Optional[str] = None,
+        thread_event_id: Optional[str] = None,
     ) -> tuple[RoomConversation, bool]:
         """
         Get existing or create new room conversation mapping.
@@ -256,13 +274,14 @@ class RoomConversationDB:
             room_id: Matrix room ID
             agent_id: Letta agent ID
             conversation_id: Letta conversation ID (used only for creation)
-            strategy: 'per-room' or 'per-user'
+            strategy: 'per-room', 'per-user', or 'per-thread'
             user_mxid: User MXID (required for per-user strategy)
+            thread_event_id: Matrix thread root event ID (for thread isolation)
             
         Returns:
             Tuple of (RoomConversation, created: bool)
         """
-        existing = self.get_by_room_and_agent(room_id, agent_id, user_mxid)
+        existing = self.get_by_room_and_agent(room_id, agent_id, user_mxid, thread_event_id)
         if existing:
             return existing, False
         
@@ -271,7 +290,8 @@ class RoomConversationDB:
             agent_id=agent_id,
             conversation_id=conversation_id,
             strategy=strategy,
-            user_mxid=user_mxid
+            user_mxid=user_mxid,
+            thread_event_id=thread_event_id,
         )
         return created, True
 
@@ -279,7 +299,8 @@ class RoomConversationDB:
         self,
         room_id: str,
         agent_id: str,
-        user_mxid: Optional[str] = None
+        user_mxid: Optional[str] = None,
+        thread_event_id: Optional[str] = None,
     ) -> Optional[RoomConversation]:
         """Update last_message_at timestamp."""
         session = self.Session()
@@ -287,7 +308,8 @@ class RoomConversationDB:
             conv = session.query(RoomConversation).filter_by(
                 room_id=room_id,
                 agent_id=agent_id,
-                user_mxid=user_mxid
+                user_mxid=user_mxid,
+                thread_event_id=thread_event_id,
             ).first()
             if not conv:
                 return None
@@ -304,7 +326,8 @@ class RoomConversationDB:
         self,
         room_id: str,
         agent_id: str,
-        user_mxid: Optional[str] = None
+        user_mxid: Optional[str] = None,
+        thread_event_id: Optional[str] = None,
     ) -> bool:
         """Delete a room conversation mapping."""
         session = self.Session()
@@ -312,7 +335,8 @@ class RoomConversationDB:
             conv = session.query(RoomConversation).filter_by(
                 room_id=room_id,
                 agent_id=agent_id,
-                user_mxid=user_mxid
+                user_mxid=user_mxid,
+                thread_event_id=thread_event_id,
             ).first()
             if not conv:
                 return False
