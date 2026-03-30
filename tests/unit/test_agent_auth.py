@@ -17,12 +17,16 @@ def _make_async_cm(response: MagicMock) -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _reset_repair_attempts() -> Iterator[None]:
+def _reset_repair_attempts(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     agent_auth._repair_last_attempt.clear()
     agent_auth._token_cache.clear()
+    monkeypatch.setenv("MATRIX_ADMIN_ROOM_ID", "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca")
+    from src.core.admin_room import invalidate_cache
+    invalidate_cache()
     yield
     agent_auth._repair_last_attempt.clear()
     agent_auth._token_cache.clear()
+    invalidate_cache()
 
 
 @pytest.fixture
@@ -259,7 +263,8 @@ async def test_repair_agent_password_respects_cooldown(
     http_session.__aenter__ = AsyncMock(return_value=http_session)
     http_session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("src.matrix.agent_auth.time.monotonic", side_effect=[1000.0, 1000.0, 1100.0]):
+    mock_time = MagicMock(side_effect=[1000.0] * 20)
+    with patch("src.matrix.agent_auth.time.monotonic", mock_time):
         first = await agent_auth.repair_agent_password(
             mapping, config, logger, _session_factory=lambda: http_session,
         )
@@ -269,7 +274,7 @@ async def test_repair_agent_password_respects_cooldown(
 
     assert first is None
     assert second is None
-    assert http_session.post.call_count == 1  # Only first call logged in; second was cooldown-blocked
+    assert http_session.post.call_count == 1
 
 
 @pytest.mark.asyncio

@@ -179,8 +179,6 @@ async def repair_agent_password(
         # Admin credentials
         admin_user = os.getenv("MATRIX_ADMIN_USERNAME", os.getenv("MATRIX_USERNAME", "admin"))
         admin_pass = os.getenv("MATRIX_ADMIN_PASSWORD", os.getenv("MATRIX_PASSWORD", ""))
-        admin_room = "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca"
-
         async with _session_factory() as http:
             # Login as admin to get token
             admin_username_short = admin_user.split(":")[0].replace("@", "")
@@ -196,7 +194,15 @@ async def repair_agent_password(
             if not admin_token:
                 return None
 
-            # Reset password via Tuwunel admin room command
+            from ..core.admin_room import resolve_admin_room_id, AdminRoomResolutionError
+            try:
+                admin_room = await resolve_admin_room_id(
+                    access_token=admin_token, homeserver_url=config.homeserver_url
+                )
+            except AdminRoomResolutionError as exc:
+                logger.error(f"[{caller}] Password repair: {exc}")
+                return None
+
             command = f"!admin users reset-password {agent_username} {new_password}"
             txn_id = int(time.time() * 1000)
             cmd_url = (
