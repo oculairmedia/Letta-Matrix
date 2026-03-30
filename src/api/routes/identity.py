@@ -210,9 +210,7 @@ async def _send_admin_password_reset_command(
     password: str,
     session: Optional[aiohttp.ClientSession] = None,
 ) -> bool:
-    admin_room_id = os.getenv("MATRIX_ADMIN_ROOM_ID", "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca")
     command = f"!admin users reset-password {localpart} {password}"
-    url = f"{homeserver_url}/_matrix/client/v3/rooms/{admin_room_id}/send/m.room.message/{int(time.time() * 1000)}"
 
     for token_attempt in range(1, 3):
         try:
@@ -224,6 +222,16 @@ async def _send_admin_password_reset_command(
         if not admin_token:
             user_manager.clear_admin_token_cache()
             continue
+
+        from ...core.admin_room import resolve_admin_room_id, AdminRoomResolutionError
+        try:
+            admin_room_id = await resolve_admin_room_id(
+                access_token=admin_token, homeserver_url=homeserver_url
+            )
+        except AdminRoomResolutionError as exc:
+            logger.warning("Cannot resolve admin room for provisioning reset: %s", exc)
+            return False
+        url = f"{homeserver_url}/_matrix/client/v3/rooms/{admin_room_id}/send/m.room.message/{int(time.time() * 1000)}"
 
         headers = {
             "Authorization": f"Bearer {admin_token}",

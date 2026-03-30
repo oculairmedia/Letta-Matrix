@@ -13,6 +13,9 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import Mock, AsyncMock, patch
 import json
+import os
+
+from src.core.document_outline_index import upsert_outline_record
 
 # Import the FastAPI app
 from src.api.app import (
@@ -633,3 +636,93 @@ class TestRateLimiting:
         # X-RateLimit-Remaining: Remaining requests
         # X-RateLimit-Reset: Reset timestamp
         assert True  # Placeholder
+
+
+@pytest.mark.unit
+class TestDocumentOutlineEndpoints:
+    def test_documents_outline_filters_by_filename(self, client, tmp_path):
+        index_path = tmp_path / "document_outline_index.json"
+        with patch.dict(os.environ, {"DOCUMENT_OUTLINE_INDEX_PATH": str(index_path)}, clear=False):
+            upsert_outline_record(
+                {
+                    "document_id": "!room:test:$event1",
+                    "filename": "alpha.pdf",
+                    "room_id": "!room:test",
+                    "sender": "@user:test",
+                    "event_id": "$event1",
+                    "page_count": 1,
+                    "was_ocr": False,
+                    "char_count": 100,
+                    "has_heading_signals": True,
+                    "sections": [{"order": 1, "level": 1, "title": "Intro", "line": 1}],
+                    "key_topics": ["intro"],
+                    "document_type": "pdf",
+                    "ingested_at": "2026-03-29T10:00:00+00:00",
+                }
+            )
+            upsert_outline_record(
+                {
+                    "document_id": "!room:test:$event2",
+                    "filename": "beta.pdf",
+                    "room_id": "!room:test",
+                    "sender": "@user:test",
+                    "event_id": "$event2",
+                    "page_count": 2,
+                    "was_ocr": False,
+                    "char_count": 200,
+                    "has_heading_signals": False,
+                    "sections": [{"order": 1, "level": 1, "title": "Section 1", "line": None}],
+                    "key_topics": ["summary"],
+                    "document_type": "pdf",
+                    "ingested_at": "2026-03-29T10:01:00+00:00",
+                }
+            )
+
+            response = client.get("/documents/outline", params={"filename": "alpha.pdf"})
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["success"] is True
+            assert len(payload["outlines"]) == 1
+            assert payload["outlines"][0]["filename"] == "alpha.pdf"
+
+    def test_documents_overview_returns_fallback_signal(self, client, tmp_path):
+        index_path = tmp_path / "document_outline_index.json"
+        with patch.dict(os.environ, {"DOCUMENT_OUTLINE_INDEX_PATH": str(index_path)}, clear=False):
+            upsert_outline_record(
+                {
+                    "document_id": "!room:test:$event3",
+                    "filename": "ocr-noisy.pdf",
+                    "room_id": "!room:test",
+                    "sender": "@user:test",
+                    "event_id": "$event3",
+                    "page_count": 3,
+                    "was_ocr": True,
+                    "char_count": 150,
+                    "has_heading_signals": False,
+                    "sections": [{"order": 1, "level": 1, "title": "Section 1", "line": None}],
+                    "key_topics": ["invoice"],
+                    "document_type": "invoice",
+                    "ingested_at": "2026-03-29T10:02:00+00:00",
+                }
+            )
+
+            response = client.get("/documents/overview", params={"filename": "ocr-noisy.pdf"})
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["success"] is True
+            assert payload["overview"]["filename"] == "ocr-noisy.pdf"
+            assert payload["overview"]["graceful_fallback_used"] is True
+            assert payload["overview"]["citations"]
+            first_citation = payload["overview"]["citations"][0]
+            assert first_citation["chunk_id"].startswith("!room:test:$event3:sec-")
+            assert isinstance(first_citation["score"], float)
+            assert "excerpt" in first_citation
+
+            claims = payload["overview"]["claims"]
+            assert claims
+            for claim in claims:
+                assert claim["claim"]
+                assert claim["citations"]
+                for citation in claim["citations"]:
+                    assert citation["chunk_id"]
+                    assert isinstance(citation["score"], float)
