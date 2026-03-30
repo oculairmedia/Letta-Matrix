@@ -666,6 +666,7 @@ class LiveEditStreamingHandler:
         send_final_message: Optional[Callable[..., Any]] = None,
         delete_message: Optional[Callable[[str, str], Any]] = None,
         thread_root_event_id: Optional[str] = None,
+        reply_to_event_id: Optional[str] = None,
     ):
         self.send_message = send_message
         self.edit_message = edit_message
@@ -673,6 +674,7 @@ class LiveEditStreamingHandler:
         self.room_id = room_id
         self.send_final_message = send_final_message or send_message
         self.thread_root_event_id = thread_root_event_id
+        self.reply_to_event_id = reply_to_event_id
 
         self._event_id: Optional[str] = None
         self._latest_thread_event_id: Optional[str] = None
@@ -832,7 +834,7 @@ class LiveEditStreamingHandler:
         # When threading is active, an in-place edit cannot add m.relates_to
         # to a progress message that was born without it.  Delete the progress
         # message and send a fresh threaded response instead.
-        if self._event_id and self.thread_root_event_id and self.delete_message:
+        if self._event_id and (self.thread_root_event_id or self.reply_to_event_id) and self.delete_message:
             try:
                 await self.delete_message(self.room_id, self._event_id)
             except (RuntimeError, ValueError, TypeError, AssertionError):

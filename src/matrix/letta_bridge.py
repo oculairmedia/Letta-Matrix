@@ -247,6 +247,7 @@ async def send_to_letta_api_streaming(
             send_final_message=send_final_message,
             delete_message=delete_message,
             thread_root_event_id=thread_root_event_id,
+            reply_to_event_id=reply_to_event_id,
         )
     else:
         handler = StreamingMessageHandler(
