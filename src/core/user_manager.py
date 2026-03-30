@@ -209,7 +209,14 @@ class MatrixUserManager:
         if not token:
             return False
 
-        admin_room_id = os.getenv("MATRIX_ADMIN_ROOM_ID", "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca")
+        from .admin_room import resolve_admin_room_id, AdminRoomResolutionError
+        try:
+            admin_room_id = await resolve_admin_room_id(
+                access_token=token, homeserver_url=self.homeserver_url
+            )
+        except AdminRoomResolutionError as exc:
+            logger.warning("Cannot resolve admin room for credential remediation: %s", exc)
+            return False
         txn_id = int(time.time() * 1000)
         command = f"!admin users reset-password {username} {password}"
         url = f"{self.homeserver_url}/_matrix/client/v3/rooms/{admin_room_id}/send/m.room.message/{txn_id}"
