@@ -43,7 +43,7 @@ class TestTypingIndicatorManagerIdempotency:
         mock_ctx = {"typing_url": "http://test/typing", "token": "test_token"}
 
         with patch(
-            "src.matrix.agent_actions._get_agent_typing_context",
+            "src.matrix.agent_typing._get_agent_typing_context",
             new_callable=AsyncMock,
             return_value=mock_ctx,
         ):
@@ -82,7 +82,7 @@ class TestTypingIndicatorManagerIdempotency:
         mock_ctx = {"typing_url": "http://test/typing", "token": "test_token"}
 
         with patch(
-            "src.matrix.agent_actions._get_agent_typing_context",
+            "src.matrix.agent_typing._get_agent_typing_context",
             new_callable=AsyncMock,
             return_value=mock_ctx,
         ):
@@ -109,7 +109,7 @@ class TestTypingIndicatorManagerIdempotency:
         mock_ctx = {"typing_url": "http://test/typing", "token": "test_token"}
 
         with patch(
-            "src.matrix.agent_actions._get_agent_typing_context",
+            "src.matrix.agent_typing._get_agent_typing_context",
             new_callable=AsyncMock,
             return_value=mock_ctx,
         ):
@@ -171,7 +171,7 @@ class TestHTMLEscapeReplyMetadata:
             "src.core.mapping_service.get_mapping_by_room_id",
             return_value=mock_mapping,
         ), patch(
-            "src.matrix.agent_actions.get_agent_token",
+            "src.matrix.agent_send.get_agent_token",
             new_callable=AsyncMock,
             return_value="test_token",
         ), patch(
@@ -233,7 +233,7 @@ class TestHTMLEscapeReplyMetadata:
             "src.core.mapping_service.get_mapping_by_room_id",
             return_value=mock_mapping,
         ), patch(
-            "src.matrix.agent_actions.get_agent_token",
+            "src.matrix.agent_send.get_agent_token",
             new_callable=AsyncMock,
             return_value="test_token",
         ), patch(
@@ -288,7 +288,7 @@ class TestHTMLEscapeReplyMetadata:
             "src.core.mapping_service.get_mapping_by_room_id",
             return_value=mock_mapping,
         ), patch(
-            "src.matrix.agent_actions.get_agent_token",
+            "src.matrix.agent_send.get_agent_token",
             new_callable=AsyncMock,
             return_value="test_token",
         ), patch(
@@ -662,7 +662,7 @@ class TestP2FixesIntegration:
         }
 
         with patch(
-            "src.matrix.agent_actions._get_agent_typing_context",
+            "src.matrix.agent_typing._get_agent_typing_context",
             new_callable=AsyncMock,
             return_value=mock_ctx,
         ):
@@ -726,7 +726,7 @@ class TestP2FixesIntegration:
             "src.core.mapping_service.get_mapping_by_room_id",
             return_value=mock_mapping,
         ), patch(
-            "src.matrix.agent_actions.get_agent_token",
+            "src.matrix.agent_send.get_agent_token",
             new_callable=AsyncMock,
             return_value="test_token",
         ), patch(

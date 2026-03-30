@@ -58,8 +58,8 @@ async def test_send_as_agent_with_event_id_uses_provided_session(
 
     with (
         patch("src.core.mapping_service.get_mapping_by_room_id", return_value=mapping),
-        patch("src.matrix.agent_actions.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
-        patch("src.matrix.agent_actions.aiohttp.ClientSession") as mock_client_session,
+        patch("src.matrix.agent_send.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
+        patch("src.matrix.agent_send.aiohttp.ClientSession") as mock_client_session,
     ):
         event_id = await send_as_agent_with_event_id(
             "!room:test",
@@ -84,7 +84,7 @@ async def test_send_as_agent_passes_provided_session_through(
     session = MagicMock()
 
     with patch(
-        "src.matrix.agent_actions.send_as_agent_with_event_id",
+        "src.matrix.agent_send.send_as_agent_with_event_id",
         new=AsyncMock(return_value="$event"),
     ) as mock_send:
         sent = await send_as_agent(
@@ -116,8 +116,8 @@ async def test_delete_message_as_agent_uses_provided_session(
 
     with (
         patch("src.core.mapping_service.get_mapping_by_room_id", return_value=mapping),
-        patch("src.matrix.agent_actions.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
-        patch("src.matrix.agent_actions.aiohttp.ClientSession") as mock_client_session,
+        patch("src.matrix.agent_edit_delete.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
+        patch("src.matrix.agent_edit_delete.aiohttp.ClientSession") as mock_client_session,
     ):
         deleted = await delete_message_as_agent(
             "!room:test",
@@ -144,8 +144,8 @@ async def test_edit_message_as_agent_uses_provided_session(
     session.put = MagicMock(return_value=_make_async_cm(response))
 
     with (
-        patch("src.matrix.agent_actions.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
-        patch("src.matrix.agent_actions.aiohttp.ClientSession") as mock_client_session,
+        patch("src.matrix.agent_edit_delete.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
+        patch("src.matrix.agent_edit_delete.aiohttp.ClientSession") as mock_client_session,
     ):
         edited = await edit_message_as_agent(
             "!room:test",
@@ -174,8 +174,8 @@ async def test_send_reaction_as_agent_uses_provided_session(
     session.put = MagicMock(return_value=_make_async_cm(response))
 
     with (
-        patch("src.matrix.agent_actions.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
-        patch("src.matrix.agent_actions.aiohttp.ClientSession") as mock_client_session,
+        patch("src.matrix.agent_reactions.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
+        patch("src.matrix.agent_reactions.aiohttp.ClientSession") as mock_client_session,
     ):
         reaction_event_id = await send_reaction_as_agent(
             "!room:test",
@@ -203,8 +203,8 @@ async def test_send_read_receipt_as_agent_uses_provided_session(
     session.post = MagicMock(return_value=_make_async_cm(response))
 
     with (
-        patch("src.matrix.agent_actions.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
-        patch("src.matrix.agent_actions.aiohttp.ClientSession") as mock_client_session,
+        patch("src.matrix.agent_reactions.get_agent_token", new=AsyncMock(return_value="token")) as mock_token,
+        patch("src.matrix.agent_reactions.aiohttp.ClientSession") as mock_client_session,
     ):
         sent = await send_read_receipt_as_agent(
             "!room:test",
@@ -224,7 +224,7 @@ async def test_send_read_receipt_as_agent_uses_provided_session(
 
 def test_build_message_content_does_not_swallow_keyboard_interrupt() -> None:
     with patch(
-        "src.matrix.agent_actions.extract_and_convert_pills",
+        "src.matrix.agent_message_content.extract_and_convert_pills",
         side_effect=KeyboardInterrupt,
     ):
         with pytest.raises(KeyboardInterrupt):
@@ -233,7 +233,7 @@ def test_build_message_content_does_not_swallow_keyboard_interrupt() -> None:
 
 def test_build_edit_content_does_not_swallow_keyboard_interrupt() -> None:
     with patch(
-        "src.matrix.agent_actions.extract_and_convert_pills",
+        "src.matrix.agent_message_content.extract_and_convert_pills",
         side_effect=KeyboardInterrupt,
     ):
         with pytest.raises(KeyboardInterrupt):
