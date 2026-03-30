@@ -1,3 +1,4 @@
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,6 +8,15 @@ from src.api.routes.identity import (
     _send_admin_password_reset_command,
     _reset_password_and_verify_login,
 )
+
+
+@pytest.fixture(autouse=True)
+def _admin_room_env(monkeypatch):
+    monkeypatch.setenv("MATRIX_ADMIN_ROOM_ID", "!test-admin-room:matrix.test")
+    from src.core.admin_room import invalidate_cache
+    invalidate_cache()
+    yield
+    invalidate_cache()
 
 
 def _make_async_cm(response: MagicMock) -> MagicMock:

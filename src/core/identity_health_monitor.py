@@ -45,9 +45,6 @@ class IdentityTokenHealthMonitor:
             os.getenv("IDENTITY_TOKEN_HEALTH_INTERVAL_SECONDS", "900")
         )
         self.max_reset_retries = int(os.getenv("IDENTITY_TOKEN_RESET_RETRIES", "3"))
-        self.admin_room_id = os.getenv(
-            "MATRIX_ADMIN_ROOM_ID", "!jmP5PQ2G13I4VcIcUT:matrix.oculair.ca"
-        )
 
         self.identity_service = identity_service or get_identity_service()
 
@@ -315,10 +312,19 @@ class IdentityTokenHealthMonitor:
             logger.error("No admin token available for identity password reset")
             return False
 
+        from .admin_room import resolve_admin_room_id, AdminRoomResolutionError
+        try:
+            admin_room_id = await resolve_admin_room_id(
+                access_token=admin_token, homeserver_url=self.homeserver_url
+            )
+        except AdminRoomResolutionError as exc:
+            logger.error("Cannot resolve admin room for identity reset: %s", exc)
+            return False
+
         command = f"!admin users reset-password {localpart} {new_password}"
         txn_id = int(time.time() * 1000)
         url = (
-            f"{self.homeserver_url}/_matrix/client/v3/rooms/{self.admin_room_id}"
+            f"{self.homeserver_url}/_matrix/client/v3/rooms/{admin_room_id}"
             f"/send/m.room.message/{txn_id}"
         )
         headers = {
