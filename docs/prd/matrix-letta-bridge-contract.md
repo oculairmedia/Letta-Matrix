@@ -170,10 +170,6 @@ in your response so the OpenCode bridge can route your reply to them.
 - Message forwarded to mentioned agent's room with `[Forwarded from SenderName]` prefix
 - Prevents self-mentions and already-forwarded messages
 
-### 5.2 Agent Mail Reverse Bridge
-- Detects `m.agent_mail` metadata on incoming messages
-- After Letta response, forwards reply back to Agent Mail via MCP
-
 ## 6. Special Commands
 
 ### 6.1 Poll Commands (parsed from agent responses)
@@ -336,7 +332,6 @@ Status thresholds: healthy=0 missing, degraded=1-3 missing, unhealthy=4+ missing
 ### Evaluate (may drop)
 - Letta Code filesystem integration (`/fs-*` commands)
 - Poll commands (`/poll`)
-- Agent Mail reverse bridge
 - Identity API endpoints (may stay in identity bridge)
 - DM room management (may stay in identity bridge)
 

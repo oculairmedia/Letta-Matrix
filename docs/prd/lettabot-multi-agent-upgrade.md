@@ -320,7 +320,7 @@ For each new agent:
    - Name: `"{agent_name} - Letta Agent Chat"`
    - Topic: `"Private chat with Letta agent: {agent_name}"`
    - Preset: `trusted_private_chat`
-   - Initial invites: admin, letta bot, OpenCode bridge, Agent Mail bridge
+   - Initial invites: admin, letta bot, OpenCode bridge
 3. Add room to "Letta Agents" space
 4. Auto-join all required members
 5. Import last 15 messages from Letta history (marked `m.letta_historical`)
@@ -388,10 +388,6 @@ When an agent's response mentions another agent (`@OtherAgent`):
 1. Look up mentioned agent in registry
 2. Forward message to mentioned agent's room with metadata
 3. Prevent self-mentions and already-forwarded messages
-
-#### 8.2 Agent Mail Reverse Bridge
-
-Detect `m.agent_mail` metadata on incoming messages. After Letta response, forward reply back to Agent Mail via MCP.
 
 ---
 
@@ -463,7 +459,7 @@ Post errors to the agent's room (as the agent's identity):
 
 1. Route ALL agents through lettabot
 2. Disable Python bridge's message routing (keep API for backward compat)
-3. Port inter-agent communication, Agent Mail reverse bridge
+3. Port inter-agent communication
 4. Port webhook processing, conversation registration
 5. Add ntfy alerting
 6. **Test**: Full regression — all agents respond, streaming works, typing indicators work, no double delivery.
