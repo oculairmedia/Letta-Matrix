@@ -1,21 +1,35 @@
 #!/usr/bin/env python3
 """
-Agent User Manager - Creates Matrix users for each Letta agent
+Agent User Manager — slim orchestrator.
+
+Domain logic lives in focused mixin modules:
+  - agent_letta_client: Letta SDK agent fetching
+  - agent_mapping_persistence: load/save mappings via SQLAlchemy
+  - agent_provisioner: create users and discover rooms
+  - agent_sync_orchestrator: space readiness, validation, cleanup, memory sync
+  - agent_health: health checks and run_agent_sync entrypoint
 """
 import asyncio
 import logging
 import os
 import time
-import aiohttp
-import random
 from typing import Dict, List, Optional, Set
+
+import aiohttp
 
 from .avatar_service import AvatarService
 from .space_manager import MatrixSpaceManager
 from .user_manager import MatrixUserManager
 from .room_manager import MatrixRoomManager
 from .types import AgentUserMapping
-
+from .agent_letta_client import AgentLettaClientMixin
+from .agent_mapping_persistence import AgentMappingPersistenceMixin
+from .agent_provisioner import AgentProvisionerMixin
+from .agent_sync_orchestrator import AgentSyncOrchestratorMixin
+from .agent_health import (  # noqa: F401
+    check_provisioning_health,
+    run_agent_sync,
+)
 
 logger = logging.getLogger("matrix_client.agent_user_manager")
 
@@ -23,36 +37,38 @@ logger = logging.getLogger("matrix_client.agent_user_manager")
 _connector = None
 global_session = None
 
-# Default timeout for all requests
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
+
 
 def _get_connector():
     """Lazily create connector to avoid event loop issues at import time"""
     global _connector
     if _connector is None:
         _connector = aiohttp.TCPConnector(
-            limit=100,  # Connection pool size
-            limit_per_host=50,  # Per-host connection limit
-            ttl_dns_cache=300,  # DNS cache timeout
-            keepalive_timeout=30,  # Keep connections alive
+            limit=100,
+            limit_per_host=50,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
             force_close=False
         )
     return _connector
+
 
 async def get_global_session():
     """Get or create global aiohttp session with connection pooling"""
     global global_session
     if global_session is None or global_session.closed:
         connector = _get_connector()
-        global_session = aiohttp.ClientSession(
-            connector=connector
-            # Timeout will be set per-request to avoid the context manager error
-        )
+        global_session = aiohttp.ClientSession(connector=connector)
     return global_session
 
 
-
-class AgentUserManager:
+class AgentUserManager(
+    AgentLettaClientMixin,
+    AgentMappingPersistenceMixin,
+    AgentProvisionerMixin,
+    AgentSyncOrchestratorMixin,
+):
     """Manages Matrix users for Letta agents"""
 
     def __init__(self, config):
@@ -62,23 +78,17 @@ class AgentUserManager:
         self.homeserver_url = config.homeserver_url
         self.letta_token = config.letta_token
         self.letta_api_url = config.letta_api_url
-        
-        # Configure data directory - use env var or default to /app/data
+
         self.data_dir = os.getenv("MATRIX_DATA_DIR", "/app/data")
         self.mappings: Dict[str, AgentUserMapping] = {}
         self._removed_agents_last_sync: Set[str] = set()
-        # Note: admin_token is now a property that proxies to user_manager.admin_token
 
-        # Matrix admin credentials - try to use a dedicated admin account
-        # Fall back to main letta user if not specified
         self.admin_username = os.getenv("MATRIX_ADMIN_USERNAME", config.username)
         self.admin_password = os.getenv("MATRIX_ADMIN_PASSWORD", config.password)
         logger.info(f"Using admin account: {self.admin_username} (from env: {os.getenv('MATRIX_ADMIN_USERNAME')})")
 
-        # Ensure data directory exists
         os.makedirs(self.data_dir, exist_ok=True)
 
-        # Initialize Matrix Space Manager
         self.space_manager = MatrixSpaceManager(
             homeserver_url=self.homeserver_url,
             admin_username=self.admin_username,
@@ -87,14 +97,12 @@ class AgentUserManager:
             space_config_file=os.path.join(self.data_dir, "letta_space_config.json")
         )
 
-        # Initialize Matrix User Manager
         self.user_manager = MatrixUserManager(
             homeserver_url=self.homeserver_url,
             admin_username=self.admin_username,
             admin_password=self.admin_password
         )
 
-        # Initialize Matrix Room Manager
         self.room_manager = MatrixRoomManager(
             homeserver_url=self.homeserver_url,
             space_manager=self.space_manager,
@@ -111,194 +119,43 @@ class AgentUserManager:
 
     @property
     def admin_token(self) -> Optional[str]:
-        """Backward compatibility property for admin_token"""
         return self.user_manager.admin_token
 
     @admin_token.setter
     def admin_token(self, value: Optional[str]):
-        """Backward compatibility setter for admin_token"""
         self.user_manager.admin_token = value
 
-    async def load_existing_mappings(self):
-        """Load existing agent-user mappings from database"""
-        try:
-            from src.models.agent_mapping import AgentMappingDB
-            db = AgentMappingDB()
-            db_mappings = db.get_all()
-
-            for db_mapping in db_mappings:
-                mapping_dict = db_mapping.to_dict()
-                # Handle backward compatibility for new invitation_status field
-                if "invitation_status" not in mapping_dict:
-                    mapping_dict["invitation_status"] = None
-
-                try:
-                    from src.core.identity_storage import get_identity_service
-
-                    identity = get_identity_service().get_by_agent_id(str(db_mapping.agent_id))
-                    if identity is not None:
-                        if getattr(identity, "display_name", None):
-                            mapping_dict["agent_name"] = str(identity.display_name)
-                        if getattr(identity, "mxid", None):
-                            mapping_dict["matrix_user_id"] = str(identity.mxid)
-                except Exception as identity_error:
-                    logger.debug(f"Identity enrichment unavailable for {db_mapping.agent_id}: {identity_error}")
-
-                agent_id = str(db_mapping.agent_id)
-                self.mappings[agent_id] = AgentUserMapping(**mapping_dict)
-
-            logger.info(f"Loaded {len(self.mappings)} existing agent-user mappings from database")
-        except Exception as e:
-            logger.error(f"Error loading mappings from database: {e}")
-            # Database is the single source of truth - no JSON fallback
-            logger.warning("Database is unavailable. Agent mappings will be empty until DB is restored.")
-
-
-    async def save_mappings(self):
-        """Save agent-user mappings to database"""
-        try:
-            from src.models.agent_mapping import AgentMappingDB, get_session_maker
-            from src.models.agent_mapping import AgentMapping as DBAgentMapping, InvitationStatus
-            from sqlalchemy.dialects.postgresql import insert
-
-            Session = get_session_maker()
-            session = Session()
-
-            try:
-                for agent_id, mapping in self.mappings.items():
-                    # Upsert agent mapping (insert or update)
-                    stmt = insert(DBAgentMapping).values(
-                        agent_id=mapping.agent_id,
-                        agent_name=mapping.agent_name,
-                        matrix_user_id=mapping.matrix_user_id,
-                        matrix_password=mapping.matrix_password,
-                        room_id=mapping.room_id,
-                        room_created=mapping.room_created
-                    ).on_conflict_do_update(
-                        index_elements=['agent_id'],
-                        set_={
-                            'agent_name': mapping.agent_name,
-                            'room_id': mapping.room_id,
-                            'room_created': mapping.room_created
-                        }
-                    )
-                    session.execute(stmt)
-
-                    # Update invitation statuses
-                    if mapping.invitation_status:
-                        for invitee, status in mapping.invitation_status.items():
-                            stmt = insert(InvitationStatus).values(
-                                agent_id=agent_id,
-                                invitee=invitee,
-                                status=status
-                            ).on_conflict_do_update(
-                                index_elements=['agent_id', 'invitee'],
-                                set_={'status': status}
-                            )
-                            session.execute(stmt)
-
-                session.commit()
-                logger.info(f"Saved {len(self.mappings)} agent-user mappings to database")
-
-            except Exception as db_error:
-                session.rollback()
-                raise db_error
-            finally:
-                session.close()
-
-        except Exception as e:
-            logger.error(f"Error saving mappings to database: {e}")
-            # Database is the single source of truth - no JSON fallback
-            logger.warning("Failed to save mappings. Changes will be lost if not retried.")
-
-    async def get_letta_agents(self) -> Optional[List[dict]]:
-        """Get all Letta agents using the Letta SDK with pagination support"""
-        try:
-            from src.letta.client import get_letta_client, LettaConfig
-            from concurrent.futures import ThreadPoolExecutor
-            import asyncio
-
-            # Configure SDK client
-            sdk_config = LettaConfig(
-                base_url="http://192.168.50.90:8289",  # Use Letta proxy endpoint
-                api_key="lettaSecurePass123",
-                timeout=30.0,
-                max_retries=3
-            )
-            client = get_letta_client(sdk_config)
-
-            agent_list = []
-            seen_agent_ids = set()
-            
-            # Run sync SDK call in thread pool (SDK is synchronous)
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                # SDK handles pagination internally - just request a high limit
-                agents = await loop.run_in_executor(
-                    executor,
-                    lambda: list(client.agents.list(limit=500))  # Get all agents
-                )
-
-            logger.info(f"Retrieved {len(agents)} agents from SDK")
-
-            for agent in agents:
-                # SDK returns AgentState objects with id and name attributes
-                agent_id = str(agent.id) if agent.id else ""
-                agent_name = str(agent.name) if agent.name else agent_id
-
-                if agent_id and agent_id not in seen_agent_ids:
-                    seen_agent_ids.add(agent_id)
-                    agent_list.append({
-                        "id": agent_id,
-                        "name": agent_name
-                    })
-
-            logger.info(f"Found {len(agent_list)} unique Letta agents via SDK")
-            return agent_list
-
-        except Exception as e:
-            logger.error(f"Error getting Letta agents via SDK: {e}", exc_info=True)
-            return None
     async def get_admin_token(self) -> Optional[str]:
-        """Get an admin access token - delegates to user_manager"""
         return await self.user_manager.get_admin_token()
 
     async def check_user_exists(self, username: str) -> str:
-        """Check if a Matrix user exists - delegates to user_manager"""
         return await self.user_manager.check_user_exists(username)
+
     async def create_matrix_user(self, username: str, password: str, display_name: str) -> bool:
-        """Create a new Matrix user - delegates to user_manager"""
         return await self.user_manager.create_matrix_user(username, password, display_name)
 
     async def set_user_display_name(self, user_id: str, display_name: str, access_token: str) -> bool:
-        """Set display name for a user - delegates to user_manager"""
         return await self.user_manager.set_user_display_name(user_id, display_name, access_token)
 
     def generate_username(self, agent_name: str, agent_id: str) -> str:
-        """Generate a safe Matrix username - delegates to user_manager"""
         return self.user_manager.generate_username(agent_name, agent_id)
 
     def generate_password(self) -> str:
-        """Generate a secure password - delegates to user_manager"""
         return self.user_manager.generate_password()
 
     async def ensure_core_users_exist(self):
-        """Ensure required core Matrix users exist - delegates to user_manager"""
         core_users = []
 
-        # Main Letta bot user
         if getattr(self.config, "username", None) and getattr(self.config, "password", None):
             core_users.append(
                 (self.config.username, self.config.password, "Letta Bot")
             )
 
-        # Matrix admin user
         if self.admin_username and self.admin_password:
             core_users.append(
                 (self.admin_username, self.admin_password, "Matrix Admin")
             )
 
-        # Optional MCP bot user
         mcp_username = os.getenv("MATRIX_MCP_USERNAME")
         mcp_password = os.getenv("MATRIX_MCP_PASSWORD")
         if mcp_username and mcp_password:
@@ -342,392 +199,30 @@ class AgentUserManager:
 
         await self._sync_matrix_memory()
 
-    async def _ensure_space_ready(self) -> bool:
-        await self.ensure_core_users_exist()
-        await self.load_existing_mappings()
-        await self.space_manager.load_space_config()
-
-        space_just_created = False
-        existing_space_id = self.space_manager.get_space_id()
-        if not existing_space_id:
-            logger.info("Creating Letta Agents space")
-            space_id = await self.space_manager.create_letta_agents_space()
-            if space_id:
-                logger.info(f"Successfully created Letta Agents space: {space_id}")
-                return True
-            logger.warning("Failed to create Letta Agents space, rooms will not be organized")
-            return False
-
-        logger.info(f"Validating existing Letta Agents space: {existing_space_id}")
-        space_valid = await self.space_manager.check_room_exists(existing_space_id)
-        if space_valid:
-            logger.info(f"Using existing Letta Agents space: {existing_space_id}")
-            return False
-
-        logger.warning(f"Space {existing_space_id} is invalid, will recreate")
-        old_space_id = existing_space_id
-        self.space_manager.space_id = None
-
-        space_id = await self.space_manager.create_letta_agents_space()
-        if space_id:
-            logger.info(f"Successfully recreated Letta Agents space: {space_id}")
-            new_space_valid = await self.space_manager.check_room_exists(space_id)
-            if new_space_valid:
-                logger.info(f"New space {space_id} validated successfully")
-                space_just_created = True
-            else:
-                logger.error(f"New space {space_id} failed validation, keeping old space config")
-                self.space_manager.space_id = old_space_id
-                await self.space_manager.save_space_config()
-        else:
-            logger.error("Failed to recreate Letta Agents space")
-            self.space_manager.space_id = old_space_id
-            await self.space_manager.save_space_config()
-
-        return space_just_created
-
-    async def _provision_new_agents(self, letta_agents, existing_ids):
-        new_agents = {agent["id"] for agent in letta_agents} - existing_ids
-        for agent in letta_agents:
-            if agent["id"] in new_agents:
-                await self.create_user_for_agent(agent)
-
-    async def _validate_existing_agents(self, existing_mappings):
-        logger.info(f"Checking {len(existing_mappings)} existing agents for failed creation status or missing rooms")
-        for agent in existing_mappings:
-            mapping = self.mappings.get(agent["id"])
-            logger.debug(f"Agent {agent['name']} - created: {mapping.created if mapping else 'No mapping'}, room: {mapping.room_created if mapping else 'No room'}")
-            if not mapping:
-                continue
-            if mapping.agent_name != agent["name"]:
-                logger.info(f"Agent name changed from '{mapping.agent_name}' to '{agent['name']}'")
-                mapping.agent_name = agent["name"]
-                if mapping.room_id and mapping.room_created:
-                    logger.info(f"Updating room name for {mapping.room_id}")
-                    success = await self.update_room_name(mapping.room_id, agent["name"])
-                    if not success:
-                        logger.warning(f"Failed to update room name for {mapping.room_id}")
-                if mapping.matrix_user_id and mapping.matrix_password:
-                    logger.info(f"Updating display name for {mapping.matrix_user_id}")
-                    display_success = await self.update_display_name(mapping.matrix_user_id, agent["name"], mapping.matrix_password)
-                    if not display_success:
-                        logger.warning(f"Failed to update display name for {mapping.matrix_user_id}")
-            if not mapping.created:
-                logger.info(f"Retrying creation for existing agent {agent['name']} with failed status")
-                await self.create_user_for_agent(agent)
-                continue
-            if not mapping.room_created:
-                logger.info(f"Creating room for existing agent {agent['name']}")
-                await self.create_or_update_agent_room(agent["id"])
-                continue
-            if not mapping.room_id:
-                continue
-            skip_invitation_acceptance = False
-            try:
-                actual_room_id = await self.discover_agent_room(mapping.matrix_user_id)
-                if actual_room_id and actual_room_id != mapping.room_id:
-                    logger.warning(f"🔄 Room drift detected for {agent['name']}!")
-                    logger.warning(f"  Stored room:  {mapping.room_id}")
-                    logger.warning(f"  Actual room:  {actual_room_id}")
-                    mapping.room_id = actual_room_id
-                    logger.info(f"✅ Fixed room mapping for {agent['name']}")
-                if not actual_room_id:
-                    room_exists = await self.space_manager.check_room_exists(mapping.room_id)
-                    if not room_exists:
-                        logger.warning(f"Room {mapping.room_id} for {agent['name']} is invalid, recreating")
-                        mapping.room_id = None
-                        mapping.room_created = False
-                        await self.create_or_update_agent_room(agent["id"])
-                        skip_invitation_acceptance = True
-            except Exception as e:
-                logger.error(f"Error checking room drift for {agent['name']}: {e}")
-            if skip_invitation_acceptance or not mapping.room_id:
-                continue
-            logger.info(f"Ensuring invitations are accepted for room {mapping.room_id}")
-            await self.auto_accept_invitations_with_tracking(mapping.room_id, mapping)
-            member_results = await self.room_manager.ensure_required_members(mapping.room_id, agent["id"])
-            for user_id, status in member_results.items():
-                if status == "invited":
-                    logger.info(f"✅ Invited {user_id} to {agent['name']}'s room")
-                elif status == "failed":
-                    logger.warning(f"⚠️  Failed to ensure {user_id} in {agent['name']}'s room")
-
-    async def _set_missing_avatars(self, existing_mappings):
-        for agent in existing_mappings:
-            mapping = self.mappings.get(agent["id"])
-            if not mapping:
-                continue
-            if not (mapping.created and mapping.room_created and mapping.room_id and mapping.matrix_user_id):
-                continue
-            asyncio.create_task(
-                self.set_default_avatar_for_agent(agent["name"], mapping.matrix_user_id)
-            )
-
-    async def _cleanup_removed_agents(self, letta_agent_ids, existing_mappings):
-        removed_agents = existing_mappings - letta_agent_ids
-        if removed_agents:
-            if not letta_agent_ids:
-                logger.warning(
-                    f"Letta API returned 0 agents but {len(existing_mappings)} exist in DB — "
-                    f"skipping soft-delete to prevent mass removal (likely API error)"
-                )
-            else:
-                from src.models.agent_mapping import AgentMappingDB
-
-                db = AgentMappingDB()
-                for agent_id in removed_agents:
-                    mapping = self.mappings.get(agent_id)
-                    if mapping and not mapping.removed_at:
-                        logger.info(f"Agent {agent_id} removed from Letta — marking for cleanup (2h grace period)")
-                        db.soft_delete(agent_id)
-                        mapping.removed_at = "pending"
-
-        for agent_id in letta_agent_ids:
-            mapping = self.mappings.get(agent_id)
-            if mapping and mapping.removed_at:
-                logger.info(f"Agent {agent_id} reappeared — cancelling pending removal")
-                from src.models.agent_mapping import AgentMappingDB
-
-                db = AgentMappingDB()
-                db.clear_removed(agent_id)
-                mapping.removed_at = None
-
-        await self._cleanup_expired_agents()
-        self._removed_agents_last_sync = removed_agents
-        return removed_agents
-
-    async def _sync_matrix_memory(self):
-        try:
-            from src.letta.matrix_memory import sync_matrix_block_to_agents
-
-            agent_ids = [aid for aid in self.mappings.keys() if aid not in self._removed_agents_last_sync]
-            if agent_ids:
-                result = await sync_matrix_block_to_agents(agent_ids)
-                logger.info(f"[MatrixMemory] Block sync: {result.get('synced', 0)} agents updated")
-        except Exception as e:
-            logger.warning(f"[MatrixMemory] Block sync failed (non-critical): {e}")
-
-    async def _cleanup_expired_agents(self, grace_period_hours: int = 2):
-        """Clean up agents whose removal grace period has expired.
-        
-        For each expired agent: leave room as all members, remove from space, delete DB mapping.
-        """
-        from src.models.agent_mapping import AgentMappingDB
-        db = AgentMappingDB()
-        expired = db.get_expired_removals(grace_period_hours)
-
-        if not expired:
-            return
-
-        logger.info(f"Cleaning up {len(expired)} agents past {grace_period_hours}h grace period")
-
-        space_id = self.space_manager.get_space_id()
-
-        for mapping in expired:
-            agent_id = str(mapping.agent_id)
-            room_id = str(mapping.room_id) if mapping.room_id is not None else None
-            matrix_user_id = str(mapping.matrix_user_id)
-            username = matrix_user_id.split(":")[0].replace("@", "")
-            password = str(mapping.matrix_password)
-
-            logger.info(f"Cleaning up expired agent {agent_id} (user={matrix_user_id}, room={room_id})")
-
-            if room_id:
-                if space_id:
-                    await self.room_manager.remove_room_from_space(room_id, space_id)
-
-                await self.room_manager.leave_room_as_user(room_id, username, password)
-                await self.room_manager.leave_room_as_admin(room_id)
-
-                letta_username = os.getenv("MATRIX_LETTA_USERNAME", "letta")
-                letta_password = os.getenv("MATRIX_LETTA_PASSWORD", "letta")
-                await self.room_manager.leave_room_as_user(room_id, letta_username, letta_password)
-
-            db.delete(agent_id)
-            if agent_id in self.mappings:
-                del self.mappings[agent_id]
-
-            logger.info(f"Cleaned up agent {agent_id}: room left, mapping deleted")
-
-    async def create_user_for_agent(self, agent: dict):
-        """Create a Matrix user for a specific agent"""
-        agent_id = agent["id"]
-        agent_name = agent["name"]
-
-        logger.info(f"Processing agent: {agent_name} ({agent_id})")
-
-        # Check if we already have a complete mapping for this agent
-        if agent_id in self.mappings:
-            existing_mapping = self.mappings[agent_id]
-            logger.info(f"Found existing mapping for agent {agent_name}")
-            logger.info(f"  User: {existing_mapping.matrix_user_id}, Created: {existing_mapping.created}")
-            logger.info(f"  Room: {existing_mapping.room_id}, Room Created: {existing_mapping.room_created}")
-
-            # If both user and room exist, validate the room is still valid
-            if existing_mapping.created and existing_mapping.room_created and existing_mapping.room_id:
-                # Always try to discover the actual room the agent is in
-                # This handles cases where rooms were recreated or the mapping is stale
-                logger.debug(f"Validating room mapping for {agent_name}")
-                
-                try:
-                    actual_room_id = await self.discover_agent_room(existing_mapping.matrix_user_id)
-                    
-                    if actual_room_id:
-                        # Check if discovered room matches stored room
-                        if actual_room_id != existing_mapping.room_id:
-                            logger.warning(f"Room drift detected for {agent_name}!")
-                            logger.warning(f"  Stored room:  {existing_mapping.room_id}")
-                            logger.warning(f"  Actual room:  {actual_room_id}")
-                            logger.info(f"Updating mapping to use actual room")
-                            existing_mapping.room_id = actual_room_id
-                            await self.save_mappings()
-                            logger.info(f"✅ Fixed room mapping for {agent_name}")
-                        else:
-                            logger.debug(f"Room mapping for {agent_name} is correct")
-                        return
-                    else:
-                        # Could not discover room - check if stored room exists
-                        room_exists = await self.space_manager.check_room_exists(existing_mapping.room_id)
-                        if room_exists:
-                            logger.info(f"Agent {agent_name} has valid room, no drift detected")
-                            return
-                        else:
-                            logger.warning(f"Stored room {existing_mapping.room_id} for {agent_name} is invalid and no room discovered")
-                            existing_mapping.room_id = None
-                            existing_mapping.room_created = False
-                            await self.save_mappings()
-                            # Fall through to create room below
-                            
-                except Exception as e:
-                    logger.error(f"Error during room validation for {agent_name}: {e}")
-                    # Fall back to simple existence check
-                    room_exists = await self.space_manager.check_room_exists(existing_mapping.room_id or "")
-                    if room_exists:
-                        logger.info(f"Agent {agent_name} has valid room (discovery failed, using basic check)")
-                        return
-                    else:
-                        logger.warning(f"Room {existing_mapping.room_id} for {agent_name} is invalid")
-                        existing_mapping.room_id = None
-                        existing_mapping.room_created = False
-                        await self.save_mappings()
-
-
-            # If user exists but room doesn't, just create the room
-            if existing_mapping.created and not existing_mapping.room_created:
-                logger.info(f"User exists but room missing for agent {agent_name}, creating room only")
-                await self.create_or_update_agent_room(agent_id)
-                return
-
-        # If we get here, we need to create the user (and then the room)
-        logger.info(f"Creating Matrix user for agent: {agent_name} ({agent_id})")
-
-        # Generate Matrix username
-        username = self.generate_username(agent_name, agent_id)
-        matrix_user_id = f"@{username}:matrix.oculair.ca"
-
-        # Use existing password if we have one, otherwise generate new
-        if agent_id in self.mappings and self.mappings[agent_id].matrix_password:
-            password = self.mappings[agent_id].matrix_password
-            logger.info(f"Using existing password for agent {agent_name}")
-        else:
-            password = self.generate_password()
-            logger.info(f"Generated new password for agent {agent_name}")
-
-        # Create the Matrix user with the agent name as display name
-        success = await self.create_matrix_user(username, password, agent_name)
-
-        # Update or create the mapping
-        if agent_id in self.mappings:
-            self.mappings[agent_id].created = success
-            self.mappings[agent_id].matrix_user_id = matrix_user_id
-            self.mappings[agent_id].matrix_password = password
-        else:
-            mapping = AgentUserMapping(
-                agent_id=agent_id,
-                agent_name=agent_name,
-                matrix_user_id=matrix_user_id,
-                matrix_password=password,
-                created=success,
-                room_id=None,
-                room_created=False
-            )
-            self.mappings[agent_id] = mapping
-
-        if success:
-            logger.info(f"Successfully created Matrix user {matrix_user_id} for agent {agent_name}")
-            # Display name is set during user creation via set_user_display_name
-            # No need to call update_display_name here
-
-            # Now create/update the room for this agent
-            await self.create_or_update_agent_room(agent_id)
-            
-            # Set avatar as fire-and-forget (non-blocking)
-            asyncio.create_task(self.set_default_avatar_for_agent(agent_name, matrix_user_id))
-            await self.create_or_update_agent_room(agent_id)
-        else:
-            logger.error(f"Failed to create Matrix user for agent {agent_name}")
-
-    async def discover_agent_room(self, agent_user_id: str) -> Optional[str]:
-        """
-        Discover the actual room for an agent by checking the database.
-        The database is the source of truth for current room assignments.
-        Returns the room_id if found, None otherwise.
-        """
-        try:
-            from src.core.mapping_service import get_mapping_by_matrix_user
-            
-            mapping = get_mapping_by_matrix_user(agent_user_id)
-            if mapping:
-                room_id = mapping.get("room_id")
-                if room_id:
-                    logger.info(f"Found room in database for {agent_user_id}: {room_id}")
-                    return room_id
-                else:
-                    logger.warning(f"Agent {agent_user_id} has no room_id in database")
-                    return None
-            
-            logger.warning(f"Agent {agent_user_id} not found in database mappings")
-            return None
-                    
-        except Exception as e:
-            logger.error(f"Error discovering room from database for {agent_user_id}: {e}")
-            return None
-    
     async def get_agent_user_mapping(self, agent_id: str) -> Optional[AgentUserMapping]:
-        """Get the Matrix user mapping for a specific agent"""
         return self.mappings.get(agent_id)
 
     async def list_agent_users(self) -> List[AgentUserMapping]:
-        """Get all agent-user mappings"""
         return list(self.mappings.values())
 
     async def check_room_exists(self, room_id: str) -> bool:
-        """Check if a room exists on the server
-
-        Delegates to space_manager.check_room_exists to avoid code duplication
-        """
         return await self.space_manager.check_room_exists(room_id)
 
     async def update_room_name(self, room_id: str, new_name: str) -> bool:
-        """Update the name of an existing room - delegates to room_manager"""
         return await self.room_manager.update_room_name(room_id, new_name)
 
     async def update_display_name(self, user_id: str, display_name: str, password: Optional[str] = None) -> bool:
-        """Update the display name of a Matrix user - delegates to user_manager"""
         return await self.user_manager.update_display_name(user_id, display_name, password)
 
     async def find_existing_agent_room(self, agent_name: str) -> Optional[str]:
-        """Find an existing room for an agent by searching room names - delegates to room_manager"""
         return await self.room_manager.find_existing_agent_room(agent_name)
 
     async def create_or_update_agent_room(self, agent_id: str):
-        """Create or update a Matrix room for agent communication with validation"""
         mapping = self.mappings.get(agent_id)
         if not mapping:
             logger.error(f"No mapping found for agent {agent_id}, cannot create room")
             return None
 
-        # Validate existing room (ensure create event/version)
         if mapping.room_id and mapping.room_created:
             room_exists = await self.room_manager.space_manager.check_room_exists(mapping.room_id)
             if room_exists:
@@ -748,150 +243,20 @@ class AgentUserManager:
             logger.error(f"Failed to create room for agent {agent_id}")
         return result
 
-
     async def import_recent_history(
-        self,
-        agent_id: str,
-        agent_username: str,
-        agent_password: str,
-        room_id: str,
-        limit: int = 15
+        self, agent_id: str, agent_username: str, agent_password: str,
+        room_id: str, limit: int = 15
     ):
-        """Import recent Letta conversation history for UI continuity - delegates to room_manager"""
         return await self.room_manager.import_recent_history(
-            agent_id=agent_id,
-            agent_username=agent_username,
-            agent_password=agent_password,
-            room_id=room_id,
-            limit=limit
+            agent_id=agent_id, agent_username=agent_username,
+            agent_password=agent_password, room_id=room_id, limit=limit
         )
 
     async def auto_accept_invitations_with_tracking(self, room_id: str, mapping: AgentUserMapping):
-        """Auto-accept room invitations for admin and letta users with status tracking - delegates to room_manager"""
         return await self.room_manager.auto_accept_invitations_with_tracking(room_id, mapping)
 
     async def set_default_avatar_for_agent(self, agent_name: str, matrix_user_id: str) -> bool:
         return await self._avatar_service.set_default_avatar_for_agent(agent_name, matrix_user_id)
-    
+
     def _generate_avatar_image(self, agent_name: str, size: int = 128) -> Optional[bytes]:
         return self._avatar_service._generate_avatar_image(agent_name, size)
-
-    # Removed problematic invitation functions that caused endless loops
-    # The agent-based invitation system in room creation is sufficient
-
-# Global manager instance to preserve cache between sync runs
-_global_manager = None
-
-
-async def check_provisioning_health(config) -> dict:
-    """
-    Check the health of agent room provisioning.
-    
-    Returns a dict with:
-    - total_agents: Number of Letta agents
-    - agents_with_rooms: Number with valid room mappings
-    - agents_missing_rooms: List of agents without rooms
-    - status: 'healthy', 'degraded', or 'unhealthy'
-    """
-    global _global_manager
-    
-    if _global_manager is None:
-        _global_manager = AgentUserManager(config)
-    
-    manager = _global_manager
-    
-    try:
-        # Get all Letta agents
-        agents = await manager.get_letta_agents()
-        if agents is None:
-            return {
-                "total_agents": 0,
-                "agents_with_rooms": 0,
-                "agents_missing_rooms": [],
-                "missing_count": 0,
-                "status": "unhealthy",
-                "error": "Failed to fetch agents from Letta API",
-            }
-        total_agents = len(agents)
-        
-        # Load current mappings
-        await manager.load_existing_mappings()
-        
-        # Check which agents have rooms
-        agents_with_rooms = 0
-        agents_missing_rooms = []
-        
-        for agent in agents:
-            agent_id = agent.get("id", "")
-            agent_name = agent.get("name", "Unknown")
-            
-            mapping = manager.mappings.get(agent_id)
-            if mapping and mapping.room_id and mapping.room_created:
-                agents_with_rooms += 1
-            else:
-                agents_missing_rooms.append({
-                    "agent_id": agent_id,
-                    "agent_name": agent_name
-                })
-        
-        # Determine status
-        missing_count = len(agents_missing_rooms)
-        if missing_count == 0:
-            status = "healthy"
-        elif missing_count <= 3:
-            status = "degraded"
-        else:
-            status = "unhealthy"
-        
-        return {
-            "total_agents": total_agents,
-            "agents_with_rooms": agents_with_rooms,
-            "agents_missing_rooms": agents_missing_rooms,
-            "missing_count": missing_count,
-            "status": status
-        }
-        
-    except Exception as e:
-        logger.error(f"Error checking provisioning health: {e}")
-        return {
-            "total_agents": 0,
-            "agents_with_rooms": 0,
-            "agents_missing_rooms": [],
-            "missing_count": -1,
-            "status": "error",
-            "error": str(e)
-        }
-
-
-async def run_agent_sync(config):
-    """Run the agent sync process"""
-    global _global_manager
-    
-    # Configure logger for this module with same level as main
-    import sys
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(getattr(logging, config.log_level.upper()))
-    logger.addHandler(handler)
-    logger.setLevel(getattr(logging, config.log_level.upper()))
-
-    logger.info("Starting agent sync process from run_agent_sync")
-    
-    # Reuse existing manager to preserve cache
-    if _global_manager is None:
-        logger.info("Creating new AgentUserManager instance")
-        _global_manager = AgentUserManager(config)
-    else:
-        logger.debug("Reusing existing AgentUserManager instance (cache preserved)")
-    
-    manager = _global_manager
-    
-    # Ensure core users exist before syncing agents
-    logger.info("Ensuring core Matrix users exist...")
-    core_users = [
-        (config.username, config.password, "Letta Bot"),
-        (manager.admin_username, manager.admin_password, "Matrix Admin")
-    ]
-    await manager.user_manager.ensure_core_users_exist(core_users)
-    
-    await manager.sync_agents_to_users()
-    return manager
