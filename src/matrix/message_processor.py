@@ -43,6 +43,7 @@ from src.matrix.letta_bridge import (
 )
 from src.matrix import formatter as matrix_formatter
 from src.matrix.poll_handler import process_agent_response
+from src.matrix.presence_manager import notify_agent_busy, notify_agent_ready
 
 
 # ── Temporal durable delivery (opt-in) ────────────────────────────────
@@ -140,6 +141,7 @@ class MessageContext:
     room_agent_id: Optional[str]
     config: Config
     logger: logging.Logger
+    user_reply_to_event_id: Optional[str] = None
     client: Optional[AsyncClient] = None
     silent_mode: bool = False
     auth_manager: Any = None
@@ -156,6 +158,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
     event_sender_display_name = ctx.event_sender_display_name
     event_source = ctx.event_source
     original_event_id = ctx.original_event_id
+    user_reply_to_event_id = ctx.user_reply_to_event_id
     room_id = ctx.room_id
     room_display_name = ctx.room_display_name
     room_agent_id = ctx.room_agent_id
@@ -165,6 +168,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
     silent_mode = ctx.silent_mode
     auth_manager = ctx.auth_manager
 
+    effective_agent_id = room_agent_id or config.letta_agent_id
     message_to_send: Union[str, list] = event_body
     try:
         from src.core.mapping_service import get_mapping_by_matrix_user
@@ -185,6 +189,8 @@ async def process_letta_message(ctx: MessageContext) -> None:
 
         reply_to_event_id_for_envelope = None
         reply_to_sender_for_envelope = None
+        thread_root_event_id_for_routing = None
+        thread_latest_event_id_for_routing = None
 
         if event_source and isinstance(event_source, dict):
             content = event_source.get("content", {})
@@ -219,6 +225,16 @@ async def process_letta_message(ctx: MessageContext) -> None:
                         )
                     except (IndexError, ValueError):
                         pass
+
+            rel_type = relates_to.get("rel_type") if isinstance(relates_to, dict) else None
+            thread_root_candidate = (
+                relates_to.get("event_id") if isinstance(relates_to, dict) else None
+            )
+            if rel_type == "m.thread" and isinstance(thread_root_candidate, str):
+                thread_root_event_id_for_routing = thread_root_candidate
+                thread_latest_event_id_for_routing = (
+                    original_event_id or reply_to_event_id_for_envelope
+                )
 
         if not is_inter_agent_message:
             sender_agent_mapping = get_mapping_by_matrix_user(event_sender)
@@ -299,11 +315,11 @@ async def process_letta_message(ctx: MessageContext) -> None:
                 f"[MATRIX-CONTEXT] Added context for sender {event_sender}"
             )
 
-        # Send read receipt
         if original_event_id:
             asyncio.create_task(
                 send_read_receipt_as_agent(room_id, original_event_id, config, logger)
             )
+        asyncio.create_task(notify_agent_busy(effective_agent_id))
 
         # ── Temporal durable delivery (opt-in) ───────────────────────
         use_temporal = (
@@ -344,9 +360,10 @@ async def process_letta_message(ctx: MessageContext) -> None:
                 config,
                 logger,
                 room_id,
-                reply_to_event_id=None,
+                reply_to_event_id=original_event_id,
                 reply_to_sender=None,
                 opencode_sender=opencode_mxid,
+                thread_root_event_id=thread_root_event_id_for_routing,
             )
             if silent_mode:
                 logger.info(
@@ -393,7 +410,7 @@ async def process_letta_message(ctx: MessageContext) -> None:
                         response_text=letta_response,
                         config=config,
                         logger_instance=logger,
-                        reply_to_event_id=None,
+                        reply_to_event_id=original_event_id,
                         reply_to_sender=None,
                     )
                 )
@@ -414,8 +431,10 @@ async def process_letta_message(ctx: MessageContext) -> None:
                         letta_response,
                         config,
                         logger,
-                        reply_to_event_id=None,
+                        reply_to_event_id=original_event_id,
                         reply_to_sender=None,
+                        thread_event_id=thread_root_event_id_for_routing,
+                        thread_latest_event_id=thread_latest_event_id_for_routing,
                     )
 
                 if not sent_as_agent:
@@ -493,6 +512,9 @@ async def process_letta_message(ctx: MessageContext) -> None:
                 "Failed to send error message",
                 extra={"error": str(send_error)},
             )
+
+    finally:
+        asyncio.create_task(notify_agent_ready(effective_agent_id))
 
 
 # ── Error Handling Helpers ───────────────────────────────────────────

@@ -38,6 +38,7 @@ def _make_ctx(
     body: str = "hello",
     sender: str = "@user:test.com",
     source=None,
+    user_reply_to_event_id: str | None = None,
     silent_mode: bool = False,
     streaming: bool = False,
 ) -> MessageContext:
@@ -54,6 +55,7 @@ def _make_ctx(
         room_agent_id="agent-room-1",
         config=cfg,
         logger=_make_logger(),
+        user_reply_to_event_id=user_reply_to_event_id,
         client=None,
         silent_mode=silent_mode,
         auth_manager=None,
@@ -106,6 +108,68 @@ async def test_process_letta_message_silent_mode_suppresses_streaming_send():
         await process_letta_message(ctx)
 
     mock_send_as_agent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_letta_message_passes_thread_root_to_streaming_bridge():
+    ctx = _make_ctx(
+        silent_mode=False,
+        streaming=True,
+        user_reply_to_event_id="$reply-root",
+        source={
+            "content": {
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": "$thread-root",
+                    "m.in_reply_to": {"event_id": "$reply-root"},
+                }
+            }
+        },
+    )
+
+    with patch("src.core.mapping_service.get_mapping_by_matrix_user", return_value=None), \
+         patch("src.matrix.message_processor.matrix_formatter.format_message_envelope", return_value="ENV"), \
+         patch("src.matrix.message_processor.send_to_letta_api_streaming", new_callable=AsyncMock, return_value="streamed") as mock_stream:
+        await process_letta_message(ctx)
+
+    stream_await_args = mock_stream.await_args
+    assert stream_await_args is not None
+    assert stream_await_args.kwargs["thread_root_event_id"] == "$thread-root"
+    assert stream_await_args.kwargs["reply_to_event_id"] == "$evt-1"
+
+
+@pytest.mark.asyncio
+async def test_process_letta_message_passes_thread_context_to_non_streaming_send():
+    ctx = _make_ctx(
+        silent_mode=False,
+        streaming=False,
+        source={
+            "content": {
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": "$thread-root",
+                    "m.in_reply_to": {"event_id": "$reply-root"},
+                }
+            }
+        },
+    )
+
+    with patch("src.core.mapping_service.get_mapping_by_matrix_user", return_value=None), \
+         patch("src.matrix.message_processor.matrix_formatter.format_message_envelope", return_value="ENV"), \
+         patch("src.matrix.message_processor.send_to_letta_api", new_callable=AsyncMock, return_value="response"), \
+         patch("src.matrix.message_processor.process_agent_response", new_callable=AsyncMock, return_value=(False, "response", None)) as mock_process_agent_response, \
+         patch("src.matrix.message_processor.send_as_agent", new_callable=AsyncMock, return_value=True) as mock_send_as_agent:
+        await process_letta_message(ctx)
+
+    process_await_args = mock_process_agent_response.await_args
+    assert process_await_args is not None
+    assert process_await_args.kwargs["reply_to_event_id"] == "$evt-1"
+
+    send_await_args = mock_send_as_agent.await_args
+    assert send_await_args is not None
+    assert send_await_args.kwargs["reply_to_event_id"] == "$evt-1"
+    assert send_await_args.kwargs["thread_event_id"] == "$thread-root"
+    assert send_await_args.kwargs["thread_latest_event_id"] == "$evt-1"
 
 
 @pytest.mark.asyncio
