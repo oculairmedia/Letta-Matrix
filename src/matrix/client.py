@@ -782,9 +782,35 @@ async def _handle_passive_portal_message(
 
 
 async def _dispatch_letta_task(
-    room, event, config, logger, client, room_agent_id, gating_result, message_text
+    room,
+    event,
+    config,
+    logger,
+    client,
+    room_agent_id,
+    gating_result,
+    message_text,
+    user_reply_to_event_id,
 ) -> bool:
     task_key = (room.room_id, room_agent_id or 'unknown')
+    thread_event_id: Optional[str] = None
+    thread_latest_event_id: Optional[str] = None
+    reply_event_id_for_notice: Optional[str] = None
+    source = getattr(event, 'source', None)
+    if isinstance(source, dict):
+        content = source.get('content', {})
+        if isinstance(content, dict):
+            relates_to = content.get('m.relates_to', {})
+            if isinstance(relates_to, dict):
+                rel_type = relates_to.get('rel_type')
+                thread_root_candidate = relates_to.get('event_id')
+                if rel_type == 'm.thread' and isinstance(thread_root_candidate, str):
+                    thread_event_id = thread_root_candidate
+                    thread_latest_event_id = getattr(event, 'event_id', None) or user_reply_to_event_id
+                in_reply_to = relates_to.get('m.in_reply_to', {})
+                if isinstance(in_reply_to, dict):
+                    reply_event_id_for_notice = in_reply_to.get('event_id')
+
     existing_task = _active_letta_tasks.get(task_key)
     if existing_task and not existing_task.done():
         now = time.monotonic()
@@ -800,6 +826,11 @@ async def _dispatch_letta_task(
                     config,
                     logger,
                     msgtype='m.notice',
+                    reply_to_event_id=(
+                        None if thread_event_id else (reply_event_id_for_notice or user_reply_to_event_id)
+                    ),
+                    thread_event_id=thread_event_id,
+                    thread_latest_event_id=thread_latest_event_id,
                 )
                 _still_processing_last_sent[room.room_id] = now
             except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError) as notice_error:
@@ -824,6 +855,7 @@ async def _dispatch_letta_task(
         event_sender_display_name=sender_display_name,
         event_source=event_source,
         original_event_id=getattr(event, 'event_id', None),
+        user_reply_to_event_id=user_reply_to_event_id,
         room_id=room.room_id,
         room_display_name=room.display_name or room.room_id,
         room_agent_id=room_agent_id,
@@ -891,7 +923,7 @@ async def message_callback(
             f'{room.display_name or room.room_id}, processing as active request'
         )
 
-    message_text, _ = router._extract_message_content(event)
+    message_text, reply_to_event_id = router._extract_message_content(event)
     _ = router._is_silent_message(event.sender, [router.sender_mapping])
     filtered, gating_result = router._apply_group_gating(event, room_agent_user_id, message_text)
     if filtered:
@@ -930,7 +962,15 @@ async def message_callback(
         return
 
     await _dispatch_letta_task(
-        room, event, config, logger, client, room_agent_id, gating_result, message_text
+        room,
+        event,
+        config,
+        logger,
+        client,
+        room_agent_id,
+        gating_result,
+        message_text,
+        reply_to_event_id,
     )
 
 
@@ -1064,6 +1104,48 @@ async def periodic_agent_sync(config, logger, interval=None):
             logger.debug('Periodic agent sync completed successfully')
         except (MatrixClientError, RemoteProtocolError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.error('Periodic agent sync failed', extra={'error': str(e)})
+
+
+async def _set_all_agents_online(logger: logging.Logger) -> None:
+    try:
+        from src.core.identity_storage import get_identity_service
+        from src.matrix.presence_manager import PresenceState, get_presence_manager
+
+        svc = get_identity_service()
+        identities = svc.get_by_type("letta")
+        pairs: dict[str, str] = {}
+        for ident in identities:
+            mxid = str(ident.mxid) if ident.mxid is not None else ""
+            token = str(ident.access_token) if ident.access_token is not None else ""
+            if mxid and token:
+                pairs[mxid] = token
+        if pairs:
+            mgr = get_presence_manager()
+            count = await mgr.set_all_online(pairs)
+            logger.info("Set %d/%d agent identities to online", count, len(pairs))
+    except (ImportError, RuntimeError, ValueError, OSError) as exc:
+        logger.debug("Presence startup skipped: %s", exc)
+
+
+async def _set_all_agents_offline(logger: logging.Logger) -> None:
+    try:
+        from src.core.identity_storage import get_identity_service
+        from src.matrix.presence_manager import get_presence_manager
+
+        svc = get_identity_service()
+        identities = svc.get_by_type("letta")
+        pairs: dict[str, str] = {}
+        for ident in identities:
+            mxid = str(ident.mxid) if ident.mxid is not None else ""
+            token = str(ident.access_token) if ident.access_token is not None else ""
+            if mxid and token:
+                pairs[mxid] = token
+        if pairs:
+            mgr = get_presence_manager()
+            count = await mgr.set_all_offline(pairs)
+            logger.info("Set %d/%d agent identities to offline", count, len(pairs))
+    except (ImportError, RuntimeError, ValueError, OSError) as exc:
+        logger.debug("Presence shutdown skipped: %s", exc)
 
 
 async def main():
@@ -1229,6 +1311,9 @@ async def main():
         f'File handler initialized with embedding: model={config.embedding_model}, endpoint={config.embedding_endpoint or "default"}, dim={config.embedding_dim}'
     )
 
+    warmup_ok = await file_handler.warm_up_ingest_embedder()
+    logger.info(f'[HAYHOOKS-WARMUP] startup warm-up success={warmup_ok}')
+
     # Add the callback for text messages with config and logger
     # Wrap in try/except to prevent callback errors from breaking the sync loop
     async def callback_wrapper(room, event):
@@ -1289,11 +1374,14 @@ async def main():
         await client.sync(timeout=30000, full_state=False, sync_filter=initial_sync_filter)
         logger.info('Initial sync complete, now listening for new messages')
 
+        await _set_all_agents_online(logger)
+
         # Now start the main sync loop with regular filter
         await client.sync_forever(timeout=5000, full_state=False, sync_filter=sync_filter)
     except (MatrixClientError, RemoteProtocolError, asyncio.TimeoutError, aiohttp.ClientError) as e:
         logger.error('Error during sync', extra={'error': str(e)}, exc_info=True)
     finally:
+        await _set_all_agents_offline(logger)
         await cancel_all_letta_tasks()
         logger.info('Closing client session')
         await client.close()
