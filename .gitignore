@@ -109,7 +109,7 @@ temp/
 *.backup
 postgres-data.backup.*/
 matrix_client_data.backup.*/
-tuwunel-data.backup.*/
+tuwunel-data.backup*/
 
 # Agent tooling caches
 .sisyphus/

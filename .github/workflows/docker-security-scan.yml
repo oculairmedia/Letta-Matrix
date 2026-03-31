@@ -23,7 +23,7 @@ jobs:
         dockerfile:
           - docker/Dockerfile.matrix-client
           - docker/Dockerfile.matrix-api
-          - docker/Dockerfile.mcp-server
+          - docker/Dockerfile.opencode-bridge
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

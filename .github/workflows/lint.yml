@@ -2,7 +2,7 @@ name: Lint and Code Quality
 
 on:
   push:
-    branches: [main, develop, feature/sdk-migration]
+    branches: [main, develop]
     paths-ignore:
       - '.beads/**'
       - 'docs/bookstack/**'
@@ -70,10 +70,10 @@ jobs:
           dockerfile: docker/Dockerfile.matrix-api
           ignore: DL3008,DL3009
 
-      - name: Run Hadolint on mcp-server
+      - name: Run Hadolint on opencode-bridge
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: docker/Dockerfile.mcp-server
+          dockerfile: docker/Dockerfile.opencode-bridge
           ignore: DL3008,DL3009
 
   yaml-lint:
