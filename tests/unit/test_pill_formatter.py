@@ -203,7 +203,7 @@ class TestResolveMentions:
     def test_resolve_opencode_mxid(self, mock_mapping_service):
         from src.matrix.pill_formatter import _resolve_mentions
 
-        oc_mxid = "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca"
+        oc_mxid = "@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"
         results = _resolve_mentions(f"Check with {oc_mxid}")
         assert len(results) == 1
         assert results[0][1] == oc_mxid
@@ -298,7 +298,7 @@ class TestExtractAndConvertPills:
     def test_opencode_mxid_pill(self, mock_mapping_service):
         from src.matrix.pill_formatter import extract_and_convert_pills
 
-        oc_mxid = "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca"
+        oc_mxid = "@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"
         html, mxids = extract_and_convert_pills(
             f"Check with {oc_mxid}",
             f"<p>Check with {oc_mxid}</p>",

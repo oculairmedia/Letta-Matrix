@@ -5,7 +5,7 @@ import os
 
 async def get_user_token(username, password):
     """Get user token"""
-    login_url = "http://synapse:8008/_matrix/client/r0/login"
+    login_url = "http://tuwunel:6167/_matrix/client/r0/login"
     login_data = {
         "type": "m.login.password",
         "user": username,
@@ -21,7 +21,7 @@ async def get_user_token(username, password):
 
 async def get_user_rooms(token):
     """Get all rooms user is in"""
-    url = "http://synapse:8008/_matrix/client/r0/joined_rooms"
+    url = "http://tuwunel:6167/_matrix/client/r0/joined_rooms"
     headers = {"Authorization": f"Bearer {token}"}
     
     async with aiohttp.ClientSession() as session:
@@ -33,7 +33,7 @@ async def get_user_rooms(token):
 
 async def leave_room(token, room_id):
     """Leave a room"""
-    url = f"http://synapse:8008/_matrix/client/r0/rooms/{room_id}/leave"
+    url = f"http://tuwunel:6167/_matrix/client/r0/rooms/{room_id}/leave"
     headers = {"Authorization": f"Bearer {token}"}
     
     async with aiohttp.ClientSession() as session:
@@ -42,7 +42,7 @@ async def leave_room(token, room_id):
 
 async def forget_room(token, room_id):
     """Forget a room"""
-    url = f"http://synapse:8008/_matrix/client/r0/rooms/{room_id}/forget"
+    url = f"http://tuwunel:6167/_matrix/client/r0/rooms/{room_id}/forget"
     headers = {"Authorization": f"Bearer {token}"}
     
     async with aiohttp.ClientSession() as session:

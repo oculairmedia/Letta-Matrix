@@ -63,7 +63,7 @@ def generate_service_password(service_name: str) -> str:
     Generate a password for a service user (bridge bots, etc).
     
     Args:
-        service_name: Name of the service (e.g., "oc_matrix_synapse_deployment")
+        service_name: Name of the service (e.g., "oc_matrix_tuwunel_deploy")
         
     Returns:
         Generated password

@@ -2,6 +2,6 @@
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "server",
-  "dolt_database": "matrix_synapse_deployment",
+  "dolt_database": "matrix_tuwunel_deploy",
   "project_id": "dd9f5b83-90fd-411d-91c5-f290627352b1"
 }

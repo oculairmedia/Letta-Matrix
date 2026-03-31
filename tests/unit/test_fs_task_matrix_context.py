@@ -113,7 +113,7 @@ class TestFsTaskMatrixContext:
     async def test_huly_agent_defaults_to_fs_mode(self):
         """Huly agents should default to fs-task mode."""
         huly_agents = [
-            "Huly - Matrix Synapse",
+            "Huly - Matrix Tuwunel",
             "Huly - Personal Site", 
             "Huly-PM-Control",
         ]

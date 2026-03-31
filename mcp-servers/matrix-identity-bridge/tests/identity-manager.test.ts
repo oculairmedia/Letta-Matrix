@@ -30,7 +30,7 @@ describe('IdentityManager', () => {
 
   describe('OpenCode ID Generation', () => {
     it('should generate consistent IDs from directories', () => {
-      const directory = '/opt/stacks/matrix-synapse-deployment';
+      const directory = '/opt/stacks/matrix-tuwunel-deploy';
       
       const id1 = IdentityManager.generateOpenCodeId(directory);
       const id2 = IdentityManager.generateOpenCodeId(directory);
@@ -109,7 +109,7 @@ describe('IdentityManager', () => {
 
   describe('OpenCode Localpart Generation', () => {
     it('should generate valid Matrix localparts', () => {
-      const directory = '/opt/stacks/matrix-synapse-deployment';
+      const directory = '/opt/stacks/matrix-tuwunel-deploy';
       const localpart = IdentityManager.generateOpenCodeLocalpart(directory);
       
       // Matrix localparts must match [a-z0-9._=-]+

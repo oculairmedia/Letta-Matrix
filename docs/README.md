@@ -1,137 +1,133 @@
-# Letta-Matrix Integration
+# Matrix Tuwunel Deploy
 
-A comprehensive Matrix deployment with Letta AI bot integration and MCP (Model Context Protocol) server support.
+A comprehensive Matrix deployment with Letta AI agent integration, MCP tooling, and multi-agent identity management.
 
-## ⚠️ CRITICAL: We Use Tuwunel, NOT Synapse! ⚠️
+## Architecture
 
-**THIS DEPLOYMENT USES TUWUNEL AS THE MATRIX HOMESERVER, NOT SYNAPSE!**
+This deployment uses **Tuwunel** as the Matrix homeserver — a lightweight, Rust-based Matrix server using embedded RocksDB. There is no PostgreSQL database.
 
-- **Homeserver**: Tuwunel (lightweight embedded Matrix server)
-- **NO PostgreSQL**: Tuwunel uses RocksDB (embedded database)
-- **NO Synapse Admin APIs**: Standard Synapse admin endpoints DO NOT work
-- **Admin Tools**: Use Matrix client APIs or Tuwunel-specific tools only
+### Services
 
-**Common Mistakes to Avoid:**
-- ❌ Trying to use `/_synapse/admin/v1/*` endpoints (they don't exist)
-- ❌ Looking for PostgreSQL database or connection strings
-- ❌ Following Synapse-specific documentation
-- ✅ Use Matrix client API (`/_matrix/client/v3/*`) instead
-- ✅ Remember: Tuwunel is a different server implementation!
+| Service | Purpose |
+|---------|---------|
+| `tuwunel` | Matrix homeserver (port 6167 internal, exposed via nginx) |
+| `nginx` | Reverse proxy — routes Matrix, Element, and API traffic |
+| `element` | Element web client |
+| `matrix-client` | Core bot — agent routing, message processing, streaming |
+| `matrix-api` | FastAPI REST API (port 8004) — identity, agent sync, messaging |
+| `matrix-messaging-mcp` | MCP server for Matrix messaging tools |
+| `opencode-bridge` | Bridge for OpenCode ↔ Matrix integration |
+| `temporal-worker` | Temporal workflow worker for async tasks |
+| `ntfy` / `ntfy-bridge` | Push notification relay |
+| `livekit` / `lk-jwt-service` / `element-call` | Voice/video calling stack |
+| `matrix-internal` | Internal Matrix utilities |
 
-See [TUWUNEL_MIGRATION.md](./TUWUNEL_MIGRATION.md) for full details.
+### Key Differences from Synapse
 
----
-
-## Latest Updates (2025-01-04)
-- **Stable Agent Usernames**: Matrix usernames are now based on agent IDs instead of agent names, ensuring stability even when agents are renamed
-- **Fixed Session Management**: Resolved session scope issues in invitation handling  
-- **Improved Agent Sync**: All agent rooms are properly monitored and agents respond with their own Matrix identities
-
-A complete, self-contained Matrix deployment with Element web client and Matrix bot integration.
+- **No PostgreSQL** — Tuwunel uses RocksDB (embedded)
+- **No `/_synapse/admin/*` endpoints** — use Matrix client APIs or Tuwunel-specific admin endpoints
+- **No `synapse-data/`** — all homeserver data lives in `./tuwunel-data/`
+- **Service name** is `tuwunel`, not `synapse`
 
 ## Quick Start
 
-1. **Prerequisites**: Docker and Docker Compose installed on your system
+```bash
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your domain and secrets
 
-2. **Deploy**: Simply run:
-   ```bash
-   docker-compose up -d
-   ```
+# Start everything
+docker-compose up -d
 
-3. **Access**: 
-   - Element Web Client: http://localhost:8008
-   - Matrix Server: http://localhost:8008/_matrix/
+# Check logs
+docker-compose logs -f tuwunel
+docker-compose logs -f matrix-client
+```
 
-## What's Included
+**Access:**
+- Element Web: https://your-domain (via nginx)
+- Matrix API: `/_matrix/client/v3/*`
 
-- **Tuwunel**: Lightweight Matrix homeserver (NOT Synapse!)
-- **RocksDB**: Embedded database (NO PostgreSQL)
-- **Element Web**: Modern Matrix web client
-- **Nginx**: Reverse proxy for routing
-- **Matrix Client**: Custom bot integration with Letta agents
-- **MCP Server**: Model Context Protocol server for tool integration
-- **Letta Agent MCP**: Letta-specific MCP tools and agent management
+## Source Structure
+
+```
+src/
+├── api/              # FastAPI routes and schemas
+│   ├── routes/       # Agent sync, identity, messaging, DM rooms, portal links
+│   └── schemas/      # Pydantic models
+├── bridges/          # Letta ↔ Matrix bridge
+├── core/             # Agent provisioning, room management, identity, spaces
+├── letta/            # Letta client, webhook handler, streaming, approval
+├── matrix/           # Matrix client, message processing, file handling, streaming
+├── models/           # Data models (agent mapping, conversation, identity)
+├── utils/            # Password utilities, SSRF protection
+└── voice/            # TTS, transcription, directive parsing
+```
+
+### Key Modules
+
+- **`src/matrix/client.py`** — Main Matrix client with sync loop and event handling
+- **`src/letta/webhook_handler.py`** — Processes Letta agent responses into Matrix messages
+- **`src/core/agent_user_manager.py`** — Agent ↔ Matrix user provisioning
+- **`src/core/room_manager.py`** — Room lifecycle management
+- **`src/core/space_manager.py`** — Letta Agents space organization
+- **`src/matrix/streaming.py`** — Live streaming of agent responses
 
 ## Configuration
 
-The deployment is pre-configured with sensible defaults in `.env`. Key settings:
+All configuration is in `.env`. Key settings:
 
-- **Server Name**: `matrix.oculair.ca` (change this to your domain)
-- **Database**: RocksDB embedded in Tuwunel (NO separate database service)
-- **Ports**: Exposed on port 8008 (via nginx proxy)
-- **Registration**: Enabled without verification for easy setup
-- **Tuwunel Data**: Stored in `./tuwunel-data/` directory
-
-## Customization
-
-### Change Server Name
-Edit `.env` and update:
-```
-SYNAPSE_SERVER_NAME=your-domain.com
+```bash
+MATRIX_SERVER_NAME=matrix.oculair.ca    # Your Matrix domain
+TUWUNEL_DATA_DIR=./tuwunel-data          # Homeserver data directory
+MATRIX_ADMIN_USERNAME=@matrixadmin:matrix.oculair.ca
+MATRIX_USERNAME=@letta:matrix.oculair.ca
+DEV_MODE=true                            # Simple passwords for development
 ```
 
-Also update `nginx_matrix_proxy.conf`:
-```
-server_name your-domain.com;
-```
+## Data Persistence
 
-### Data Persistence
-All data is stored in local directories:
-- `./tuwunel-data/`: Tuwunel's RocksDB database (ALL homeserver data)
-- `./synapse-data/`: Legacy configuration files (registration configs for bridges)
-- `./matrix_store/`: Matrix client session data
-- `./matrix_client_data/`: Agent mappings and space configuration
+- `./tuwunel-data/` — Tuwunel's RocksDB database (all homeserver data)
+- `./matrix_store/` — Matrix client session data
+- `./matrix_client_data/` — Agent mappings and space configuration
 
-## Security Notes
+## Multi-Agent System
 
-- Default passwords are set for development/testing
-- Change all passwords in `.env` for production use
-- Configure proper SSL/TLS termination for production
-- Review and adjust registration settings as needed
+Each Letta agent gets its own Matrix identity:
+
+- **Username**: `@agent_{uuid}:matrix.oculair.ca` (stable, ID-based)
+- **Display name**: Agent's human-readable name (auto-updates on rename)
+- **Dedicated room**: `{agent-name} - Letta Agent Chat`
+- **Space**: All agent rooms organized under "Letta Agents" space
+
+### Message Flow
+
+1. User sends message in agent room
+2. `matrix-client` routes to the correct Letta agent
+3. Agent processes and returns response (optionally streamed)
+4. Response posted as the agent's own Matrix user
 
 ## Troubleshooting
 
-### First Time Setup
-The system automatically generates configuration files on first run. This may take a few minutes.
-
-### Logs
-View service logs:
 ```bash
-docker-compose logs synapse
-docker-compose logs db
-docker-compose logs nginx
+# View service logs
+docker-compose logs -f tuwunel
+docker-compose logs -f matrix-client
+docker-compose logs -f matrix-api
+
+# Check agent sync
+docker logs matrix-tuwunel-deploy-matrix-client-1 | grep "agent sync"
+
+# Health checks
+curl http://localhost:8004/health        # Matrix API
+curl http://localhost:8008/_matrix/client/versions  # Tuwunel
 ```
 
-### Registration Issues
-If user registration fails, ensure `enable_registration_without_verification: true` is set in the generated `synapse-data/homeserver.yaml`.
+## Documentation
 
-## Services
-
-- **synapse**: Matrix homeserver (port 8008)
-- **db**: PostgreSQL database
-- **element**: Element web client
-- **nginx**: Reverse proxy
-- **matrix-client**: Custom Matrix bot (optional)
-
-Stop services:
-```bash
-docker-compose down
-```
-
-Remove all data (destructive):
-```bash
-docker-compose down -v
-rm -rf synapse-data postgres-data matrix_store
-```
-
-## Files Overview
-
-- `docker-compose.yml` - Service definitions
-- `.env` - Configuration variables
-- `synapse_entrypoint.sh` - Synapse initialization script
-- `nginx_matrix_proxy.conf` - Nginx routing configuration
-- `element-config.json` - Element web client config
-- `Dockerfile.matrix-client` - Matrix bot container
-- `requirements.txt` - Python dependencies
-- `custom_matrix_client.py` - Matrix bot implementation
-- `matrix_auth.py` - Authentication utilities
+- [Architecture Diagram](./ARCHITECTURE_DIAGRAM.md) — Full system architecture
+- [Tuwunel Migration](./TUWUNEL_MIGRATION.md) — Migration details from Synapse
+- [Matrix MCP Tools](./MATRIX_MCP_TOOLS.md) — MCP tool reference
+- [Testing](./TESTING.md) — Test suite documentation
+- [CI/CD Setup](./CI_CD_SETUP.md) — GitHub Actions pipeline
+- [OpenCode Integration](./OPENCODE_MATRIX_INTEGRATION.md) — OpenCode bridge docs

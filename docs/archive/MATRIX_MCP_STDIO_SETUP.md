@@ -58,7 +58,7 @@ The tool will be invoked via STDIO, avoiding the HTTP streaming race condition i
 
 - `/opt/stacks/matrix-messaging-mcp/mcp-stdio.sh`: STDIO wrapper script
 - `/opt/stacks/matrix-messaging-mcp/src/index.ts`: Updated to support both transports
-- `/opt/stacks/matrix-synapse-deployment/opencode.json`: OpenCode MCP configuration
+- `/opt/stacks/matrix-tuwunel-deploy/opencode.json`: OpenCode MCP configuration
 
 ## Testing
 

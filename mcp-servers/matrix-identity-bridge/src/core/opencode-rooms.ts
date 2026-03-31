@@ -89,7 +89,7 @@ export const getOrCreateOpenCodeRoom = async (
   const roomName = `OpenCode: ${projectName}`;
 
   const createNewRoom = async (): Promise<string> => {
-    const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_synapse_deployment:matrix.oculair.ca';
+    const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_tuwunel_deploy:matrix.oculair.ca';
     const adminMxid = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
     const ownerMxid = process.env.OPENCODE_OWNER_MXID || '@oculair:matrix.oculair.ca';
     
@@ -146,7 +146,7 @@ export const getOrCreateOpenCodeRoom = async (
       return await createNewRoom();
     }
 
-    const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_synapse_deployment:matrix.oculair.ca';
+    const bridgeUserMxid = process.env.OPENCODE_BRIDGE_MXID || '@oc_matrix_tuwunel_deploy:matrix.oculair.ca';
     const adminMxid = process.env.MATRIX_ADMIN_USERNAME || '@admin:matrix.oculair.ca';
     const ownerMxid = process.env.OPENCODE_OWNER_MXID || '@oculair:matrix.oculair.ca';
     let needsSave = false;

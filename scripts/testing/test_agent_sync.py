@@ -13,7 +13,7 @@ from agent_user_manager import AgentUserManager
 async def test_sync():
     # Create a test config object
     class Config:
-        homeserver_url = "http://synapse:8008"
+        homeserver_url = "http://tuwunel:6167"
         username = "@letta:matrix.oculair.ca"
         password = "letta"
         letta_api_url = "http://192.168.50.90:8289"

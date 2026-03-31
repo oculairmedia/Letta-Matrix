@@ -49,7 +49,7 @@ class TestConfig:
         assert config.log_level == "INFO"  # Default value
 
     @patch.dict('os.environ', {
-        'MATRIX_HOMESERVER_URL': 'http://env-synapse:8008',
+        'MATRIX_HOMESERVER_URL': 'http://env-tuwunel:6167',
         'MATRIX_USERNAME': '@env_user:matrix.test',
         'MATRIX_PASSWORD': 'env_password',
         'MATRIX_ROOM_ID': '!env_room:matrix.test',
@@ -62,7 +62,7 @@ class TestConfig:
         """Test loading configuration from environment variables"""
         config = Config.from_env()
 
-        assert config.homeserver_url == "http://env-synapse:8008"
+        assert config.homeserver_url == "http://env-tuwunel:6167"
         assert config.username == "@env_user:matrix.test"
         assert config.password == "env_password"
         assert config.room_id == "!env_room:matrix.test"

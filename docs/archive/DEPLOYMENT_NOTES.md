@@ -26,7 +26,7 @@
 
 ## Rollback Plan (if needed)
 ```bash
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 git log --oneline  # Find commit hash before c2e2858
 git revert c2e2858
 git push origin main

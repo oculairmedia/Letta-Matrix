@@ -53,8 +53,8 @@ As a Letta agent, when I try to message an OpenCode instance that has terminated
   success: true,
   instances: [
     {
-      directory: "/opt/stacks/matrix-synapse-deployment",
-      project_name: "matrix-synapse-deployment",
+      directory: "/opt/stacks/matrix-tuwunel-deploy",
+      project_name: "matrix-tuwunel-deploy",
       identity: "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca",
       display_name: "OpenCode: Matrix Synapse Deployment",
       active: true,
@@ -78,7 +78,7 @@ As a Letta agent, when I try to message an OpenCode instance that has terminated
 ```typescript
 {
   operation: "talk_to_opencode",
-  target: "matrix-synapse-deployment",  // project name OR directory path
+  target: "matrix-tuwunel-deploy",  // project name OR directory path
   message: "Here is the information you requested..."
 }
 ```
@@ -87,7 +87,7 @@ As a Letta agent, when I try to message an OpenCode instance that has terminated
 ```typescript
 {
   success: true,
-  target: "matrix-synapse-deployment",
+  target: "matrix-tuwunel-deploy",
   target_identity: "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca",
   room_id: "!roomId:matrix.oculair.ca",
   event_id: "$eventId",
@@ -100,7 +100,7 @@ As a Letta agent, when I try to message an OpenCode instance that has terminated
 ```typescript
 {
   success: false,
-  error: "OpenCode instance 'matrix-synapse-deployment' is not currently active",
+  error: "OpenCode instance 'matrix-tuwunel-deploy' is not currently active",
   suggestion: "The instance may have terminated. Use opencode_list to see active instances."
 }
 ```

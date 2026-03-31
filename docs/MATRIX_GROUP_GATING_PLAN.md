@@ -6,7 +6,7 @@ The Matrix bridge (`letta-matrix-client` container) currently responds to every 
 ## Architecture Understanding
 
 **Correct Flow:**
-1. Matrix messages → `matrix-synapse-deployment` / `letta-matrix-client` container
+1. Matrix messages → `matrix-tuwunel-deploy` / `letta-matrix-client` container
 2. Python bridge (`src/matrix/client.py`) processes messages via `nio` library
 3. Bridge sends to LettaBot via WebSocket gateway OR falls back to direct Letta API
 4. Responses flow back through bridge to Matrix
@@ -286,7 +286,7 @@ if silent_mode:
 
 ### Environment Variable
 ```bash
-# In matrix-synapse-deployment .env
+# In matrix-tuwunel-deploy .env
 MATRIX_GROUPS_JSON='{
   "*": {
     "mode": "listen",
@@ -363,7 +363,7 @@ matrix_groups:
 
 ## Deployment
 
-1. Add environment variable to `matrix-synapse-deployment/.env`
+1. Add environment variable to `matrix-tuwunel-deploy/.env`
 2. Rebuild `letta-matrix-client` container
 3. Restart container: `docker compose restart matrix-client`
 4. Monitor logs for `[GROUP_GATING]` messages

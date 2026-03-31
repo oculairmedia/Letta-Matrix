@@ -8,7 +8,7 @@
 - **Project Name**: Matrix Tuwunel Deploy
 - **PM Agent ID**: `agent-b19ab6d5-460b-48f7-b300-738021d9a882`
 - **Path**: `/opt/stacks/matrix-tuwunel-deploy`
-- **Beads Prefix**: `matrix-synapse-deployment`
+- **Beads Prefix**: `matrix-tuwunel-deploy`
 
 ## Workflow Instructions
 
@@ -21,7 +21,7 @@
 <!-- VIBESYNC:reporting-hierarchy:START -->
 ## PM Agent Communication
 
-**Project PM Agent:** `Huly - Matrix Synapse Deployment` (agent-870d3dfb-319f-4c52-91f1-72ab46d944a7)
+**Project PM Agent:** `Huly - matrix-tuwunel-deploy` (agent-870d3dfb-319f-4c52-91f1-72ab46d944a7)
 
 ### Reporting Hierarchy
 
@@ -42,9 +42,9 @@ You (Developer Agent - experienced)
 ```json
 {
   "operation": "talk_to_agent",
-  "agent": "Huly - Matrix Synapse Deployment",
+  "agent": "Huly - matrix-tuwunel-deploy",
   "message": "<your report>",
-  "caller_directory": "/opt/stacks/matrix-synapse-deployment"
+  "caller_directory": "/opt/stacks/matrix-tuwunel-deploy"
 }
 ```
 
@@ -202,7 +202,7 @@ Install or refresh the cron entry with:
 
 **How auto-recovery works:**
 
-1. The script tests login for all critical users (`admin`, `letta`, `oc_letta_v2`, `oc_matrix_synapse_deployment_v2`)
+1. The script tests login for all critical users (`admin`, `letta`, `oc_letta_v2`, `oc_matrix_tuwunel_deploy_v2`)
 2. The script discovers all Letta agent identities from the identity bridge storage (`mcp-servers/matrix-identity-bridge/data/archive/identities.json`) and tests their logins in parallel (10 concurrent)
 3. If any core user fails, recovery is attempted in two tiers:
 
@@ -268,7 +268,7 @@ Send commands to `#admins:matrix.oculair.ca` as any user who is a member of the 
    - `admin` / `$MATRIX_ADMIN_PASSWORD`
    - `letta` / `letta`
    - `oc_letta_v2` / `oc_letta_v2`
-   - `oc_matrix_synapse_deployment_v2` / `oc_matrix_synapse_deployment_v2`
+   - `oc_matrix_tuwunel_deploy_v2` / `oc_matrix_tuwunel_deploy_v2`
 
 3. **Restart services**:
 

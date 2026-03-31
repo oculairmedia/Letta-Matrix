@@ -139,7 +139,7 @@ export const schema = {
     'Agent name OR ID - the simplest way to specify an agent. Examples: "Meridian", "BMO", or a full UUID.'
   ),
   target: z.string().optional().describe(
-    'Target OpenCode instance for talk_to_opencode. Can be project name (e.g., "matrix-synapse-deployment") or full directory path.'
+    'Target OpenCode instance for talk_to_opencode. Can be project name (e.g., "matrix-tuwunel-deploy") or full directory path.'
   ),
   
   // === INTERNAL: Injected by proxy from X-Agent-Id header ===
@@ -954,7 +954,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           } else if (data.needs_invite) {
             console.log(`[MatrixMessaging] OpenCode bridge needs invite to ${roomId}, inviting...`);
             // Bridge couldn't join — invite it from the caller identity
-            senderClient.inviteUser('@oc_matrix_synapse_deployment:matrix.oculair.ca', roomId)
+            senderClient.inviteUser('@oc_matrix_tuwunel_deploy:matrix.oculair.ca', roomId)
               .then(() => fetch(`${bridgeUrl}/ensure-joined`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

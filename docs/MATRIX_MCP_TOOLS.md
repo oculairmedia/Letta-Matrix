@@ -1,12 +1,12 @@
 # Matrix MCP Tools Documentation
 
 ## Overview
-This document describes the Matrix MCP (Model Context Protocol) tools integrated with the Matrix Synapse deployment. These tools provide seamless Matrix functionality for the Letta agent without requiring manual authentication or token management.
+This document describes the Matrix MCP (Model Context Protocol) tools integrated with the Matrix Tuwunel deployment. These tools provide seamless Matrix functionality for the Letta agent without requiring manual authentication or token management.
 
 ## Architecture
 
 ```
-Letta Agent ←→ MCP Server ←→ Matrix API Service ←→ Matrix Synapse ←→ GMMessages Bridge
+Letta Agent ←→ MCP Server ←→ Matrix API Service ←→ Tuwunel Homeserver ←→ GMMessages Bridge
 ```
 
 ## Available Tools
@@ -91,7 +91,7 @@ Tools communicate with the Matrix API service at `http://localhost:8004`:
 ### Environment Variables
 ```bash
 # Matrix Client Settings (from .env)
-MATRIX_HOMESERVER_URL=http://synapse:8008
+MATRIX_HOMESERVER_URL=http://tuwunel:6167
 MATRIX_USERNAME=@letta:matrix.oculair.ca
 MATRIX_PASSWORD=letta
 MATRIX_ROOM_ID=!LWmNEJcwPwVWlbmNqe:matrix.oculair.ca
@@ -102,7 +102,7 @@ MATRIX_ROOM_ID=!LWmNEJcwPwVWlbmNqe:matrix.oculair.ca
 # Tool registration in mcp_http_server.py
 self.tools["matrix_send_message"] = MatrixSendMessageTool(
     self.matrix_api_url,      # http://matrix-api:8000  
-    self.matrix_homeserver,   # http://synapse:8008
+    self.matrix_homeserver,   # http://tuwunel:6167
     self.letta_username,      # letta
     self.letta_password       # letta
 )
@@ -167,7 +167,7 @@ curl -X POST http://localhost:8015/mcp \
 
 ### Integration Testing  
 ```bash
-# Test full flow: MCP → Matrix API → Synapse
+# Test full flow: MCP → Matrix API → Tuwunel
 curl -X POST http://localhost:8004/messages/send \
   -d '{"room_id": "!test:matrix.oculair.ca", "message": "test"}'
 ```

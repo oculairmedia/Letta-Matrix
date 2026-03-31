@@ -29,7 +29,7 @@ This test suite validates the inter-agent messaging system, specifically ensurin
 ### Run Simple Tests (Recommended)
 
 ```bash
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 
 # Make executable
 chmod +x test_inter_agent_simple.py
@@ -41,7 +41,7 @@ python3 test_inter_agent_simple.py
 ### Run Comprehensive Tests
 
 ```bash
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 
 # Install test dependencies
 pip3 install pytest pytest-asyncio

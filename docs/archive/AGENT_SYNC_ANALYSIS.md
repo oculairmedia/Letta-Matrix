@@ -176,7 +176,7 @@ To monitor sync behavior:
 docker-compose logs -f matrix-client | grep -E "agent sync|AGENT_SYNC"
 
 # Check agent mappings
-cat /opt/stacks/matrix-synapse-deployment/matrix_client_data/agent_user_mappings.json
+cat /opt/stacks/matrix-tuwunel-deploy/matrix_client_data/agent_user_mappings.json
 ```
 
 ## Performance Metrics

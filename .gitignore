@@ -8,7 +8,7 @@ livekit.yaml
 
 # Database files
 postgres-data/
-synapse-data/
+tuwunel-data/
 
 # Log files
 *.log

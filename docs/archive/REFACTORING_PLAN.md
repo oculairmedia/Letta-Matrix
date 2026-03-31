@@ -112,7 +112,7 @@ The Letta-Matrix integration has grown organically and now requires refactoring 
 
 **Proposed Structure**:
 ```
-/opt/stacks/matrix-synapse-deployment/
+/opt/stacks/matrix-tuwunel-deploy/
 ├── src/
 │   ├── __init__.py
 │   ├── core/                      # Core business logic

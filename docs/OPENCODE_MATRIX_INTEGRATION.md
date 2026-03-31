@@ -94,7 +94,7 @@ Messages appear in OpenCode as context
 ```typescript
 // On session.created
 1. Get directory from context
-2. Hash/slugify: /opt/stacks/matrix-synapse-deployment → opencode-matrix-synapse-deployment
+2. Hash/slugify: /opt/stacks/matrix-tuwunel-deploy → opencode-matrix-tuwunel-deploy
 3. Call MCP: register_identity(identity, directory)
 4. Store returned token in sessionMetadata
 5. Make token available to tools
@@ -244,13 +244,13 @@ identity = (
 
 **Storage Location:**
 ```
-/opt/stacks/matrix-synapse-deployment/matrix_client_data/identities.json
+/opt/stacks/matrix-tuwunel-deploy/matrix_client_data/identities.json
 {
-  "opencode-matrix-synapse-deployment": {
-    "user_id": "@opencode-matrix-synapse-deployment:matrix.oculair.ca",
+  "opencode-matrix-tuwunel-deploy": {
+    "user_id": "@opencode-matrix-tuwunel-deploy:matrix.oculair.ca",
     "created_at": "2025-11-30T...",
     "last_seen": "2025-11-30T...",
-    "directory": "/opt/stacks/matrix-synapse-deployment"
+    "directory": "/opt/stacks/matrix-tuwunel-deploy"
   }
 }
 ```
@@ -313,8 +313,8 @@ curl -X POST http://localhost:8016/mcp \
       "name": "matrix_identity",
       "arguments": {
         "action": "register",
-        "identity": "opencode-matrix-synapse-deployment",
-        "directory": "/opt/stacks/matrix-synapse-deployment"
+        "identity": "opencode-matrix-tuwunel-deploy",
+        "directory": "/opt/stacks/matrix-tuwunel-deploy"
       }
     }
   }'
@@ -322,7 +322,7 @@ curl -X POST http://localhost:8016/mcp \
 # Response:
 # {
 #   "access_token": "syt_opencode...",
-#   "user_id": "@opencode-matrix-synapse-deployment:matrix.oculair.ca",
+#   "user_id": "@opencode-matrix-tuwunel-deploy:matrix.oculair.ca",
 #   "sync_token": null
 # }
 ```

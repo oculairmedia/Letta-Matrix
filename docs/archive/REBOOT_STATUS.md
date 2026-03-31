@@ -35,7 +35,7 @@
 sleep 180
 
 # 2. Check services are running
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 docker-compose ps
 
 # 3. Check agent sync progress

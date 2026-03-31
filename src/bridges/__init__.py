@@ -1,5 +1,5 @@
 """
-Matrix-synapse-deployment bridges module.
+Matrix-tuwunel-deploy bridges module.
 
 Contains bridge services for connecting external platforms to Matrix.
 """

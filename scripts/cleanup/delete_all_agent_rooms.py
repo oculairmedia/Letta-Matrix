@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Delete all agent rooms using Synapse Admin API
+Delete all agent rooms using Tuwunel Admin API
 """
 import asyncio
 import aiohttp
@@ -46,7 +46,7 @@ async def leave_and_forget_room(homeserver_url, admin_token, room_id, user_id):
 
 async def shutdown_room(homeserver_url, admin_token, room_id, room_name=None):
     """Shutdown a room using admin API"""
-    url = f"{homeserver_url}/_synapse/admin/v1/shutdown_room/{room_id}"
+    url = f"{homeserver_url}/_conduit/admin/v1/shutdown_room/{room_id}"
     headers = {
         "Authorization": f"Bearer {admin_token}",
         "Content-Type": "application/json"

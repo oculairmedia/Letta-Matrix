@@ -101,7 +101,7 @@ class TestAgentMediaIntegration:
         from src.matrix.agent_media import fetch_and_send_image
         
         mock_config = Mock()
-        mock_config.homeserver_url = "http://test-synapse:8008"
+        mock_config.homeserver_url = "http://test-tuwunel:6167"
         mock_logger = Mock()
         
         with patch('src.matrix.agent_media.build_pinned_connector') as mock_build:
@@ -123,7 +123,7 @@ class TestAgentMediaIntegration:
         from src.matrix.agent_media import fetch_and_send_file
         
         mock_config = Mock()
-        mock_config.homeserver_url = "http://test-synapse:8008"
+        mock_config.homeserver_url = "http://test-tuwunel:6167"
         mock_logger = Mock()
         
         with patch('src.matrix.agent_media.build_pinned_connector') as mock_build:
@@ -145,7 +145,7 @@ class TestAgentMediaIntegration:
         from src.matrix.agent_media import fetch_and_send_video
         
         mock_config = Mock()
-        mock_config.homeserver_url = "http://test-synapse:8008"
+        mock_config.homeserver_url = "http://test-tuwunel:6167"
         mock_logger = Mock()
         
         with patch('src.matrix.agent_media.build_pinned_connector') as mock_build:

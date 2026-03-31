@@ -3,7 +3,7 @@ import requests
 import json
 
 # Direct API call to join room
-HOMESERVER = "http://synapse:8008"
+HOMESERVER = "http://tuwunel:6167"
 ROOM_ALIAS = "#_discord_1386202835104043111_1386202835787452529:oculair.ca"
 
 # First, let's register the bot user if needed

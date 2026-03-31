@@ -39,7 +39,7 @@ GHOST_SPACE_IDS = [
 
 async def get_admin_token():
     """Get admin token"""
-    login_url = "http://synapse:8008/_matrix/client/r0/login"
+    login_url = "http://tuwunel:6167/_matrix/client/r0/login"
     login_data = {
         "type": "m.login.password",
         "user": "matrixadmin",
@@ -69,7 +69,7 @@ async def cleanup_ghost_spaces():
     
     for i, space_id in enumerate(GHOST_SPACE_IDS, 1):
         try:
-            url = f"http://synapse:8008/_synapse/admin/v1/rooms/{space_id}/delete"
+            url = f"http://tuwunel:6167/_conduit/admin/v1/rooms/{space_id}/delete"
             headers = {
                 "Authorization": f"Bearer {admin_token}",
                 "Content-Type": "application/json"

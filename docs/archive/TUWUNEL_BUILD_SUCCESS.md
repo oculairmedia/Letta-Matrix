@@ -35,7 +35,7 @@ tuwunel 1.4.6
 
 ### 1. Deploy Tuwunel Stack
 ```bash
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 docker-compose -f docker-compose.tuwunel.yml pull
 docker-compose -f docker-compose.tuwunel.yml up -d
 ```

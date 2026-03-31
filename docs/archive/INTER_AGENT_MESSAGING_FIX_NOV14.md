@@ -224,7 +224,7 @@ docker logs matrix-tuwunel-deploy-letta-agent-mcp-1 | grep "Agent login successf
 
 ### 3. Run Tests
 ```bash
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 python3 test_inter_agent_simple.py
 
 # Should see:

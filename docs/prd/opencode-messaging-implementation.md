@@ -20,7 +20,7 @@ operation: z.enum([
 ])
 
 target: z.string().optional().describe(
-  'Target OpenCode instance for talk_to_opencode. Can be project name (e.g., "matrix-synapse-deployment") or full directory path.'
+  'Target OpenCode instance for talk_to_opencode. Can be project name (e.g., "matrix-tuwunel-deploy") or full directory path.'
 )
 ```
 

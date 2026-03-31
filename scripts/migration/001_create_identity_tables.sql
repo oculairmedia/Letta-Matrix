@@ -1,7 +1,7 @@
 -- Migration: Add identity management tables
 -- Author: Sisyphus (OpenCode)
 -- Date: 2026-01-04
--- Issue: matrix-synapse-deployment-mybw
+-- Issue: matrix-tuwunel-deploy-mybw
 
 -- Identity table: stores Matrix user credentials and metadata
 CREATE TABLE IF NOT EXISTS identities (

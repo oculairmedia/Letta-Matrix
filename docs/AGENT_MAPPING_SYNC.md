@@ -2,23 +2,23 @@
 
 ## Overview
 
-Agent-to-room mappings are now stored in **PostgreSQL database** (since commit `db5dcf8`). This ensures reliable routing of Matrix messages to the correct Letta agents.
+Agent-to-room mappings ensure reliable routing of Matrix messages to the correct Letta agents. Mappings are managed through the agent sync orchestrator and stored in the agent mappings JSON file.
 
 ## Problem & Solution
 
 ### The Problem
 - Messages from all rooms were being routed to the default agent
-- The PostgreSQL database was empty while JSON file had 56 mappings
-- The routing code (`src/matrix/client.py`) queries the database, not the JSON file
+- The mappings file was out of sync with actual Matrix rooms
+- The routing code (`src/matrix/client.py`) relies on accurate mappings
 
 ### The Solution
-We created a sync script that migrates mappings from JSON to PostgreSQL and can be run whenever mappings go out of sync.
+The agent sync orchestrator (`src/core/agent_sync_orchestrator.py`) ensures mappings stay in sync. A manual sync script can be run when needed.
 
 ## Quick Fix (If Routing is Broken)
 
 ```bash
 # 1. Copy the sync script to the container
-docker cp /opt/stacks/matrix-synapse-deployment/scripts/admin/sync_mappings_to_db.py \
+docker cp /opt/stacks/matrix-tuwunel-deploy/scripts/admin/sync_mappings_to_db.py \
     matrix-tuwunel-deploy-matrix-client-1:/app/
 
 # 2. Run the sync
@@ -58,9 +58,9 @@ docker exec matrix-tuwunel-deploy-matrix-client-1 \
 ```
 Letta Agent Creation
     ↓
-agent_user_mappings.json (legacy)
+agent_user_mappings.json
     ↓
-PostgreSQL Database (current)
+Agent Sync Orchestrator
     ↓
 Matrix Message Routing (src/matrix/client.py)
     ↓
@@ -173,8 +173,8 @@ docker exec matrix-tuwunel-deploy-matrix-client-1 \
 ### Database Connection Errors
 
 **Symptoms:**
-- `could not translate host name "synapse-db"`
-- `psycopg2.OperationalError`
+- Connection errors to Matrix homeserver
+- Mapping lookup failures
 
 **Solution:**
 Run the sync script from **inside the matrix-client container**, not from the host:

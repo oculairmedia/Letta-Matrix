@@ -14,7 +14,7 @@ from dataclasses import dataclass
 @dataclass
 class IntegrationTestConfig:
     """Configuration for integration tests"""
-    homeserver_url: str = "http://mock-synapse:8008"
+    homeserver_url: str = "http://mock-tuwunel:6167"
     username: str = "@letta:mock.matrix.test"
     password: str = "mock_password"
     letta_api_url: str = "http://mock-letta:8283"

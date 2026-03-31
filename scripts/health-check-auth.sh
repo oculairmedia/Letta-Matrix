@@ -70,7 +70,7 @@ declare -A USERS=(
     ["admin"]="${MATRIX_ADMIN_PASSWORD:-}"
     ["letta"]="${MATRIX_PASSWORD:-letta}"
     ["oc_letta_v2"]="oc_letta_v2"
-    ["oc_matrix_synapse_deployment_v2"]="oc_matrix_synapse_deployment_v2"
+    ["oc_matrix_tuwunel_deploy_v2"]="oc_matrix_tuwunel_deploy_v2"
 )
 
 FAILED_USERS=()

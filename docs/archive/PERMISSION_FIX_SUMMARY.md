@@ -83,8 +83,8 @@ elif response.status == 403:
 
 ## Files Modified
 
-- `/opt/stacks/matrix-synapse-deployment/agent_user_manager.py` - Main fix implementation
-- `/opt/stacks/matrix-synapse-deployment/test_permission_fix.py` - Test script to verify the fix
+- `/opt/stacks/matrix-tuwunel-deploy/agent_user_manager.py` - Main fix implementation
+- `/opt/stacks/matrix-tuwunel-deploy/test_permission_fix.py` - Test script to verify the fix
 
 ## Testing
 

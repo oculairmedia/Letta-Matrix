@@ -55,7 +55,7 @@ class TestIsStreamingProgress:
         assert _is_streaming_progress("\n🔧 send_message...\n") is True
 
     def test_with_leading_mxid_prefix(self):
-        text = "@oc_matrix_synapse_deployment:matrix.oculair.ca ⏳ Still processing previous message..."
+        text = "@oc_matrix_tuwunel_deploy:matrix.oculair.ca ⏳ Still processing previous message..."
         assert _is_streaming_progress(text) is True
 
     # ── Multi-line progress blocks (live-edit) ────────────────────────
@@ -145,7 +145,7 @@ class TestNoTextFallbackEcho:
 
     def test_with_leading_mxid_prefix(self):
         text = (
-            "@oc_matrix_synapse_deployment:matrix.oculair.ca "
+            "@oc_matrix_tuwunel_deploy:matrix.oculair.ca "
             "Agent processed the request (no text response)."
         )
         assert _is_no_text_fallback_echo(text) is True

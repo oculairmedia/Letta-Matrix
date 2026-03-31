@@ -213,7 +213,7 @@ class MatrixRoomManager(
                 "@admin:matrix.oculair.ca",
                 self.admin_username,
                 self.config.username,
-                "@oc_matrix_synapse_deployment:matrix.oculair.ca",
+                "@oc_matrix_tuwunel_deploy:matrix.oculair.ca",
             ]
 
             room_data = {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Purge all agent rooms using Synapse Admin API
+Purge all agent rooms using Tuwunel Admin API
 """
 import asyncio
 import aiohttp
@@ -89,7 +89,7 @@ async def kick_all_users(homeserver_url, admin_token, room_id):
 async def block_room(homeserver_url, admin_token, room_id):
     """Block a room using the admin API"""
     # Try the block room API
-    url = f"{homeserver_url}/_synapse/admin/v1/rooms/{room_id}/block"
+    url = f"{homeserver_url}/_conduit/admin/v1/rooms/{room_id}/block"
     headers = {
         "Authorization": f"Bearer {admin_token}",
         "Content-Type": "application/json"

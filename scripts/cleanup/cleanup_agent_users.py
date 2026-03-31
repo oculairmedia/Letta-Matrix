@@ -26,7 +26,7 @@ async def get_admin_token(homeserver_url, admin_username, admin_password):
 
 async def list_all_users(homeserver_url, admin_token):
     """List all users on the server"""
-    url = f"{homeserver_url}/_synapse/admin/v2/users"
+    url = f"{homeserver_url}/_conduit/admin/v2/users"
     headers = {
         "Authorization": f"Bearer {admin_token}",
         "Content-Type": "application/json"
@@ -56,7 +56,7 @@ async def list_all_users(homeserver_url, admin_token):
 
 async def deactivate_user(homeserver_url, admin_token, user_id):
     """Deactivate a user"""
-    url = f"{homeserver_url}/_synapse/admin/v1/deactivate/{user_id}"
+    url = f"{homeserver_url}/_conduit/admin/v1/deactivate/{user_id}"
     headers = {
         "Authorization": f"Bearer {admin_token}",
         "Content-Type": "application/json"

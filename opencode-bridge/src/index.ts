@@ -428,7 +428,7 @@ async function initMatrix(): Promise<void> {
   matrixClient = sdk.createClient({
     baseUrl: config.matrix.homeserverUrl,
     accessToken: config.matrix.accessToken,
-    userId: "@oc_matrix_synapse_deployment:matrix.oculair.ca",
+    userId: "@oc_matrix_tuwunel_deploy:matrix.oculair.ca",
   });
 
   matrixClient.on(sdk.RoomEvent.Timeline, (event, room, toStartOfTimeline) => {

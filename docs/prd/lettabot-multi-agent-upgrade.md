@@ -14,7 +14,7 @@
 - Has `<system-reminder>` XML envelope, `<no-reply/>` suppression, group batching, live-edit streaming
 - Multi-channel: Matrix, Telegram, Slack, Discord, WhatsApp, Signal
 
-**Python Bridge** (`/opt/stacks/matrix-synapse-deployment`) — ~7,000 lines Python
+**Python Bridge** (`/opt/stacks/matrix-tuwunel-deploy`) — ~7,000 lines Python
 - 30+ agents, each with dedicated Matrix user and room
 - Agent discovery via Letta API polling
 - Matrix user provisioning, room creation, space management
@@ -307,7 +307,7 @@ Runs on a configurable interval (default: 300s) and on webhook trigger.
 For each new agent:
 
 1. Generate username: `agent_{safe_name}_{id_suffix}`
-2. Register user via Tuwunel admin API (or `/_synapse/admin/v2/users`)
+2. Register user via Tuwunel admin API (`/_matrix/client/v3/register`)
 3. Set display name to agent's Letta name
 4. Store credentials in `agent_mappings` table
 

@@ -239,7 +239,7 @@ docker logs matrix-tuwunel-deploy-matrix-client-1 | \
 **Debug**:
 ```bash
 # Check if agent user exists on Matrix server
-# (requires admin access to Synapse)
+# (requires admin access to Tuwunel)
 ```
 
 ## CI/CD Integration

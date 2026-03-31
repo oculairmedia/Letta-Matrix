@@ -57,7 +57,7 @@ A bidirectional bridge connecting Matrix (centralized chat) with real-a2a (P2P g
 ### 1. Matrix Bridge Service
 
 **Language:** TypeScript (Node.js)  
-**Location:** `/opt/stacks/matrix-synapse-deployment/real-a2a-bridge/`
+**Location:** `/opt/stacks/matrix-tuwunel-deploy/real-a2a-bridge/`
 
 **Responsibilities:**
 - Monitor Matrix rooms for messages
@@ -213,7 +213,7 @@ function roomToTopic(roomId: string): string {
 
 1. **Setup project structure**
    ```bash
-   cd /opt/stacks/matrix-synapse-deployment
+   cd /opt/stacks/matrix-tuwunel-deploy
    mkdir real-a2a-bridge
    cd real-a2a-bridge
    npm init -y
@@ -281,7 +281,7 @@ function roomToTopic(roomId: string): string {
 ## Code Structure
 
 ```
-/opt/stacks/matrix-synapse-deployment/real-a2a-bridge/
+/opt/stacks/matrix-tuwunel-deploy/real-a2a-bridge/
 ├── package.json
 ├── tsconfig.json
 ├── src/
@@ -544,7 +544,7 @@ After=network.target
 [Service]
 Type=simple
 User=matrix-bridge
-WorkingDirectory=/opt/stacks/matrix-synapse-deployment/real-a2a-bridge
+WorkingDirectory=/opt/stacks/matrix-tuwunel-deploy/real-a2a-bridge
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=10

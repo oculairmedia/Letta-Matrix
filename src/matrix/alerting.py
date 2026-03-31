@@ -49,7 +49,7 @@ def _should_send(alert_key: str) -> bool:
 async def send_alert(
     message: str,
     *,
-    title: str = "Matrix Synapse Alert",
+    title: str = "Matrix Tuwunel Alert",
     priority: str = "default",
     tags: str = "warning",
     alert_key: Optional[str] = None,

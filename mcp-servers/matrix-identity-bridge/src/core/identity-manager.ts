@@ -1,5 +1,5 @@
 /**
- * Identity Manager - Auto-provision Matrix users via Synapse Admin API
+ * Identity Manager - Auto-provision Matrix users via Tuwunel/Matrix Admin API
  */
 
 import type { MatrixIdentity, IdentityProvisionRequest } from '../types/index.js';
@@ -8,14 +8,14 @@ import { getAdminToken } from './admin-auth.js';
 import { getAgentMappingApi } from './agent-mapping-api.js';
 import { createHash } from 'node:crypto';
 
-interface SynapseUserCreateRequest {
+interface MatrixUserCreateRequest {
   password?: string;
   displayname?: string;
   avatar_url?: string;
   admin?: boolean;
 }
 
-interface SynapseUserResponse {
+interface MatrixUserResponse {
   name: string;
   displayname?: string;
   avatar_url?: string;
@@ -81,7 +81,7 @@ export class IdentityManager {
   }
 
   /**
-   * Provision a new Matrix user via Synapse Admin API
+   * Provision a new Matrix user via admin API
    */
   private async provisionIdentity(request: IdentityProvisionRequest): Promise<MatrixIdentity> {
     const mxid = `@${request.localpart}:${this.extractDomain()}`;
@@ -94,7 +94,7 @@ export class IdentityManager {
 
     // Create user via registration API - this may return an access token directly
     console.log('[IdentityManager] Registering user...');
-    const createResult = await this.createSynapseUser(
+    const createResult = await this.createMatrixUser(
       request.localpart,
       password,
       request.displayName,
@@ -145,14 +145,14 @@ export class IdentityManager {
   }
 
   /**
-   * Create Matrix user via standard registration API (Tuwunel/Synapse compatible)
+   * Create Matrix user via standard registration API (Tuwunel compatible)
    */
-  private async createSynapseUser(
+  private async createMatrixUser(
     localpart: string,
     password: string,
     displayName: string,
     avatarUrl?: string
-  ): Promise<SynapseUserResponse> {
+  ): Promise<MatrixUserResponse> {
     const url = `${this.homeserverUrl}/_matrix/client/v3/register`;
     
     // Use registration token for Tuwunel (from environment)
@@ -250,7 +250,7 @@ export class IdentityManager {
   }
   
   /**
-   * Reset user password - tries Tuwunel admin room first, then Synapse API fallback
+   * Reset user password - tries Tuwunel admin room first, then legacy API fallback
    */
   private async resetUserPassword(localpart: string, newPassword: string): Promise<void> {
     const userId = `@${localpart}:${this.extractDomain()}`;
@@ -261,13 +261,13 @@ export class IdentityManager {
       console.log('[IdentityManager] Password reset successful via Tuwunel admin room');
       return;
     } catch (tuwunelErr) {
-      console.log('[IdentityManager] Tuwunel admin room failed, trying Synapse API:', tuwunelErr);
+      console.log('[IdentityManager] Tuwunel admin room failed, trying legacy API:', tuwunelErr);
     }
     
     try {
       const token = await this.getToken();
-      const synapseUrl = `${this.homeserverUrl}/_synapse/admin/v1/reset_password/${encodeURIComponent(userId)}`;
-      const response = await fetch(synapseUrl, {
+      const legacyAdminUrl = `${this.homeserverUrl}/_synapse/admin/v1/reset_password/${encodeURIComponent(userId)}`;
+      const response = await fetch(legacyAdminUrl, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -280,7 +280,7 @@ export class IdentityManager {
       });
       
       if (response.ok) {
-        console.log('[IdentityManager] Password reset successful via Synapse admin API');
+        console.log('[IdentityManager] Password reset successful via legacy admin API');
         return;
       }
       
@@ -531,7 +531,7 @@ export class IdentityManager {
     const token = await this.getToken();
     const url = `${this.homeserverUrl}/_synapse/admin/v2/users/${identity.mxid}`;
 
-    const body: Partial<SynapseUserCreateRequest> = {};
+    const body: Partial<MatrixUserCreateRequest> = {};
     if (displayName !== undefined) {
       body.displayname = displayName;
       identity.displayName = displayName;

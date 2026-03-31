@@ -29,7 +29,7 @@ shift
 # Parse optional flags
 PRIORITY="default"
 TAGS="warning"
-TITLE="Matrix Synapse Alert"
+TITLE="Matrix Tuwunel Alert"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

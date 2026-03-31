@@ -216,7 +216,7 @@ self.tools["matrix_agent_message"] = MatrixAgentMessageTool(...)
 ### Quick Test
 
 ```bash
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 python3 test_inter_agent_context.py
 ```
 

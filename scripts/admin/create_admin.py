@@ -13,7 +13,7 @@ password = "admin123"
 admin = True
 
 # Generate nonce
-nonce_response = requests.get(f"{homeserver_url}/_synapse/admin/v1/register")
+nonce_response = requests.get(f"{homeserver_url}/_conduit/admin/v1/register")
 nonce = nonce_response.json()["nonce"]
 
 # Create MAC
@@ -34,7 +34,7 @@ register_data = {
 }
 
 response = requests.post(
-    f"{homeserver_url}/_synapse/admin/v1/register",
+    f"{homeserver_url}/_conduit/admin/v1/register",
     json=register_data
 )
 

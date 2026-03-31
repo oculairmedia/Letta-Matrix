@@ -102,7 +102,7 @@ def mock_pill_mapping_service():
         (
             "opencode",
             lambda: format_opencode_envelope(
-                "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca",
+                "@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca",
                 "Please run tests and summarize failures.",
                 "!room:matrix.oculair.ca",
                 "$event4",

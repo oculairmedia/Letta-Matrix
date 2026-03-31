@@ -1,5 +1,5 @@
 -- Rollback: Remove identity management tables
--- Issue: matrix-synapse-deployment-mybw
+-- Issue: matrix-tuwunel-deploy-mybw
 
 DROP INDEX IF EXISTS idx_dm_room_id;
 DROP INDEX IF EXISTS idx_dm_participant_2;

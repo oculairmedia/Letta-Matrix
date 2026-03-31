@@ -39,7 +39,7 @@ GHOST_SPACE_IDS = [
 
 async def get_admin_token():
     """Get admin token"""
-    login_url = "http://synapse:8008/_matrix/client/r0/login"
+    login_url = "http://tuwunel:6167/_matrix/client/r0/login"
     login_data = {
         "type": "m.login.password",
         "user": "matrixadmin",
@@ -54,10 +54,10 @@ async def get_admin_token():
     return None
 
 async def force_delete_room(admin_token, room_id):
-    """Force delete a room using Synapse admin API with maximum force"""
+    """Force delete a room using admin API with maximum force"""
     try:
         # First method: Admin delete API with purge
-        url = f"http://synapse:8008/_synapse/admin/v1/rooms/{room_id}"
+        url = f"http://tuwunel:6167/_conduit/admin/v1/rooms/{room_id}"
         headers = {
             "Authorization": f"Bearer {admin_token}",
             "Content-Type": "application/json"

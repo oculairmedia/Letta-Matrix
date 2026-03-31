@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any
 # Bridge configuration
 BRIDGE_URL = "http://localhost:3201"
 MATRIX_HOMESERVER = "http://127.0.0.1:6167"
-BRIDGE_USER_ID = "@oc_matrix_synapse_deployment:matrix.oculair.ca"
+BRIDGE_USER_ID = "@oc_matrix_tuwunel_deploy:matrix.oculair.ca"
 
 # Test room (Meridian's room)
 TEST_ROOM_ID = "!O8cbkBGCMB8Ujlaret:matrix.oculair.ca"
@@ -173,7 +173,7 @@ class TestMentionExtraction:
         pattern = r'@oc_[a-zA-Z0-9_]+:matrix\.oculair\.ca'
         
         # Should match
-        assert re.search(pattern, "@oc_matrix_synapse_deployment:matrix.oculair.ca")
+        assert re.search(pattern, "@oc_matrix_tuwunel_deploy:matrix.oculair.ca")
         assert re.search(pattern, "@oc_my_project:matrix.oculair.ca")
         assert re.search(pattern, "Hello @oc_test:matrix.oculair.ca how are you?")
         
@@ -214,7 +214,7 @@ class TestMessageForwarding:
             headers={"Authorization": f"Bearer {admin_token}"},
             json={
                 "msgtype": "m.text",
-                "body": f"@oc_matrix_synapse_deployment:matrix.oculair.ca test message {txn_id}"
+                "body": f"@oc_matrix_tuwunel_deploy:matrix.oculair.ca test message {txn_id}"
             },
             timeout=10
         )

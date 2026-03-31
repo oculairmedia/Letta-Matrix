@@ -26,7 +26,7 @@ async def get_admin_token(homeserver_url, admin_username, admin_password):
 
 async def list_all_rooms(homeserver_url, admin_token):
     """List all rooms on the server"""
-    url = f"{homeserver_url}/_synapse/admin/v1/rooms"
+    url = f"{homeserver_url}/_conduit/admin/v1/rooms"
     headers = {
         "Authorization": f"Bearer {admin_token}",
         "Content-Type": "application/json"
@@ -56,7 +56,7 @@ async def list_all_rooms(homeserver_url, admin_token):
 
 async def delete_room_from_server(homeserver_url, admin_token, room_id):
     """Delete a room"""
-    url = f"{homeserver_url}/_synapse/admin/v2/rooms/{room_id}"
+    url = f"{homeserver_url}/_conduit/admin/v2/rooms/{room_id}"
     headers = {
         "Authorization": f"Bearer {admin_token}",
         "Content-Type": "application/json"
@@ -77,7 +77,7 @@ async def delete_room_from_server(homeserver_url, admin_token, room_id):
         "message": "Room cleanup - starting fresh with agent rooms"
     }
     
-    url = f"{homeserver_url}/_synapse/admin/v2/rooms/{room_id}/delete"
+    url = f"{homeserver_url}/_conduit/admin/v2/rooms/{room_id}/delete"
     
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=data) as response:

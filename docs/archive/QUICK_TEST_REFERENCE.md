@@ -2,7 +2,7 @@
 
 ## Run All Tests
 ```bash
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 
 # Run all agent tests (routing + identity)
 python3 -m pytest test_agent_routing.py test_agent_response_identity.py -v

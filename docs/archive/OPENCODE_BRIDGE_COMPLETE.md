@@ -23,7 +23,7 @@ Matrix Room (Letta Agent ↔ OpenCode Identity)
 ### 1. OpenCode Bridge Service
 **Container**: `opencode-bridge`  
 **Port**: 3201  
-**Location**: `/opt/stacks/matrix-synapse-deployment/opencode-bridge`
+**Location**: `/opt/stacks/matrix-tuwunel-deploy/opencode-bridge`
 
 **Features**:
 - Auto-detects OpenCode identities in Matrix rooms (MXIDs starting with `@oc_`)
@@ -132,7 +132,7 @@ async function getActiveSessionId(baseUrl: string, directory: string): Promise<s
 curl -X POST http://127.0.0.1:3201/notify \
   -H "Content-Type: application/json" \
   -d '{
-    "directory": "/opt/stacks/matrix-synapse-deployment",
+    "directory": "/opt/stacks/matrix-tuwunel-deploy",
     "message": "Test message",
     "sender": "@test:matrix.oculair.ca",
     "agentName": "Test Bot"
@@ -144,7 +144,7 @@ Use matrix-mcp tool:
 ```json
 {
   "operation": "opencode_notify",
-  "directory": "/opt/stacks/matrix-synapse-deployment",
+  "directory": "/opt/stacks/matrix-tuwunel-deploy",
   "message": "Hello from Meridian!",
   "display_name": "Meridian"
 }
@@ -166,9 +166,9 @@ Use matrix-mcp tool:
 ## Files Changed
 
 ### Created
-- `/opt/stacks/matrix-synapse-deployment/opencode-bridge/` - Bridge service
-- `/opt/stacks/matrix-synapse-deployment/.opencode/plugin/matrix-bridge-registration.js` - Auto-registration plugin
-- `/opt/stacks/matrix-synapse-deployment/docker/Dockerfile.opencode-bridge` - Container image
+- `/opt/stacks/matrix-tuwunel-deploy/opencode-bridge/` - Bridge service
+- `/opt/stacks/matrix-tuwunel-deploy/.opencode/plugin/matrix-bridge-registration.js` - Auto-registration plugin
+- `/opt/stacks/matrix-tuwunel-deploy/docker/Dockerfile.opencode-bridge` - Container image
 
 ### Modified
 - `docker-compose.yml` - Added opencode-bridge service

@@ -29,7 +29,7 @@ This document details the fixes applied to resolve issues with the Matrix Tuwune
 
 ### 1. Updated Agent Discovery Endpoint
 ```python
-# /opt/stacks/matrix-synapse-deployment/agent_user_manager.py
+# /opt/stacks/matrix-tuwunel-deploy/agent_user_manager.py
 # Changed from:
 agents_endpoint = "http://192.168.50.90:8283/v1/agents/"
 # To:
@@ -103,17 +103,17 @@ To verify the fixes are working:
 
 ## Files Modified
 
-1. `/opt/stacks/matrix-synapse-deployment/agent_user_manager.py`
+1. `/opt/stacks/matrix-tuwunel-deploy/agent_user_manager.py`
    - Updated agent discovery endpoint
    - Enhanced response parsing for /v1/models format
    - Disabled blocking invitation processes
 
-2. `/opt/stacks/matrix-synapse-deployment/custom_matrix_client.py`
+2. `/opt/stacks/matrix-tuwunel-deploy/custom_matrix_client.py`
    - Improved message content extraction
    - Added debug logging for response structure
    - Disabled periodic and initial agent sync
 
-3. `/opt/stacks/matrix-synapse-deployment/matrix_client_data/agent_user_mappings.json`
+3. `/opt/stacks/matrix-tuwunel-deploy/matrix_client_data/agent_user_mappings.json`
    - Cleaned up stale agent entries
    - Kept only active Meridian agent
 

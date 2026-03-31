@@ -101,7 +101,7 @@ def _make_agent_mapping(
 
 @dataclass
 class MockConfig:
-    homeserver_url: str = "http://test-synapse:8008"
+    homeserver_url: str = "http://test-tuwunel:6167"
     username: str = "@test:matrix.test"
     password: str = "test_password"
     room_id: str = "!testroom:matrix.test"

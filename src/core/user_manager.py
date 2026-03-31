@@ -247,7 +247,7 @@ class MatrixUserManager:
         """Create a new Matrix user via registration API (Tuwunel compatible)
 
         Uses two-step registration with m.login.registration_token for Tuwunel.
-        Falls back to m.login.dummy for Synapse compatibility.
+        Falls back to m.login.dummy for Tuwunel compatibility.
 
         Args:
             username: Matrix username (localpart only, without @domain)
@@ -311,7 +311,7 @@ class MatrixUserManager:
                                 }
                             }
                         else:
-                            # Fallback to dummy auth (Synapse)
+                            # Fallback to dummy auth (Tuwunel)
                             complete_data = {
                                 "username": username,
                                 "password": password,
@@ -587,7 +587,7 @@ class MatrixUserManager:
         """Generate a password for a service user (bridge bots, etc).
         
         Args:
-            service_name: Name of the service (e.g., "oc_matrix_synapse_deployment")
+            service_name: Name of the service (e.g., "oc_matrix_tuwunel_deploy")
             
         Returns:
             Generated password

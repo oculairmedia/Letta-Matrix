@@ -2,7 +2,7 @@
 
 ## Files to Transfer to Production Server
 
-Transfer these files to `root@192.168.50.90:/opt/stacks/matrix-synapse-deployment/`:
+Transfer these files to `root@192.168.50.90:/opt/stacks/matrix-tuwunel-deploy/`:
 
 1. `matrix_api.py` - Matrix API source code with recent messages endpoint
 2. `Dockerfile.matrix-api` - Docker build configuration for Matrix API  
@@ -12,9 +12,9 @@ Transfer these files to `root@192.168.50.90:/opt/stacks/matrix-synapse-deploymen
 
 ```bash
 # From local development machine:
-scp matrix_api.py root@192.168.50.90:/opt/stacks/matrix-synapse-deployment/
-scp Dockerfile.matrix-api root@192.168.50.90:/opt/stacks/matrix-synapse-deployment/
-scp docker-compose.yml root@192.168.50.90:/opt/stacks/matrix-synapse-deployment/
+scp matrix_api.py root@192.168.50.90:/opt/stacks/matrix-tuwunel-deploy/
+scp Dockerfile.matrix-api root@192.168.50.90:/opt/stacks/matrix-tuwunel-deploy/
+scp docker-compose.yml root@192.168.50.90:/opt/stacks/matrix-tuwunel-deploy/
 ```
 
 ## Deployment Commands
@@ -22,7 +22,7 @@ scp docker-compose.yml root@192.168.50.90:/opt/stacks/matrix-synapse-deployment/
 ```bash
 # On production server:
 ssh root@192.168.50.90
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 
 # Build and start the Matrix API service
 docker-compose build matrix-api

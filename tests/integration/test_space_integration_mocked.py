@@ -40,7 +40,7 @@ from src.core.agent_user_manager import AgentUserManager, AgentUserMapping
 @dataclass
 class MockTestConfig:
     """Mock test configuration - mimics live test config but for mocking"""
-    homeserver_url: str = "http://mock-synapse:8008"
+    homeserver_url: str = "http://mock-tuwunel:6167"
     username: str = "@letta:mock.matrix.test"
     password: str = "mock_password"
     letta_api_url: str = "http://mock-letta:8283"

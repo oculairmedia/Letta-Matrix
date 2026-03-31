@@ -1,5 +1,5 @@
 """
-Temporal workflows for async file processing in the Matrix-Synapse deployment.
+Temporal workflows for async file processing in the Matrix-Tuwunel deployment.
 
 Documents uploaded to Matrix rooms are processed asynchronously via Temporal:
   1. Download from Matrix authenticated media API

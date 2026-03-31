@@ -66,7 +66,7 @@ Dockerfile*
 # Data directories (these are mounted as volumes)
 matrix_store/
 matrix_client_data/
-synapse-data/
+tuwunel-data/
 postgres-data/
 element-config/
 

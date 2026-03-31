@@ -15,7 +15,7 @@ ADMIN_PASSWORD = "letta"
 def login():
     url = f"{MATRIX_API_URL}/login"
     payload = {
-        "homeserver": "http://synapse:8008",
+        "homeserver": "http://tuwunel:6167",
         "user_id": ADMIN_USER,
         "password": ADMIN_PASSWORD,
         "device_name": "message_checker"

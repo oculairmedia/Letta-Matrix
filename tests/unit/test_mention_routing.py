@@ -26,7 +26,7 @@ def sample_agent_mappings():
         },
         "agent-870d3dfb-319f-4c52-91f1-72ab46d944a7": {
             "agent_id": "agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-            "agent_name": "Huly - Matrix Synapse Deployment",
+            "agent_name": "Huly - matrix-tuwunel-deploy",
             "matrix_user_id": "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca",
             "room_id": "!MtuqLUCwvKypRU6gll:matrix.oculair.ca",
             "room_created": True,
@@ -197,12 +197,12 @@ class TestExtractAgentMentions:
         """Test matching agents with 'Huly - ' prefix by partial name"""
         from src.matrix.mention_routing import extract_agent_mentions
         
-        body = "@Matrix Synapse Deployment please check this"
+        body = "@matrix-tuwunel-deploy please check this"
         mentions = extract_agent_mentions(body)
         
-        # Should match "Huly - Matrix Synapse Deployment"
+        # Should match "Huly - matrix-tuwunel-deploy"
         assert len(mentions) == 1
-        assert mentions[0][2] == "Huly - Matrix Synapse Deployment"
+        assert mentions[0][2] == "Huly - matrix-tuwunel-deploy"
     
     def test_extract_mixed_mxid_and_name(self, mock_mapping_service):
         """Test extracting both MXID and friendly name mentions"""
@@ -314,7 +314,7 @@ class TestForwardToAgentRoom:
                 target_room_id="!O8cbkBGCMB8Ujlaret:matrix.oculair.ca",
                 message="Hello @Meridian",
                 sender_mxid="@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 target_agent_name="Meridian",
                 original_event_id="$original456",
                 config=mock_config,
@@ -427,7 +427,7 @@ class TestHandleAgentMentionRouting:
         """Create a mock Matrix room"""
         room = Mock()
         room.room_id = "!MtuqLUCwvKypRU6gll:matrix.oculair.ca"
-        room.display_name = "Huly - Matrix Synapse Deployment"
+        room.display_name = "Huly - matrix-tuwunel-deploy"
         return room
     
     @pytest.fixture
@@ -455,7 +455,7 @@ class TestHandleAgentMentionRouting:
                 event=mock_event,
                 sender_mxid=mock_event.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
             )
@@ -474,7 +474,7 @@ class TestHandleAgentMentionRouting:
         
         # Agent mentions itself
         mock_event = Mock()
-        mock_event.body = "@Huly - Matrix Synapse Deployment check status"
+        mock_event.body = "@Huly - matrix-tuwunel-deploy check status"
         mock_event.sender = "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca"
         mock_event.event_id = "$self123"
         mock_event.source = {"content": {}}
@@ -485,7 +485,7 @@ class TestHandleAgentMentionRouting:
                 event=mock_event,
                 sender_mxid=mock_event.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
             )
@@ -513,7 +513,7 @@ class TestHandleAgentMentionRouting:
                 event=mock_event,
                 sender_mxid=mock_event.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
             )
@@ -542,7 +542,7 @@ class TestHandleAgentMentionRouting:
                 event=mock_event,
                 sender_mxid=mock_event.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
             )
@@ -569,7 +569,7 @@ class TestHandleAgentMentionRouting:
                 event=mock_event,
                 sender_mxid=mock_event.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
             )
@@ -591,7 +591,7 @@ class TestHandleAgentMentionRouting:
                 event=mock_event,
                 sender_mxid=mock_event.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
             )
@@ -625,7 +625,7 @@ class TestGetMappingByAgentName:
             },
             "agent-3": {
                 "agent_id": "agent-3",
-                "agent_name": "Huly - Matrix Synapse Deployment",
+                "agent_name": "Huly - matrix-tuwunel-deploy",
                 "matrix_user_id": "@huly_mxsyn:matrix.oculair.ca",
                 "room_id": "!huly_mxsyn:matrix.oculair.ca",
             },
@@ -652,10 +652,10 @@ class TestGetMappingByAgentName:
     def test_huly_prefix_stripping(self, mock_all_mappings):
         from src.core.mapping_service import get_mapping_by_agent_name
         
-        result = get_mapping_by_agent_name("Matrix Synapse Deployment")
+        result = get_mapping_by_agent_name("matrix-tuwunel-deploy")
         
         assert result is not None
-        assert result["agent_name"] == "Huly - Matrix Synapse Deployment"
+        assert result["agent_name"] == "Huly - matrix-tuwunel-deploy"
     
     def test_returns_none_for_unknown(self, mock_all_mappings):
         from src.core.mapping_service import get_mapping_by_agent_name
@@ -672,7 +672,7 @@ class TestGetMappingByAgentName:
         assert result is not None
         
         # Partial match should not work with fuzzy=False
-        result = get_mapping_by_agent_name("Matrix Synapse", fuzzy=False)
+        result = get_mapping_by_agent_name("Matrix Tuwunel", fuzzy=False)
         assert result is None
     
     def test_agent_id_lookup(self, mock_all_mappings):
@@ -717,7 +717,7 @@ class TestOpenCodeRelaySkip:
     def mock_event_with_oc_mention(self):
         """Create a mock event with OpenCode mention"""
         event = Mock()
-        event.body = "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca please check this"
+        event.body = "@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca please check this"
         event.sender = "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca"
         event.event_id = "$oc_mention_123"
         event.source = {"content": {}}
@@ -727,7 +727,7 @@ class TestOpenCodeRelaySkip:
     def mock_event_with_agent_and_oc_mention(self):
         """Create a mock event with both agent and OpenCode mentions"""
         event = Mock()
-        event.body = "@Meridian and @oc_matrix_synapse_deployment_v2:matrix.oculair.ca please help"
+        event.body = "@Meridian and @oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca please help"
         event.sender = "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca"
         event.event_id = "$mixed_mention_123"
         event.source = {"content": {}}
@@ -741,7 +741,7 @@ class TestOpenCodeRelaySkip:
         from src.matrix.mention_routing import handle_agent_mention_routing
         
         # Add OpenCode identity to room users
-        oc_mxid = "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca"
+        oc_mxid = "@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"
         mock_room_with_users.users[oc_mxid] = Mock()  # Mock user object
         
         admin_client = AsyncMock()
@@ -756,7 +756,7 @@ class TestOpenCodeRelaySkip:
                 event=mock_event_with_oc_mention,
                 sender_mxid=mock_event_with_oc_mention.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
                 admin_client=admin_client,
@@ -790,7 +790,7 @@ class TestOpenCodeRelaySkip:
                 event=mock_event_with_oc_mention,
                 sender_mxid=mock_event_with_oc_mention.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
                 admin_client=admin_client,
@@ -809,7 +809,7 @@ class TestOpenCodeRelaySkip:
         from src.matrix.mention_routing import handle_agent_mention_routing
         
         # Add OpenCode identity to room users
-        oc_mxid = "@oc_matrix_synapse_deployment_v2:matrix.oculair.ca"
+        oc_mxid = "@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"
         mock_room_with_users.users[oc_mxid] = Mock()
         
         admin_client = AsyncMock()
@@ -826,7 +826,7 @@ class TestOpenCodeRelaySkip:
                 event=mock_event_with_agent_and_oc_mention,
                 sender_mxid=mock_event_with_agent_and_oc_mention.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
                 admin_client=admin_client,
@@ -857,7 +857,7 @@ class TestOpenCodeRelaySkip:
                 event=mock_event_with_oc_mention,
                 sender_mxid=mock_event_with_oc_mention.sender,
                 sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
-                sender_agent_name="Huly - Matrix Synapse Deployment",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
                 config=mock_config,
                 logger=mock_logger,
                 admin_client=admin_client,

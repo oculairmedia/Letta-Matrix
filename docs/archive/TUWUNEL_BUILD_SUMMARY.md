@@ -130,7 +130,7 @@ docker inspect ghcr.io/oculairmedia/tuwunel-docker2010:latest | grep "OCI"
 ### 3. Deploy Tuwunel Stack
 
 ```bash
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 
 # Use the Tuwunel docker-compose file
 docker-compose -f docker-compose.tuwunel.yml up -d
@@ -183,7 +183,7 @@ gh workflow run "Build Tuwunel Docker Image" \
 ### Update Deployment
 
 ```bash
-cd /opt/stacks/matrix-synapse-deployment
+cd /opt/stacks/matrix-tuwunel-deploy
 
 # Pull latest image
 docker-compose -f docker-compose.tuwunel.yml pull tuwunel

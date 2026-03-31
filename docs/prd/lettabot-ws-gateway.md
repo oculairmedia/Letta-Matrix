@@ -7,7 +7,7 @@
 
 ## Problem
 
-The Python bridge (`matrix-synapse-deployment`) calls the Letta REST API directly via `letta-client` Python SDK. This works but:
+The Python bridge (`matrix-tuwunel-deploy`) calls the Letta REST API directly via `letta-client` Python SDK. This works but:
 
 1. **No letta-code features** — the `@letta-ai/letta-code-sdk` provides session management, tool approval handling, filesystem tools, and conversation lifecycle that the REST API doesn't expose.
 2. **Duplicated logic** — both lettabot and the bridge independently implement conversation management, retry logic, streaming parsing, and error recovery.
@@ -164,7 +164,7 @@ The bridge should support **graceful degradation**:
 6. Add connection health checks (ping/pong)
 7. Add idle session cleanup
 
-### Phase 2: Python Bridge WebSocket Client (matrix-synapse-deployment repo)
+### Phase 2: Python Bridge WebSocket Client (matrix-tuwunel-deploy repo)
 
 1. Create `src/letta/ws_gateway_client.py` — async WS client with connection pooling
 2. Create `src/letta/gateway_stream_reader.py` — parse WS stream events into existing `StreamEvent` format
