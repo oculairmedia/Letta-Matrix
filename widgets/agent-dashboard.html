@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Dashboard</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --border: #0f3460;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --accent: #e94560;
+    --green: #10b981;
+    --yellow: #f59e0b;
+    --blue: #3b82f6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 12px;
+    font-size: 13px;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    display: inline-block;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .refresh-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .refresh-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+  }
+  .stat-card .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+  .stat-card .value {
+    font-size: 22px;
+    font-weight: 700;
+  }
+  .stat-card .value.green { color: var(--green); }
+  .stat-card .value.yellow { color: var(--yellow); }
+  .stat-card .value.blue { color: var(--blue); }
+  .stat-card .value.accent { color: var(--accent); }
+
+  .section-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    margin: 12px 0 6px 0;
+  }
+
+  .agent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .agent-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  .agent-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .agent-status {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+  }
+  .agent-status.online { background: var(--green); }
+  .agent-status.busy { background: var(--yellow); }
+  .agent-status.offline { background: #64748b; }
+  .agent-meta {
+    color: var(--text-dim);
+    font-size: 10px;
+  }
+
+  .activity-log {
+    max-height: 120px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .activity-log::-webkit-scrollbar { width: 4px; }
+  .activity-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-entry {
+    font-size: 11px;
+    color: var(--text-dim);
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    display: flex;
+    gap: 6px;
+  }
+  .log-time { color: #64748b; font-family: monospace; font-size: 10px; white-space: nowrap; }
+  .log-msg { flex: 1; }
+  .log-msg .highlight { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1><span class="status-dot"></span> Agent Dashboard</h1>
+    <button class="refresh-btn" onclick="loadData()">Refresh</button>
+  </div>
+
+  <div class="grid">
+    <div class="stat-card">
+      <div class="label">Agents Online</div>
+      <div class="value green" id="agents-online">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Total Agents</div>
+      <div class="value blue" id="agents-total">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Messages (24h)</div>
+      <div class="value accent" id="messages-24h">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Avg Response</div>
+      <div class="value yellow" id="avg-response">--</div>
+    </div>
+  </div>
+
+  <div class="section-title">Active Agents</div>
+  <div class="agent-list" id="agent-list">
+    <!-- populated by JS -->
+  </div>
+
+  <div class="section-title">Recent Activity</div>
+  <div class="activity-log" id="activity-log">
+    <!-- populated by JS -->
+  </div>
+
+<script>
+  // Widget API handshake
+  const widgetId = new URLSearchParams(window.location.search).get('widgetId') || 'agent-dashboard';
+
+  // Demo data - in production this would hit the matrix-api endpoints
+  const agents = [
+    { name: 'Meridian', status: 'online', lastMsg: '12s ago', room: 'Meridian Prime' },
+    { name: 'BMO', status: 'online', lastMsg: '2m ago', room: 'BMO Chat' },
+    { name: 'Kitchen', status: 'online', lastMsg: '5m ago', room: 'Kitchen' },
+    { name: 'GraphitiExplorer', status: 'busy', lastMsg: '30s ago', room: 'Graphiti' },
+    { name: 'Huly - matrix-tuwunel-deploy', status: 'online', lastMsg: 'now', room: 'This Room' },
+    { name: 'Meridian-Triage', status: 'offline', lastMsg: '3h ago', room: 'Triage' },
+  ];
+
+  const activities = [
+    { time: 'now', msg: '<span class="highlight">Huly-MTD</span> responded in matrix-tuwunel-deploy' },
+    { time: '12s', msg: '<span class="highlight">Meridian</span> completed tool_call (matrix_messaging)' },
+    { time: '30s', msg: '<span class="highlight">GraphitiExplorer</span> indexing 3 new episodes' },
+    { time: '2m', msg: '<span class="highlight">BMO</span> processed file upload (recipe.pdf)' },
+    { time: '5m', msg: '<span class="highlight">Kitchen</span> updated weekly meal plan' },
+    { time: '8m', msg: 'Agent sync completed: 123 agents, 9.12s' },
+    { time: '10m', msg: 'matrix-client restarted (healthy)' },
+    { time: '15m', msg: '<span class="highlight">Meridian</span> escalated to Opus for deep analysis' },
+  ];
+
+  function loadData() {
+    const onlineCount = agents.filter(a => a.status === 'online').length;
+    const busyCount = agents.filter(a => a.status === 'busy').length;
+
+    document.getElementById('agents-online').textContent = onlineCount + busyCount;
+    document.getElementById('agents-total').textContent = '123';
+    document.getElementById('messages-24h').textContent = '847';
+    document.getElementById('avg-response').textContent = '2.3s';
+
+    const listEl = document.getElementById('agent-list');
+    listEl.innerHTML = agents.map(a => `
+      <div class="agent-row">
+        <div class="agent-name">
+          <span class="agent-status ${a.status}"></span>
+          ${a.name}
+        </div>
+        <div class="agent-meta">${a.lastMsg}</div>
+      </div>
+    `).join('');
+
+    const logEl = document.getElementById('activity-log');
+    logEl.innerHTML = activities.map(a => `
+      <div class="log-entry">
+        <span class="log-time">${a.time}</span>
+        <span class="log-msg">${a.msg}</span>
+      </div>
+    `).join('');
+  }
+
+  loadData();
+  // Auto-refresh every 30s
+  setInterval(loadData, 30000);
+
+  // Widget API: respond to capabilities request from Element
+  window.addEventListener('message', (event) => {
+    if (event.data?.api === 'fromWidget') return;
+    if (event.data?.action === 'capabilities') {
+      event.source.postMessage({
+        api: 'fromWidget',
+        widgetId: widgetId,
+        requestId: event.data?.requestId,
+        action: 'capabilities',
+        data: { capabilities: [] }
+      }, '*');
+    }
+  });
+</script>
+</body>
+</html>

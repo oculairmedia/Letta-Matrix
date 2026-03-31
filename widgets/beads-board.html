@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Beads Board</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232733;
+    --border: #2a2e3b;
+    --text: #e2e8f0;
+    --text-dim: #7c8497;
+    --p0: #ef4444;
+    --p1: #f97316;
+    --p2: #3b82f6;
+    --p3: #6b7280;
+    --status-open: #3b82f6;
+    --status-wip: #f59e0b;
+    --status-blocked: #ef4444;
+    --green: #10b981;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text);
+    padding: 10px; font-size: 12px; overflow-x: hidden;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  .header h1 { font-size: 14px; font-weight: 600; }
+  .header .meta { font-size: 10px; color: var(--text-dim); }
+
+  /* ── Project Selector ── */
+  .project-bar {
+    display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .project-btn {
+    padding: 3px 8px; border-radius: 4px; font-size: 10px;
+    cursor: pointer; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text-dim);
+    transition: all 0.15s; white-space: nowrap;
+  }
+  .project-btn:hover { color: var(--text); border-color: var(--p2); }
+  .project-btn.active {
+    background: rgba(59,130,246,0.15); color: var(--p2);
+    border-color: var(--p2);
+  }
+  .project-btn .badge {
+    display: inline-block; min-width: 14px; text-align: center;
+    padding: 0 3px; margin-left: 3px; border-radius: 6px;
+    font-size: 9px; font-weight: 700;
+    background: var(--surface2);
+  }
+  .project-btn.active .badge { background: rgba(59,130,246,0.3); }
+  .project-btn.has-urgent .badge { background: rgba(239,68,68,0.3); color: var(--p0); }
+  .project-btn.has-wip .badge { background: rgba(245,158,11,0.2); }
+
+  /* ── Summary chips ── */
+  .summary-bar { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .chip {
+    padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 600;
+    display: flex; align-items: center; gap: 4px;
+    background: var(--surface); border: 1px solid var(--border);
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .chip.p0 .dot { background: var(--p0); }
+  .chip.p1 .dot { background: var(--p1); }
+  .chip.open .dot { background: var(--status-open); }
+  .chip.wip .dot { background: var(--status-wip); }
+  .chip.blocked .dot { background: var(--status-blocked); }
+
+  /* ── Tabs ── */
+  .tabs {
+    display: flex; gap: 2px; margin-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    padding: 4px 10px; font-size: 11px; cursor: pointer;
+    color: var(--text-dim); border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--text); border-bottom-color: var(--p2); }
+  .tab .count {
+    background: var(--surface2); padding: 1px 5px; border-radius: 8px;
+    font-size: 9px; margin-left: 4px;
+  }
+
+  /* ── Issues ── */
+  .issue-list {
+    display: flex; flex-direction: column; gap: 3px;
+    max-height: calc(100vh - 170px); overflow-y: auto;
+  }
+  .issue-list::-webkit-scrollbar { width: 4px; }
+  .issue-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .issue {
+    display: flex; align-items: flex-start; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 8px;
+    border-left: 3px solid var(--p2); transition: background 0.1s;
+  }
+  .issue:hover { background: var(--surface2); }
+  .issue.p0 { border-left-color: var(--p0); }
+  .issue.p1 { border-left-color: var(--p1); }
+  .issue.p2 { border-left-color: var(--p2); }
+  .issue.p3 { border-left-color: var(--p3); }
+
+  .issue-priority {
+    font-size: 9px; font-weight: 700; padding: 1px 4px;
+    border-radius: 3px; white-space: nowrap; margin-top: 1px;
+  }
+  .issue-priority.p0 { background: rgba(239,68,68,0.2); color: var(--p0); }
+  .issue-priority.p1 { background: rgba(249,115,22,0.2); color: var(--p1); }
+  .issue-priority.p2 { background: rgba(59,130,246,0.15); color: var(--p2); }
+  .issue-priority.p3 { background: rgba(107,114,128,0.2); color: var(--p3); }
+
+  .issue-body { flex: 1; min-width: 0; }
+  .issue-title {
+    font-size: 11px; line-height: 1.3;
+    overflow: hidden; text-overflow: ellipsis;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .issue-meta { display: flex; gap: 6px; margin-top: 3px; align-items: center; flex-wrap: wrap; }
+  .issue-id { font-family: monospace; font-size: 9px; color: var(--text-dim); }
+  .issue-project {
+    font-size: 9px; padding: 1px 5px; border-radius: 3px;
+    background: rgba(59,130,246,0.1); color: var(--p2); border: 1px solid rgba(59,130,246,0.2);
+  }
+  .issue-status {
+    font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 500;
+  }
+  .issue-status.open { background: rgba(59,130,246,0.15); color: var(--status-open); }
+  .issue-status.in_progress { background: rgba(245,158,11,0.15); color: var(--status-wip); }
+  .issue-status.blocked { background: rgba(239,68,68,0.15); color: var(--status-blocked); }
+
+  .label-tag {
+    font-size: 8px; padding: 1px 4px; border-radius: 2px;
+    background: var(--surface2); color: var(--text-dim); border: 1px solid var(--border);
+  }
+
+  .empty-state { text-align: center; padding: 30px; color: var(--text-dim); }
+  .empty-state .emoji { font-size: 24px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>Beads Board</h1>
+    <div class="meta" id="last-updated">Loading...</div>
+  </div>
+  <div class="project-bar" id="project-bar"></div>
+  <div class="summary-bar" id="summary-bar"></div>
+  <div class="tabs" id="tabs"></div>
+  <div class="issue-list" id="issue-list"></div>
+
+<script>
+  const API_BASE = 'https://matrix.oculair.ca/api/registry/projects';
+  let allData = { projects: {} };
+  let currentProject = '_all';
+  let currentFilter = 'all';
+
+  const params = new URLSearchParams(window.location.search);
+  const singleProjectMode = !!params.get('project');
+
+  async function loadData() {
+    try {
+      if (singleProjectMode) {
+        await loadSingleProject(params.get('project'));
+      } else {
+        await loadAllProjects();
+      }
+      renderProjectBar();
+      renderView();
+    } catch (e) {
+      document.getElementById('issue-list').innerHTML =
+        '<div class="empty-state"><div class="emoji">&#9888;&#65039;</div>Could not load beads data</div>';
+    }
+  }
+
+  async function loadSingleProject(identifier) {
+    const resp = await fetch(`${API_BASE}/${encodeURIComponent(identifier)}/issues?t=${Date.now()}`);
+    const data = await resp.json();
+    const issues = data.issues || [];
+
+    // Also fetch project name
+    let name = identifier;
+    try {
+      const pResp = await fetch(`${API_BASE}/${encodeURIComponent(identifier)}?t=${Date.now()}`);
+      const pData = await pResp.json();
+      name = pData.name || identifier;
+    } catch {}
+
+    const by_status = {}, by_priority = {};
+    for (const i of issues) {
+      const s = i.status || 'unknown';
+      const p = `P${i.priority ?? '?'}`;
+      by_status[s] = (by_status[s] || 0) + 1;
+      by_priority[p] = (by_priority[p] || 0) + 1;
+    }
+
+    const active = issues.filter(i => ['open', 'in_progress', 'blocked'].includes(i.status));
+    active.sort((a, b) => (a.priority ?? 9) - (b.priority ?? 9) || (a.id || '').localeCompare(b.id || ''));
+
+    allData = {
+      projects: {
+        [identifier]: {
+          name,
+          summary: { total: issues.length, by_status, by_priority },
+          issues: active,
+        }
+      },
+      updated_at: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  async function loadAllProjects() {
+    const resp = await fetch(`${API_BASE}?has_beads=true&t=${Date.now()}`);
+    const registry = await resp.json();
+    const projects = (registry.projects || []).filter(p => (p.beads_issue_count || 0) > 0);
+
+    const results = await Promise.allSettled(
+      projects.map(async p => {
+        const r = await fetch(`${API_BASE}/${encodeURIComponent(p.identifier)}/issues`);
+        const d = await r.json();
+        return { identifier: p.identifier, name: p.name, issues: d.issues || [] };
+      })
+    );
+
+    allData = { projects: {}, updated_at: Math.floor(Date.now() / 1000) };
+    for (const r of results) {
+      if (r.status !== 'fulfilled' || !r.value.issues.length) continue;
+      const { identifier, name, issues } = r.value;
+
+      const by_status = {}, by_priority = {};
+      for (const i of issues) {
+        const s = i.status || 'unknown';
+        const p = `P${i.priority ?? '?'}`;
+        by_status[s] = (by_status[s] || 0) + 1;
+        by_priority[p] = (by_priority[p] || 0) + 1;
+      }
+
+      const active = issues.filter(i => ['open', 'in_progress', 'blocked'].includes(i.status));
+      active.sort((a, b) => (a.priority ?? 9) - (b.priority ?? 9) || (a.id || '').localeCompare(b.id || ''));
+
+      allData.projects[identifier] = {
+        name: name || identifier,
+        summary: { total: issues.length, by_status, by_priority },
+        issues: active,
+      };
+    }
+  }
+
+  function getIssuesForProject(proj) {
+    if (proj === '_all') {
+      const all = [];
+      for (const [id, p] of Object.entries(allData.projects || {})) {
+        const label = p.name || id;
+        for (const i of p.issues || []) {
+          all.push({ ...i, _project: label });
+        }
+      }
+      all.sort((a, b) => (a.priority ?? 9) - (b.priority ?? 9) || (a.id || '').localeCompare(b.id || ''));
+      return all;
+    }
+    const label = projectLabel(proj);
+    return (allData.projects?.[proj]?.issues || []).map(i => ({ ...i, _project: label }));
+  }
+
+  function getSummaryForProject(proj) {
+    if (proj === '_all') {
+      const merged = { total: 0, by_status: {}, by_priority: {} };
+      for (const p of Object.values(allData.projects || {})) {
+        merged.total += p.summary.total;
+        for (const [k, v] of Object.entries(p.summary.by_status || {}))
+          merged.by_status[k] = (merged.by_status[k] || 0) + v;
+        for (const [k, v] of Object.entries(p.summary.by_priority || {}))
+          merged.by_priority[k] = (merged.by_priority[k] || 0) + v;
+      }
+      return merged;
+    }
+    return allData.projects?.[proj]?.summary || { total: 0, by_status: {}, by_priority: {} };
+  }
+
+  function projectLabel(key) {
+    return allData.projects?.[key]?.name || key;
+  }
+
+  function renderProjectBar() {
+    if (singleProjectMode) {
+      document.getElementById('project-bar').style.display = 'none';
+      return;
+    }
+
+    const projects = Object.entries(allData.projects || {})
+      .map(([id, p]) => ({
+        id,
+        label: p.name || id,
+        count: p.issues.length,
+        hasUrgent: p.summary.by_priority?.P0 > 0,
+        hasWip: (p.summary.by_status?.in_progress || 0) > 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const totalActive = projects.reduce((s, p) => s + p.count, 0);
+
+    let html = `<div class="project-btn ${currentProject === '_all' ? 'active' : ''}"
+      onclick="selectProject('_all')">All<span class="badge">${totalActive}</span></div>`;
+
+    html += projects.map(p => {
+      const cls = [
+        'project-btn',
+        currentProject === p.id ? 'active' : '',
+        p.hasUrgent ? 'has-urgent' : '',
+        p.hasWip && !p.hasUrgent ? 'has-wip' : '',
+      ].filter(Boolean).join(' ');
+      return `<div class="${cls}" onclick="selectProject('${p.id}')">
+        ${p.label}<span class="badge">${p.count}</span></div>`;
+    }).join('');
+
+    document.getElementById('project-bar').innerHTML = html;
+  }
+
+  function selectProject(proj) {
+    currentProject = proj;
+    currentFilter = 'all';
+    renderProjectBar();
+    renderView();
+  }
+
+  function renderView() {
+    const issues = getIssuesForProject(currentProject);
+    const summary = getSummaryForProject(currentProject);
+
+    // Timestamp
+    const ts = allData.updated_at ? new Date(allData.updated_at * 1000) : new Date();
+    const label = currentProject === '_all' ? 'all projects' : projectLabel(currentProject);
+    document.getElementById('last-updated').textContent =
+      `${label} \u00b7 ${ts.toLocaleTimeString()}`;
+
+    // Summary chips
+    const bs = summary.by_status || {};
+    const bp = summary.by_priority || {};
+    document.getElementById('summary-bar').innerHTML = [
+      bs.open ? `<div class="chip open"><span class="dot"></span>${bs.open} open</div>` : '',
+      bs.in_progress ? `<div class="chip wip"><span class="dot"></span>${bs.in_progress} WIP</div>` : '',
+      bs.blocked ? `<div class="chip blocked"><span class="dot"></span>${bs.blocked} blocked</div>` : '',
+      bp.P0 ? `<div class="chip p0"><span class="dot"></span>${bp.P0} urgent</div>` : '',
+      bp.P1 ? `<div class="chip p1"><span class="dot"></span>${bp.P1} high</div>` : '',
+    ].join('');
+
+    // Tabs
+    const counts = { all: issues.length };
+    issues.forEach(i => { counts[i.status] = (counts[i.status] || 0) + 1; });
+    const tabDefs = [
+      { key: 'all', label: 'All' },
+      { key: 'open', label: 'Open' },
+      { key: 'in_progress', label: 'WIP' },
+      { key: 'blocked', label: 'Blocked' },
+    ];
+    document.getElementById('tabs').innerHTML = tabDefs
+      .filter(t => t.key === 'all' || counts[t.key])
+      .map(t => `<div class="tab ${currentFilter === t.key ? 'active' : ''}"
+        onclick="setFilter('${t.key}')">${t.label}<span class="count">${counts[t.key] || 0}</span></div>`)
+      .join('');
+
+    // Issues
+    const filtered = currentFilter === 'all' ? issues : issues.filter(i => i.status === currentFilter);
+    if (!filtered.length) {
+      document.getElementById('issue-list').innerHTML =
+        '<div class="empty-state"><div class="emoji">&#10024;</div>No issues here</div>';
+      return;
+    }
+
+    document.getElementById('issue-list').innerHTML = filtered.map(i => {
+      const p = `p${i.priority}`;
+      const showProject = currentProject === '_all';
+      const labels = (i.labels || [])
+        .filter(l => !l.startsWith('huly:') && !l.startsWith('vibe:') && !l.startsWith('epic:'))
+        .slice(0, 2)
+        .map(l => `<span class="label-tag">${l}</span>`)
+        .join('');
+
+      return `<div class="issue ${p}">
+        <span class="issue-priority ${p}">P${i.priority}</span>
+        <div class="issue-body">
+          <div class="issue-title">${escapeHtml(i.title)}</div>
+          <div class="issue-meta">
+            <span class="issue-id">${i.id}</span>
+            ${showProject ? `<span class="issue-project">${i._project}</span>` : ''}
+            <span class="issue-status ${i.status}">${i.status.replace('_', ' ')}</span>
+            ${labels}
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function setFilter(f) { currentFilter = f; renderView(); }
+
+  function escapeHtml(str) {
+    const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
+  }
+
+  // Set initial project from URL param
+  const urlProject = params.get('project');
+  if (urlProject) currentProject = urlProject;
+
+  loadData();
+  setInterval(loadData, 60000);
+
+  // Widget API handshake
+  window.addEventListener('message', (event) => {
+    if (event.data?.action === 'capabilities') {
+      event.source.postMessage({
+        api: 'fromWidget',
+        widgetId: params.get('widgetId') || 'beads-board',
+        requestId: event.data?.requestId,
+        action: 'capabilities',
+        data: { capabilities: [] }
+      }, '*');
+    }
+  });
+</script>
+</body>
+</html>
