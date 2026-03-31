@@ -8,22 +8,13 @@ livekit.yaml
 
 # Database files
 postgres-data/
-synapse-data/*.db
-synapse-data/*.db-shm
-synapse-data/*.db-wal
-synapse-data/homeserver.db*
+synapse-data/
 
 # Log files
 *.log
 *.log.*
-synapse-data/*.log
-synapse-data/*.log.*
-
-# Media store
-synapse-data/media_store/
 
 # Security sensitive files
-synapse-data/*.signing.key
 *.key
 *.pem
 *.crt
@@ -53,9 +44,14 @@ tuwunel-data/media/
 # npm install artifact
 =*
 
-# Matrix client data backups
+# Matrix client data
 matrix_client_data/*.backup*
 matrix_client_data/*.old
+matrix_client_data/agent_user_mappings.json
+matrix_client_data/letta_space_config.json
+matrix_client_data/letta_code_state.json
+matrix_client_data/matrix_event_dedupe.db
+matrix_client_data/agent_mappings.db
 
 # Python
 __pycache__/
@@ -97,8 +93,9 @@ htmlcov/
 *.swo
 *~
 .DS_Store
+Thumbs.db
 
-# Docker volumes (if needed)
+# Docker volumes
 volumes/
 
 # Temporary files
@@ -107,36 +104,27 @@ temp/
 *.tmp
 *.temp
 
-# Backup files
+# Backup files/directories
 *.bak
 *.backup
-*~
-
-# Backup directories
 postgres-data.backup.*/
 matrix_client_data.backup.*/
 tuwunel-data.backup.*/
 
-# OS files
-.DS_Store
-Thumbs.db
-matrix_client_data/agent_user_mappings.json
-matrix_client_data/letta_space_config.json
-matrix_client_data/letta_code_state.json
-matrix_client_data/matrix_event_dedupe.db
-matrix_client_data/agent_mappings.db
-agent_mappings.db
-
 # Agent tooling caches
 .sisyphus/
 .vibesync-cache/
+.serena/
+.benchmarks/
 
+# OpenCode plugin libs (keep tracked)
 !.opencode/plugin/lib/
 !.opencode/plugin/lib/**
-!claude-code-matrix-plugin/lib/
-!claude-code-matrix-plugin/lib/**
 
-# Beads / Dolt files (added by bd init)
+# Beads / Dolt files
 .dolt/
 *.db
 .beads-credential-key
+
+# Node modules (subprojects)
+node_modules/

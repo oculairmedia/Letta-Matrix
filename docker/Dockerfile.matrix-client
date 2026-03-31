@@ -33,16 +33,6 @@ COPY src/ ./src/
 # Create directories for matrix store and agent mappings
 RUN mkdir -p /app/matrix_store /app/data
 
-# Set environment variables with defaults
-ENV MATRIX_HOMESERVER_URL=http://synapse:8008
-ENV MATRIX_USERNAME=@letta:matrix.oculair.ca
-ENV MATRIX_PASSWORD=letta
-ENV MATRIX_ROOM_ID=!LWmNEJcwPwVWlbmNqe:matrix.oculair.ca
-ENV LETTA_API_URL=https://letta.oculair.ca
-ENV LETTA_TOKEN=lettaSecurePass123
-ENV LETTA_AGENT_ID=agent-0e99d1a5-d9ca-43b0-9df9-c09761d01444
-
-
 # Document parsing configuration defaults
 ENV DOCUMENT_PARSING_ENABLED=true
 ENV DOCUMENT_PARSING_MAX_FILE_SIZE_MB=50

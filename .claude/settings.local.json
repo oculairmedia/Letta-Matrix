@@ -56,7 +56,26 @@
       "Bash(git -C /opt/stacks/matrix-synapse-deployment status --short)",
       "Bash(git -C /opt/stacks/matrix-synapse-deployment diff --name-only HEAD~5..HEAD -- mcp-servers/matrix-identity-bridge/)",
       "Bash(git -C /opt/stacks/matrix-synapse-deployment log --oneline --all -- mcp-servers/matrix-identity-bridge/src/tools/MatrixMessaging.ts)",
-      "Bash(gh run list:*)"
+      "Bash(gh run list:*)",
+      "Bash(git stash:*)",
+      "Bash(sqlite3 /opt/stacks/matrix-tuwunel-deploy/.beads/bead.db \"SELECT id, title, status, priority FROM issues WHERE id LIKE ''%psg%'' OR id LIKE ''%9s3%'' OR id LIKE ''%me3%'' OR title LIKE ''%thread%'' OR title LIKE ''%reply_to%'' ORDER BY created_at DESC LIMIT 10;\")",
+      "Bash(sqlite3 /opt/stacks/matrix-tuwunel-deploy/.beads/db.sqlite \"SELECT id, title, status, priority FROM issues WHERE id LIKE ''%psg%'' OR id LIKE ''%9s3%'' OR id LIKE ''%me3%'' OR title LIKE ''%thread%'' OR title LIKE ''%reply_to%'' ORDER BY created_at DESC LIMIT 10;\")",
+      "Bash(sqlite3 /opt/stacks/matrix-tuwunel-deploy/.beads/bead.db .tables)",
+      "Bash(sqlite3 /opt/stacks/matrix-tuwunel-deploy/.beads/bead.db .schema)",
+      "Bash(sqlite3 /opt/stacks/matrix-tuwunel-deploy/.beads/db.sqlite \".tables\")",
+      "Bash(sqlite3 /opt/stacks/matrix-tuwunel-deploy/.beads/db.sqlite \"SELECT id, title, status, priority FROM issues ORDER BY created_at DESC LIMIT 15;\")",
+      "Bash(bd --help)",
+      "Bash(bd search:*)",
+      "Bash(bd list:*)",
+      "Bash(bd show:*)",
+      "Bash(bd close:*)",
+      "Bash(gh run:*)",
+      "Bash(bd ready:*)",
+      "Bash(bd update:*)",
+      "Bash(node -e \":*)",
+      "Bash(top -bn1 -o %CPU)",
+      "Bash(time bash:*)",
+      "Bash(bash /opt/stacks/matrix-tuwunel-deploy/scripts/refresh_beads_widget.sh 2>&1)"
     ],
     "deny": []
   }

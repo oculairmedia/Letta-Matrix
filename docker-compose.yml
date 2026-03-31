@@ -57,6 +57,7 @@ services:
       - ${NGINX_HTTP_PORT}:80
     volumes:
       - ${NGINX_CONFIG_PATH}:/etc/nginx/conf.d/default.conf:ro
+      - ./widgets:/srv/widgets:ro
     networks:
       - matrix-internal
     depends_on:
@@ -86,12 +87,8 @@ services:
     volumes:
       - ./matrix_store:/app/matrix_store
       - ./matrix_client_data:/app/data
-      - ./src:/app/src:ro # Mount source code for development
-      - ./custom_matrix_client.py:/app/custom_matrix_client.py:ro
-      - ./agent_user_manager.py:/app/agent_user_manager.py:ro
-      - ./matrix_auth.py:/app/matrix_auth.py:ro
-      - ./event_dedupe_store.py:/app/event_dedupe_store.py:ro
-      - ./temporal_workflows:/app/temporal_workflows:ro # Temporal workflow dataclasses + workflow ref for dispatch
+      - ./src:/app/src:ro
+      - ./temporal_workflows:/app/temporal_workflows:ro
     networks:
       - matrix-internal
     depends_on:
@@ -168,7 +165,6 @@ services:
     volumes:
       - ./temporal_workflows:/app/temporal_workflows:ro
       - ./src:/app/src:ro
-      - ./documents:/app/documents
     networks:
       - matrix-internal
     depends_on:

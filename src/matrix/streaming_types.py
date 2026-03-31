@@ -85,15 +85,19 @@ class StreamEvent:
 
 def is_self_delivery_to_room(event: StreamEvent, room_id: str) -> bool:
     """Check if a tool call event is a self-delivery targeting the given room."""
-    if event.metadata.get("tool_name") not in SELF_DELIVERY_TOOL_NAMES:
+    tool_name = event.metadata.get("tool_name")
+    if tool_name not in SELF_DELIVERY_TOOL_NAMES:
         return False
     args_raw = event.metadata.get("arguments", "")
     if not args_raw:
-        return False
+        # Gateway stream events may not include arguments — if the tool name
+        # matches a self-delivery tool, assume it targets the current room
+        # (conservative: better to suppress a duplicate than to double-post)
+        return True
     try:
         args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
     except (json.JSONDecodeError, TypeError):
-        return False
+        return True  # Tool matched but args unparseable — assume self-delivery
     target_room = args.get("room_id") or args.get("chatId") or ""
     if target_room and target_room == room_id:
         return True
