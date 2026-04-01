@@ -39,9 +39,17 @@ export class HttpAgentProxy {
   private config: ProxyConfig;
   // Track agent_id for requests before we get session_id back
   private pendingAgentIds: Map<string, string> = new Map();
+  // Keep-alive agent for connection reuse to mcp-framework
+  private keepAliveAgent: http.Agent;
 
   constructor(config: ProxyConfig) {
     this.config = config;
+    this.keepAliveAgent = new http.Agent({
+      keepAlive: true,
+      maxSockets: 50,
+      maxFreeSockets: 10,
+      timeout: 60_000,
+    });
     this.server = http.createServer(this.handleRequest.bind(this));
   }
 
@@ -170,7 +178,8 @@ export class HttpAgentProxy {
         port: this.config.internalPort,
         path: clientReq.url,
         method: clientReq.method,
-        headers
+        headers,
+        agent: this.keepAliveAgent,
       };
 
       const proxyReq = http.request(options, (proxyRes) => {
@@ -228,6 +237,7 @@ export class HttpAgentProxy {
   }
 
   async stop(): Promise<void> {
+    this.keepAliveAgent.destroy();
     return new Promise((resolve, reject) => {
       this.server.close((err) => {
         if (err) {

@@ -28,6 +28,7 @@
     "@vector-im/matrix-bot-sdk": "^0.7.1-element.15",
     "dotenv": "^16.4.5",
     "mcp-framework": "^0.2.16",
+    "undici": "^7.24.6",
     "xmcp": "^0.5.9",
     "zod": "^3.25.76"
   },

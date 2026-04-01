@@ -367,7 +367,7 @@ async function registerWithBridge(
     const rooms = roomIds && roomIds.length > 0 ? Array.from(new Set(roomIds)) : [];
     const response = await fetch(`${BRIDGE_URL}/register`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Connection": "keep-alive" },
       body: JSON.stringify({
         sessionId,
         directory,
@@ -387,7 +387,7 @@ async function sendHeartbeat(registrationId: string): Promise<boolean> {
   try {
     const response = await fetch(`${BRIDGE_URL}/heartbeat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Connection": "keep-alive" },
       body: JSON.stringify({ id: registrationId }),
     });
     return response.ok;
@@ -400,7 +400,7 @@ async function unregisterFromBridge(registrationId: string): Promise<void> {
   try {
     await fetch(`${BRIDGE_URL}/unregister`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Connection": "keep-alive" },
       body: JSON.stringify({ id: registrationId }),
     });
   } catch {
@@ -414,7 +414,8 @@ async function ensureMatrixRoom(directory: string): Promise<string | null> {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "Connection": "keep-alive"
       },
       body: JSON.stringify({
         jsonrpc: "2.0",

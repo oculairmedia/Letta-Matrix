@@ -11,6 +11,15 @@ import 'dotenv/config';
  * - AsyncLocalStorage bridges context between them
  */
 
+import { Agent, setGlobalDispatcher } from 'undici';
+
+setGlobalDispatcher(new Agent({
+  keepAliveTimeout: 30_000,
+  keepAliveMaxTimeout: 5 * 60_000,
+  connections: 50,
+  pipelining: 1,
+}));
+
 import { MCPServer } from 'mcp-framework';
 import { Storage } from './core/storage.js';
 import { IdentityManager } from './core/identity-manager.js';

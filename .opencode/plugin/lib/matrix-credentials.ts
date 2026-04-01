@@ -39,6 +39,7 @@ export async function resolveMatrixCredentials(
     headers: {
       "Content-Type": "application/json",
       "X-Internal-Key": getInternalApiKey(),
+      "Connection": "keep-alive",
     },
     body: JSON.stringify({
       directory: options.directory,
