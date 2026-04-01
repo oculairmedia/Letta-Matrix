@@ -32,9 +32,9 @@ const config: XmcpConfig = {
   bundler: (config) => ({
     ...config,
     externals: [
-      // Native modules cannot be bundled - must be loaded at runtime
       /\.node$/,
       "@matrix-org/matrix-sdk-crypto-nodejs",
+      "undici",
     ],
     resolve: {
       ...(config.resolve ?? {}),
