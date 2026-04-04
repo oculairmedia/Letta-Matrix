@@ -263,6 +263,46 @@ class TestParseDocument:
 
 
 # ---------------------------------------------------------------------------
+# Regression: document_parser must not eagerly import src.core (GH: temporal worker crash)
+# ---------------------------------------------------------------------------
+
+class TestNoEagerCoreImport:
+    """
+    Regression test for the temporal-worker ModuleNotFoundError.
+
+    src/core/__init__.py eagerly imports heavy modules (aiohttp, sqlalchemy, nio).
+    document_parser.py used to do `from src.core.retry import retry_async` at module
+    level, which triggered the full src.core import chain and crashed the lightweight
+    temporal-worker container that doesn't have those deps.
+
+    The fix: retry_async is imported lazily at the call site only.
+    """
+
+    def test_document_parser_does_not_import_src_core_at_module_level(self):
+        """Verify no top-level import of src.core in document_parser.py."""
+        import ast
+        import inspect
+        import src.matrix.document_parser as dp
+
+        source = inspect.getsource(dp)
+        tree = ast.parse(source)
+
+        top_level_imports = []
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    if node.module.startswith("src.core"):
+                        top_level_imports.append(
+                            f"line {node.lineno}: from {node.module} import ..."
+                        )
+
+        assert top_level_imports == [], (
+            f"document_parser.py has top-level src.core imports that will break "
+            f"the temporal worker container:\n" + "\n".join(top_level_imports)
+        )
+
+
+# ---------------------------------------------------------------------------
 # _is_text_low_quality
 # ---------------------------------------------------------------------------
 

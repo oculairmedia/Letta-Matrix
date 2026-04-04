@@ -19,7 +19,9 @@ from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from typing import Optional, Any
 
-from src.core.retry import retry_async
+# Lazy import: retry_async is imported at call site to avoid pulling in
+# the heavy src.core.__init__ dependency chain (sqlalchemy, aiohttp, nio)
+# which breaks the lightweight temporal-worker container.
 
 logger = logging.getLogger("matrix_client.document_parser")
 
@@ -437,6 +439,7 @@ async def parse_document(
                 raise DocumentParseRetryError(f"Conversion failed: {e}") from e
 
         try:
+            from src.core.retry import retry_async
             text, page_count = await retry_async(
                 _run_markitdown_once,
                 max_attempts=max_attempts,

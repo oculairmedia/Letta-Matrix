@@ -571,3 +571,116 @@ async def test_ingest_to_haystack_single_payload_under_threshold(monkeypatch):
 
     assert result.success is True
     assert len(client.post_calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# Regression: ingest_to_haystack must gracefully handle delete endpoint 404
+# ---------------------------------------------------------------------------
+
+class _MultiResponseClient:
+    """HTTP client that returns different responses per URL pattern."""
+
+    def __init__(self, responses_by_pattern: dict):
+        self._patterns = responses_by_pattern
+        self.post_calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, json=None, **kwargs):
+        self.post_calls.append((url, json))
+        for pattern, response in self._patterns.items():
+            if pattern in url:
+                return response
+        raise AssertionError(f"No mock response for URL: {url}")
+
+
+@pytest.mark.asyncio
+async def test_ingest_to_haystack_delete_404_does_not_fail(monkeypatch):
+    """
+    Regression test: when the Hayhooks delete_by_filename pipeline doesn't
+    exist (returns 404), ingest should skip the delete gracefully and proceed
+    to ingest the document.
+
+    Previously this raised IngestError and killed the workflow.
+    """
+    delete_resp = _MockResponse(404, {"detail": "Not Found"})
+    ingest_resp = _MockResponse(200, {"result": json.dumps({"status": "ok", "chunks_stored": 5})})
+
+    client = _MultiResponseClient({
+        "delete_by_filename": delete_resp,
+        "ingest_document": ingest_resp,
+    })
+    monkeypatch.setattr(ingest_activities.httpx, "AsyncClient", lambda timeout=600.0: client)
+    monkeypatch.setenv("HAYHOOKS_DELETE_BEFORE_INGEST", "true")
+
+    result = await ingest_activities.ingest_to_haystack(
+        IngestInput(
+            text="Document content for ingestion.",
+            filename="HCC 245 - WELCOME PACKAGE.pdf",
+            room_id="!room:matrix.test",
+            sender="@user:matrix.test",
+        )
+    )
+
+    assert result.success is True
+    assert result.chunks_stored == 5
+    # First call is the delete (which 404'd but was skipped), second is the ingest
+    assert len(client.post_calls) == 2
+    assert "delete_by_filename" in client.post_calls[0][0]
+    assert "ingest_document" in client.post_calls[1][0]
+
+
+@pytest.mark.asyncio
+async def test_ingest_to_haystack_delete_500_does_not_fail(monkeypatch):
+    """Non-404 delete errors should warn but still proceed with ingest."""
+    delete_resp = _MockResponse(500, {"detail": "Internal Server Error"})
+    ingest_resp = _MockResponse(200, {"result": json.dumps({"status": "ok", "chunks_stored": 3})})
+
+    client = _MultiResponseClient({
+        "delete_by_filename": delete_resp,
+        "ingest_document": ingest_resp,
+    })
+    monkeypatch.setattr(ingest_activities.httpx, "AsyncClient", lambda timeout=600.0: client)
+    monkeypatch.setenv("HAYHOOKS_DELETE_BEFORE_INGEST", "true")
+
+    result = await ingest_activities.ingest_to_haystack(
+        IngestInput(
+            text="Document content.",
+            filename="test.pdf",
+            room_id="!room:matrix.test",
+            sender="@user:matrix.test",
+        )
+    )
+
+    assert result.success is True
+    assert result.chunks_stored == 3
+
+
+@pytest.mark.asyncio
+async def test_ingest_to_haystack_delete_disabled_skips_delete(monkeypatch):
+    """When HAYHOOKS_DELETE_BEFORE_INGEST=false, no delete call should be made."""
+    ingest_resp = _MockResponse(200, {"result": json.dumps({"status": "ok", "chunks_stored": 2})})
+
+    client = _MultiResponseClient({
+        "ingest_document": ingest_resp,
+    })
+    monkeypatch.setattr(ingest_activities.httpx, "AsyncClient", lambda timeout=600.0: client)
+    monkeypatch.setenv("HAYHOOKS_DELETE_BEFORE_INGEST", "false")
+
+    result = await ingest_activities.ingest_to_haystack(
+        IngestInput(
+            text="Short doc.",
+            filename="small.pdf",
+            room_id="!room:matrix.test",
+            sender="@user:matrix.test",
+        )
+    )
+
+    assert result.success is True
+    # Only ingest call, no delete
+    assert len(client.post_calls) == 1
+    assert "ingest_document" in client.post_calls[0][0]

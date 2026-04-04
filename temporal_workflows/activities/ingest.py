@@ -91,17 +91,26 @@ async def ingest_to_haystack(input: IngestInput) -> IngestResult:
                 "yes",
             )
             if delete_enabled:
-                delete_resp = await client.post(
-                    HAYHOOKS_DELETE_BY_FILENAME_URL,
-                    json={
-                        "source_filename": input.filename,
-                        "room_id": input.room_id,
-                    },
-                )
-                if delete_resp.status_code != 200:
-                    raise IngestError(
-                        f"Hayhooks delete HTTP {delete_resp.status_code} for {input.filename}: "
-                        f"{delete_resp.text[:500]}"
+                try:
+                    delete_resp = await client.post(
+                        HAYHOOKS_DELETE_BY_FILENAME_URL,
+                        json={
+                            "source_filename": input.filename,
+                            "room_id": input.room_id,
+                        },
+                    )
+                    if delete_resp.status_code == 404:
+                        activity.logger.debug(
+                            f"Delete endpoint not found or no docs to delete for {input.filename}, skipping"
+                        )
+                    elif delete_resp.status_code != 200:
+                        activity.logger.warning(
+                            f"Hayhooks delete HTTP {delete_resp.status_code} for {input.filename}: "
+                            f"{delete_resp.text[:200]} — continuing with ingest"
+                        )
+                except httpx.HTTPError as e:
+                    activity.logger.warning(
+                        f"Hayhooks delete failed for {input.filename}: {e} — continuing with ingest"
                     )
 
             total_chunks = 0
