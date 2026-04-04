@@ -125,7 +125,7 @@
   - **Channel**: Matrix
   - **Chat ID**: !room:matrix.oculair.ca
   - **Message ID**: $event4
-  - **Sender**: oc_matrix_synapse_deployment_v2
+  - **Sender**: oc_matrix_tuwunel_deploy_v2
   - **Timestamp**: Friday, Mar 1, 7:00 AM EST
   
   ## Chat Context
@@ -133,8 +133,8 @@
   - **Hint**: To skip replying, respond with exactly: `<no-reply/>`
   
   ## OpenCode Context
-  - **OpenCode MXID**: @oc_matrix_synapse_deployment_v2:matrix.oculair.ca
-  - **Response Routing**: Include @oc_matrix_synapse_deployment_v2:matrix.oculair.ca in your response so the OpenCode bridge can route your reply.
+  - **OpenCode MXID**: @oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca
+  - **Response Routing**: Include @oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca in your response so the OpenCode bridge can route your reply.
   </system-reminder>
   
   Please run tests and summarize failures.
