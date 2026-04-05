@@ -126,7 +126,7 @@ class StreamingMessageHandler:
                     )
                     self._self_delivered_to_current_room = True
 
-            progress_text = event.format_progress()
+            progress_text = event.format_progress(tool_call_count=self._tool_call_count)
             if self._progress_event_id:
                 try:
                     await self.delete_message(self.room_id, self._progress_event_id)
