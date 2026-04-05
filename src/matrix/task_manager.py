@@ -1,11 +1,17 @@
 """
 Background Letta task management — dispatch, cancel, and track async tasks.
+
+Includes a per-room message queue so incoming messages received while an
+agent is busy are not dropped but processed after the current task finishes.
 """
 
 import asyncio
+import collections
 import logging
+import os
 import time
-from typing import Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
 
 import aiohttp
 
@@ -22,10 +28,34 @@ _active_letta_tasks: Dict[Tuple[str, str], asyncio.Task] = {}
 _still_processing_last_sent: Dict[str, float] = {}
 _STILL_PROCESSING_COOLDOWN = 60.0  # seconds between notices per room
 
+# ── Per-room message queue ────────────────────────────────────────────
+_MAX_QUEUE_SIZE = int(os.getenv("LETTA_MESSAGE_QUEUE_MAX_SIZE", "5"))
+
+
+@dataclass
+class _QueuedMessage:
+    """Snapshot of everything needed to re-dispatch a queued message."""
+    room: Any
+    event: Any
+    config: Any
+    logger: Any
+    client: Any
+    room_agent_id: Optional[str]
+    gating_result: Any
+    message_text: str
+    user_reply_to_event_id: Optional[str]
+    auth_manager: Any = None
+
+
+# Per task_key → bounded deque of _QueuedMessage
+_pending_queues: Dict[Tuple[str, str], collections.deque] = {}
+
 
 def _on_letta_task_done(key: Tuple[str, str], task: asyncio.Task) -> None:
     _active_letta_tasks.pop(key, None)
     if task.cancelled():
+        # Clear queue on cancellation (e.g. /stop)
+        _pending_queues.pop(key, None)
         return
     exc = task.exception()
     if exc:
@@ -42,11 +72,58 @@ def _on_letta_task_done(key: Tuple[str, str], task: asyncio.Task) -> None:
                 f'[BG-TASK] Failed to enqueue alert for {key}: {alert_error}'
             )
 
+    # Drain the next queued message for this key, if any
+    _drain_next_queued_message(key)
+
+
+def _drain_next_queued_message(key: Tuple[str, str]) -> None:
+    """Pop the next queued message and dispatch it as a new background task."""
+    queue = _pending_queues.get(key)
+    if not queue:
+        _pending_queues.pop(key, None)
+        return
+    msg = queue.popleft()
+    if not queue:
+        _pending_queues.pop(key, None)
+
+    logger.info(
+        f'[BG-TASK] Draining queued message for {key} '
+        f'({len(queue) if queue else 0} remaining)'
+    )
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        logger.warning(f'[BG-TASK] No event loop to drain queue for {key}')
+        return
+
+    loop.create_task(_dispatch_queued_message(key, msg))
+
+
+async def _dispatch_queued_message(key: Tuple[str, str], msg: _QueuedMessage) -> None:
+    """Re-dispatch a previously queued message through the normal path."""
+    try:
+        await _dispatch_letta_task(
+            room=msg.room,
+            event=msg.event,
+            config=msg.config,
+            logger=msg.logger,
+            client=msg.client,
+            room_agent_id=msg.room_agent_id,
+            gating_result=msg.gating_result,
+            message_text=msg.message_text,
+            user_reply_to_event_id=msg.user_reply_to_event_id,
+            auth_manager=msg.auth_manager,
+        )
+    except Exception as exc:
+        logger.error(f'[BG-TASK] Failed to dispatch queued message for {key}: {exc}', exc_info=exc)
+
 
 async def cancel_all_letta_tasks() -> None:
     if not _active_letta_tasks:
         return
     logger.info(f'[BG-TASK] Cancelling {len(_active_letta_tasks)} active Letta tasks...')
+    _pending_queues.clear()
     for task in _active_letta_tasks.values():
         task.cancel()
     await asyncio.gather(*_active_letta_tasks.values(), return_exceptions=True)
@@ -59,11 +136,19 @@ async def _handle_stop_command(
     if message_text.strip().lower() != '/stop':
         return False
 
-    existing = _active_letta_tasks.get((room.room_id, room_agent_id or 'unknown'))
+    stop_key = (room.room_id, room_agent_id or 'unknown')
+    existing = _active_letta_tasks.get(stop_key)
     stopped = False
+
+    # Clear queued messages for this room
+    queue_cleared = len(_pending_queues.get(stop_key, []))
+    _pending_queues.pop(stop_key, None)
+    if queue_cleared:
+        logger.info(f'[STOP] Cleared {queue_cleared} queued message(s) for {stop_key}')
+
     if existing and not existing.done():
         existing.cancel()
-        _active_letta_tasks.pop((room.room_id, room_agent_id or 'unknown'), None)
+        _active_letta_tasks.pop(stop_key, None)
         stopped = True
         logger.info(f'[STOP] Cancelled active task for {room_agent_name} in {room.room_id}')
 
@@ -84,7 +169,14 @@ async def _handle_stop_command(
         except (LettaApiError, MatrixClientError, asyncio.TimeoutError, aiohttp.ClientError) as e:
             logger.warning(f'[STOP] Gateway abort failed: {e}')
 
-    msg = '⏹ Stopped.' if stopped else 'Nothing running to stop.'
+    if stopped and queue_cleared:
+        msg = f'⏹ Stopped. Cleared {queue_cleared} queued message(s).'
+    elif stopped:
+        msg = '⏹ Stopped.'
+    elif queue_cleared:
+        msg = f'⏹ Cleared {queue_cleared} queued message(s).'
+    else:
+        msg = 'Nothing running to stop.'
     await send_as_agent(room.room_id, msg, config, logger)
     return True
 
@@ -122,16 +214,14 @@ async def _dispatch_letta_task(
 
     existing_task = _active_letta_tasks.get(task_key)
     if existing_task and not existing_task.done():
-        now = time.monotonic()
-        last_sent = _still_processing_last_sent.get(room.room_id, 0.0)
-        if now - last_sent >= _STILL_PROCESSING_COOLDOWN:
-            logger.warning(
-                f'[BG-TASK] Agent still processing previous message for {task_key}, sending notice'
-            )
+        # ── Enqueue instead of dropping ────────────────────────────
+        queue = _pending_queues.get(task_key)
+        if queue is not None and len(queue) >= _MAX_QUEUE_SIZE:
+            logger.warning(f'[BG-TASK] Queue full ({_MAX_QUEUE_SIZE}) for {task_key}, dropping message')
             try:
                 await send_as_agent(
                     room.room_id,
-                    '⏳ Still processing previous message...',
+                    f'⏳ Queue full ({_MAX_QUEUE_SIZE} messages) — please wait for current task to finish.',
                     config,
                     logger,
                     msgtype='m.notice',
@@ -141,15 +231,46 @@ async def _dispatch_letta_task(
                     thread_event_id=thread_event_id,
                     thread_latest_event_id=thread_latest_event_id,
                 )
-                _still_processing_last_sent[room.room_id] = now
-            except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError) as notice_error:
-                logger.debug(
-                    f'[BG-TASK] Failed to send still-processing notice for {task_key}: {notice_error}'
-                )
-        else:
+            except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError):
+                pass
+            return True
+
+        if queue is None:
+            queue = collections.deque(maxlen=_MAX_QUEUE_SIZE)
+            _pending_queues[task_key] = queue
+
+        queued_msg = _QueuedMessage(
+            room=room,
+            event=event,
+            config=config,
+            logger=logger,
+            client=client,
+            room_agent_id=room_agent_id,
+            gating_result=gating_result,
+            message_text=message_text,
+            user_reply_to_event_id=user_reply_to_event_id,
+            auth_manager=auth_manager,
+        )
+        queue.append(queued_msg)
+        position = len(queue)
+        logger.info(f'[BG-TASK] Queued message for {task_key} (position {position}/{_MAX_QUEUE_SIZE})')
+
+        try:
+            await send_as_agent(
+                room.room_id,
+                f'⏳ Queued (position {position}) — will process after current task.',
+                config,
+                logger,
+                msgtype='m.notice',
+                reply_to_event_id=(
+                    None if thread_event_id else (reply_event_id_for_notice or user_reply_to_event_id)
+                ),
+                thread_event_id=thread_event_id,
+                thread_latest_event_id=thread_latest_event_id,
+            )
+        except (RuntimeError, ValueError, TypeError, asyncio.TimeoutError) as notice_error:
             logger.debug(
-                f'[BG-TASK] Suppressed "still processing" notice for {task_key} '
-                f'(cooldown: {_STILL_PROCESSING_COOLDOWN - (now - last_sent):.0f}s remaining)'
+                f'[BG-TASK] Failed to send queued notice for {task_key}: {notice_error}'
             )
         return True
 
