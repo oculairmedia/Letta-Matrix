@@ -1,4 +1,6 @@
+import asyncio
 import os
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,6 +28,15 @@ def _make_async_cm(response: MagicMock) -> MagicMock:
     return cm
 
 
+def _mock_session_scope(mock_session):
+    """Return an async context manager that yields mock_session,
+    matching _identity_http_session_scope's signature."""
+    @asynccontextmanager
+    async def _scope(session=None):
+        yield mock_session
+    return _scope
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_provision_login_retries_then_succeeds():
@@ -40,10 +51,14 @@ async def test_provision_login_retries_then_succeeds():
 
     session = MagicMock()
     session.post = MagicMock(side_effect=[_make_async_cm(fail_response), _make_async_cm(ok_response)])
-    session.__aenter__ = AsyncMock(return_value=session)
-    session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("src.api.routes._identity_helpers.aiohttp.ClientSession", return_value=session):
+    with patch(
+        "src.api.routes._identity_helpers._identity_http_session_scope",
+        _mock_session_scope(session),
+    ), patch(
+        "src.api.routes._identity_helpers.asyncio.sleep",
+        new=AsyncMock(return_value=None),
+    ):
         token = await _provision_login("https://matrix.test", "agent_test", "pass", retries=2)
 
     assert token == "tok_123"
@@ -65,10 +80,14 @@ async def test_send_admin_reset_clears_token_cache_on_401_then_recovers():
 
     session = MagicMock()
     session.put = MagicMock(side_effect=[_make_async_cm(unauthorized), _make_async_cm(authorized)])
-    session.__aenter__ = AsyncMock(return_value=session)
-    session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("src.api.routes._identity_helpers.aiohttp.ClientSession", return_value=session):
+    with patch(
+        "src.api.routes._identity_helpers._identity_http_session_scope",
+        _mock_session_scope(session),
+    ), patch(
+        "src.core.admin_room.resolve_admin_room_id",
+        new=AsyncMock(return_value="!test-admin-room:matrix.test"),
+    ):
         ok = await _send_admin_password_reset_command(
             user_manager,
             "https://matrix.test",
