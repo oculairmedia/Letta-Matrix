@@ -155,7 +155,7 @@ class LiveEditStreamingHandler:
                     )
                     self._self_delivered_to_current_room = True
 
-            line = event.format_progress()
+            line = event.format_progress(tool_call_count=self._tool_call_count)
             self._append_progress_line(event, line)
 
             if self._event_id is None:

@@ -17,6 +17,62 @@ SELF_DELIVERY_TOOL_NAMES = frozenset({
 })
 
 
+_MAX_DESC_LEN = 60
+
+# Map tool names to the argument field that best describes what it does.
+_TOOL_DESC_FIELDS: dict[str, tuple[str, ...]] = {
+    "Bash": ("description", "command"),
+    "Read": ("file_path",),
+    "Write": ("file_path",),
+    "Edit": ("file_path",),
+    "Grep": ("pattern",),
+    "Glob": ("pattern",),
+    "search_documents": ("query",),
+    "Task": ("description", "prompt"),
+    "matrix_messaging": ("operation", "message"),
+}
+
+
+def _extract_tool_description(tool_name: str, metadata: dict) -> str:
+    """Extract a human-readable description from tool call arguments.
+
+    Returns a truncated string suitable for inline progress display,
+    or empty string if nothing useful can be extracted.
+    """
+    args_raw = metadata.get("arguments", "")
+    if not args_raw:
+        return ""
+    try:
+        args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(args, dict):
+        return ""
+
+    # Try tool-specific fields first
+    fields = _TOOL_DESC_FIELDS.get(tool_name, ())
+    for field_name in fields:
+        val = args.get(field_name)
+        if val and isinstance(val, str):
+            val = val.strip()
+            if field_name == "file_path":
+                # Show basename only
+                val = val.rsplit("/", 1)[-1]
+            if field_name == "command":
+                # Strip leading whitespace/newlines from commands
+                val = val.split("\n")[0].strip()
+            if len(val) > _MAX_DESC_LEN:
+                val = val[:_MAX_DESC_LEN - 1] + "…"
+            return val
+
+    # Generic fallback: first short string value
+    for v in args.values():
+        if isinstance(v, str) and 3 <= len(v.strip()) <= _MAX_DESC_LEN:
+            return v.strip()
+
+    return ""
+
+
 class StreamEventType(Enum):
     """Types of streaming events"""
     REASONING = "reasoning"
@@ -57,18 +113,26 @@ class StreamEvent:
         """Whether this is an error"""
         return self.type == StreamEventType.ERROR
 
-    def format_progress(self) -> str:
-        """Format event as progress message for Matrix"""
+    def format_progress(self, tool_call_count: int | None = None) -> str:
+        """Format event as progress message for Matrix.
+
+        Args:
+            tool_call_count: Running count of tool calls in this stream session.
+        """
         if self.type == StreamEventType.TOOL_CALL:
             tool_name = self.metadata.get('tool_name', 'unknown')
-            return f"🔧 {tool_name}..."
+            count_tag = f" [{tool_call_count}]" if tool_call_count else ""
+            desc = _extract_tool_description(tool_name, self.metadata)
+            desc_tag = f" — {desc}" if desc else "..."
+            return f"🔧 {tool_name}{count_tag}{desc_tag}"
         elif self.type == StreamEventType.TOOL_RETURN:
             tool_name = self.metadata.get('tool_name', 'unknown')
+            count_tag = f" [{tool_call_count}]" if tool_call_count else ""
             status = self.metadata.get('status', 'unknown')
             if status == 'success':
-                return f"✅ {tool_name}"
+                return f"✅ {tool_name}{count_tag}"
             else:
-                return f"❌ {tool_name} (failed)"
+                return f"❌ {tool_name}{count_tag} (failed)"
         elif self.type == StreamEventType.REASONING:
             text = self.content or ""
             if len(text) > 50:
