@@ -44,10 +44,13 @@ SERVER_NAME="${MATRIX_SERVER_NAME:-matrix.oculair.ca}"
 TUWUNEL_IMAGE="ghcr.io/oculairmedia/tuwunel-docker2010:latest"
 TUWUNEL_DATA_PATH="${PROJECT_DIR}/tuwunel-data"
 LOCK_FILE="/tmp/matrix-health-recovery.lock"
+TIER2_STATE_FILE="/tmp/matrix-health-tier2-state"
+TIER2_COOLDOWN=3600       # seconds (1 hour) before retrying Tier 2
+TIER2_MAX_CONSECUTIVE=3   # after N consecutive Tier 2 failures, stop trying
 RECOVERY_TIMEOUT=60       # seconds for CLI recovery docker run
 ADMIN_ROOM_WAIT=5         # seconds to wait after admin room command
 STARTUP_WAIT=8            # seconds to wait after tuwunel restart
-COMPOSE_FILE_ARGS="-f ${PROJECT_DIR}/docker-compose.tuwunel.yml"
+COMPOSE_FILE_ARGS="-f ${PROJECT_DIR}/docker-compose.yml"
 
 # Agent identity discovery
 IDENTITY_BRIDGE_DATA="${PROJECT_DIR}/mcp-servers/matrix-identity-bridge/data"
@@ -57,11 +60,17 @@ MAX_PARALLEL_CHECKS=10    # concurrent login checks for agent identities
 
 # Parse flags
 AUTO_RECOVER=true
+DRY_RUN=false
 SIMULATE_AGENT_FAILURES_COUNT=0
+SIMULATE_CORE_FAILURES=""
+DISABLE_TIER2="${HEALTH_CHECK_DISABLE_TIER2:-false}"
 for arg in "$@"; do
     case "$arg" in
         --no-recover|--check-only) AUTO_RECOVER=false ;;
+        --dry-run) DRY_RUN=true ;;
+        --disable-tier2) DISABLE_TIER2=true ;;
         --simulate-agent-failures=*) SIMULATE_AGENT_FAILURES_COUNT="${arg#*=}" ;;
+        --simulate-core-failures=*) SIMULATE_CORE_FAILURES="${arg#*=}" ;;
     esac
 done
 
@@ -92,6 +101,116 @@ RECOVERY_FAILED_AGENTS=()
 
 log() {
     echo "[$(date -Iseconds)] $*"
+}
+
+# --- Tier 2 Cooldown State ---
+# Tracks consecutive Tier 2 attempts to prevent restart loops.
+# State file format: "<timestamp> <consecutive_count> <failed_users>"
+
+tier2_read_state() {
+    if [[ -f "$TIER2_STATE_FILE" ]]; then
+        local ts count users
+        read -r ts count users < "$TIER2_STATE_FILE" 2>/dev/null || return 1
+        TIER2_LAST_TS="${ts:-0}"
+        TIER2_CONSECUTIVE="${count:-0}"
+        TIER2_LAST_USERS="${users:-}"
+        return 0
+    fi
+    TIER2_LAST_TS=0
+    TIER2_CONSECUTIVE=0
+    TIER2_LAST_USERS=""
+    return 1
+}
+
+tier2_write_state() {
+    local count="$1"
+    local users="$2"
+    echo "$(date +%s) ${count} ${users}" > "$TIER2_STATE_FILE"
+}
+
+tier2_clear_state() {
+    rm -f "$TIER2_STATE_FILE"
+}
+
+# Check if Tier 2 should be attempted.
+# Returns 0 if OK to proceed, 1 if should be skipped.
+tier2_should_attempt() {
+    local -a failed_users_arr=("$@")
+    local now
+    now=$(date +%s)
+
+    # Kill switch
+    if [[ "$DISABLE_TIER2" == "true" ]]; then
+        log "  [Tier 2] SKIPPED — disabled via HEALTH_CHECK_DISABLE_TIER2 or --disable-tier2"
+        return 1
+    fi
+
+    tier2_read_state
+
+    # Check cooldown
+    local elapsed=$(( now - TIER2_LAST_TS ))
+    if [[ $elapsed -lt $TIER2_COOLDOWN && $TIER2_CONSECUTIVE -gt 0 ]]; then
+        local remaining=$(( TIER2_COOLDOWN - elapsed ))
+        log "  [Tier 2] SKIPPED — cooldown active (${remaining}s remaining, ${TIER2_CONSECUTIVE} consecutive attempts)"
+        return 1
+    fi
+
+    # Check consecutive failure limit
+    if [[ $TIER2_CONSECUTIVE -ge $TIER2_MAX_CONSECUTIVE ]]; then
+        # Reset counter if cooldown has elapsed (give it another chance)
+        if [[ $elapsed -ge $TIER2_COOLDOWN ]]; then
+            log "  [Tier 2] Cooldown elapsed after ${TIER2_CONSECUTIVE} consecutive attempts — allowing one more try"
+            return 0
+        fi
+        log "  [Tier 2] SKIPPED — ${TIER2_CONSECUTIVE} consecutive failures (max: ${TIER2_MAX_CONSECUTIVE}). Manual intervention needed."
+        return 1
+    fi
+
+    return 0
+}
+
+# Record Tier 2 outcome. Call after recovery attempt.
+tier2_record_outcome() {
+    local success="$1"
+
+    if $success; then
+        tier2_clear_state
+    else
+        tier2_read_state
+        local new_count=$(( TIER2_CONSECUTIVE + 1 ))
+        tier2_write_state "$new_count" "${RECOVERY_FAILED_USERS[*]:-unknown}"
+        log "  [Tier 2] Consecutive failure count: ${new_count}/${TIER2_MAX_CONSECUTIVE}"
+    fi
+}
+
+# --- Admin Room Pre-Check ---
+# Validates that at least one healthy user can access the admin room.
+# Called at startup to warn early if Tier 1 recovery is impossible.
+check_admin_room_access() {
+    local has_access=false
+
+    for user in "${PASSED_USERS[@]}"; do
+        local pw="${USERS[$user]}"
+        local t
+        t=$(get_access_token "$user" "$pw")
+        if [[ -z "$t" ]]; then continue; fi
+
+        local rid
+        rid=$(resolve_admin_room "$t")
+        if [[ -z "$rid" ]]; then continue; fi
+
+        # Test send capability
+        if send_room_message "$t" "$rid" "health-check: periodic access verification"; then
+            has_access=true
+            log "[Pre-Check] Admin room access confirmed via '${user}'"
+            break
+        fi
+    done
+
+    if ! $has_access; then
+        log "[Pre-Check] WARNING: No healthy user has admin room send access. Tier 1 recovery will fail."
+        log "[Pre-Check] Ensure oc_letta_v2 or oc_matrix_tuwunel_deploy_v2 is joined to #admins:matrix.oculair.ca"
+    fi
 }
 
 # Check if a single user can log in.
@@ -342,11 +461,25 @@ attempt_recovery() {
             log "  No healthy users available — admin room recovery impossible, using CLI"
         fi
 
-        if recover_via_cli "${tier2_needed[@]}"; then
+        if $DRY_RUN; then
+            log "  [Tier 2] DRY-RUN — would attempt CLI recovery for: ${tier2_needed[*]}"
             for pair in "${tier2_needed[@]}"; do
-                RECOVERED_USERS+=("${pair%%:*}")
+                RECOVERY_FAILED_USERS+=("${pair%%:*}")
             done
+        elif tier2_should_attempt "${tier2_needed[@]}"; then
+            if recover_via_cli "${tier2_needed[@]}"; then
+                for pair in "${tier2_needed[@]}"; do
+                    RECOVERED_USERS+=("${pair%%:*}")
+                done
+                tier2_record_outcome true
+            else
+                for pair in "${tier2_needed[@]}"; do
+                    RECOVERY_FAILED_USERS+=("${pair%%:*}")
+                done
+                tier2_record_outcome false
+            fi
         else
+            # Tier 2 skipped due to cooldown/limit/kill-switch
             for pair in "${tier2_needed[@]}"; do
                 RECOVERY_FAILED_USERS+=("${pair%%:*}")
             done
@@ -683,7 +816,10 @@ echo "=== Matrix Auth Health Check ==="
 echo "Homeserver: $HOMESERVER_URL"
 echo "Timestamp: $(date -Iseconds)"
 echo "Auto-recover: $AUTO_RECOVER"
+echo "Dry-run: $DRY_RUN"
+echo "Tier 2 disabled: $DISABLE_TIER2"
 echo "Simulate agent failures: $SIMULATE_AGENT_FAILURES_COUNT"
+[[ -n "$SIMULATE_CORE_FAILURES" ]] && echo "Simulate core failures: $SIMULATE_CORE_FAILURES"
 echo ""
 
 # Check if homeserver is reachable
@@ -710,6 +846,30 @@ for user in "${!USERS[@]}"; do
     fi
 done
 
+# Apply simulated core failures (for testing recovery paths)
+if [[ -n "$SIMULATE_CORE_FAILURES" ]]; then
+    IFS=',' read -ra SIM_USERS <<< "$SIMULATE_CORE_FAILURES"
+    for sim_user in "${SIM_USERS[@]}"; do
+        sim_user=$(echo "$sim_user" | tr -d ' ')
+        if [[ -n "${USERS[$sim_user]+x}" ]]; then
+            # Remove from passed, add to failed
+            new_passed=()
+            for u in "${PASSED_USERS[@]}"; do
+                [[ "$u" != "$sim_user" ]] && new_passed+=("$u")
+            done
+            PASSED_USERS=("${new_passed[@]}")
+            FAILED_USERS+=("$sim_user")
+            echo "SIMULATED FAIL: $sim_user"
+        fi
+    done
+fi
+
+# --- Admin Room Pre-Check ---
+# Validate that Tier 1 recovery is possible before we need it.
+if [[ ${#PASSED_USERS[@]} -gt 0 && ${#FAILED_USERS[@]} -gt 0 ]]; then
+    check_admin_room_access
+fi
+
 # --- Agent Identity Checks ---
 # Discover and check all Letta agent identities from the identity bridge storage.
 # These are checked AFTER core users so we have healthy users available for recovery.
@@ -733,6 +893,8 @@ TOTAL_FAILURES=$(( ${#FAILED_USERS[@]} + ${#FAILED_AGENTS[@]} ))
 
 if [[ $TOTAL_FAILURES -eq 0 ]]; then
     echo "=== All auth checks passed ==="
+    # Clear any stale Tier 2 state since everything is healthy
+    tier2_clear_state
     exit 0
 fi
 
