@@ -425,10 +425,33 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
 async function initMatrix(): Promise<void> {
   if (!config.matrix.accessToken) return;
 
+  // Resolve the actual user owning the access token via /whoami so the
+  // client identity can never drift from the token (previously hard-coded,
+  // which silently broke routing after token rotations / user renames).
+  let resolvedUserId: string;
+  try {
+    const whoamiRes = await fetch(
+      `${config.matrix.homeserverUrl.replace(/\/$/, "")}/_matrix/client/v3/account/whoami`,
+      { headers: { Authorization: `Bearer ${config.matrix.accessToken}` } },
+    );
+    if (!whoamiRes.ok) {
+      throw new Error(`whoami HTTP ${whoamiRes.status}`);
+    }
+    const whoami = (await whoamiRes.json()) as { user_id?: string };
+    if (!whoami.user_id) throw new Error("whoami response missing user_id");
+    resolvedUserId = whoami.user_id;
+    console.log(`[Bridge] Resolved Matrix identity via whoami: ${resolvedUserId}`);
+  } catch (err: any) {
+    console.error(
+      `[Bridge] Failed to resolve Matrix identity from access token: ${err?.message || err}. Aborting Matrix init.`,
+    );
+    return;
+  }
+
   matrixClient = sdk.createClient({
     baseUrl: config.matrix.homeserverUrl,
     accessToken: config.matrix.accessToken,
-    userId: "@oc_matrix_tuwunel_deploy:matrix.oculair.ca",
+    userId: resolvedUserId,
   });
 
   matrixClient.on(sdk.RoomEvent.Timeline, (event, room, toStartOfTimeline) => {

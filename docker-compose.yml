@@ -189,6 +189,7 @@ services:
     environment:
       - MATRIX_HOMESERVER_URL=http://127.0.0.1:6167
       - MATRIX_ACCESS_TOKEN=${OPENCODE_BRIDGE_ACCESS_TOKEN}
+      - MATRIX_API_URL=http://127.0.0.1:8004
       - BRIDGE_PORT=3201
       - AGENT_MAPPINGS_PATH=/app/data/agent_user_mappings.json
       - DATABASE_URL=${DATABASE_URL}
