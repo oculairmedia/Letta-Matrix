@@ -2,3 +2,4 @@ node_modules
 matrix-credentials.json
 matrix.lock
 p2p-bridge.js
+package-lock.json
