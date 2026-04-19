@@ -75,7 +75,20 @@
       "Bash(node -e \":*)",
       "Bash(top -bn1 -o %CPU)",
       "Bash(time bash:*)",
-      "Bash(bash /opt/stacks/matrix-tuwunel-deploy/scripts/refresh_beads_widget.sh 2>&1)"
+      "Bash(bash /opt/stacks/matrix-tuwunel-deploy/scripts/refresh_beads_widget.sh 2>&1)",
+      "Read(//root/.config/opencode/**)",
+      "Read(//root/.opencode/**)",
+      "Bash(bash build.sh)",
+      "Read(//root/.cache/opencode/**)",
+      "Bash(bd create *)",
+      "Bash(npm test *)",
+      "Bash(git log *)",
+      "Bash(npm run *)",
+      "Bash(npm --prefix /opt/stacks/matrix-tuwunel-deploy/opencode-bridge run build)",
+      "Bash(npm --prefix /opt/stacks/matrix-tuwunel-deploy/opencode-bridge test)",
+      "Bash(git *)",
+      "Bash(bash /opt/stacks/matrix-tuwunel-deploy/.opencode/plugin/build.sh)",
+      "Bash(bd note *)"
     ],
     "deny": []
   }
