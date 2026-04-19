@@ -513,7 +513,7 @@ class TestStreamingMessageHandler:
         assert result == "$event_123"
         handler.send_message.assert_called_once_with(
             "!test:matrix.example.com",
-            "🔧 search...",
+            "🔧 search [1]...",
             msgtype="m.notice",
         )
         handler.delete_message.assert_not_called()
@@ -544,8 +544,8 @@ class TestStreamingMessageHandler:
         
         # Verify the calls
         calls = handler_with_delete.send_message.call_args_list
-        assert calls[0][0] == ("!test:matrix.example.com", "🔧 search...")
-        assert calls[1][0] == ("!test:matrix.example.com", "✅ search")
+        assert calls[0][0] == ("!test:matrix.example.com", "🔧 search [1]...")
+        assert calls[1][0] == ("!test:matrix.example.com", "✅ search [1]")
         
         # Verify delete was called for the first message
         handler_with_delete.delete_message.assert_called_once_with(
