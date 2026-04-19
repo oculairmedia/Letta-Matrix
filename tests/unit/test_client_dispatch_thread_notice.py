@@ -59,7 +59,8 @@ async def test_dispatch_busy_notice_preserves_thread_relation():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_busy_notice_respects_cooldown_and_skips_send():
+async def test_dispatch_busy_notice_queues_and_sends_notice():
+    """When a task is active, new messages are queued and a notice is sent."""
     room = SimpleNamespace(room_id="!room:test.com")
     event = SimpleNamespace(event_id="$evt-124", source={"content": {}})
     logger = Mock()
@@ -67,10 +68,8 @@ async def test_dispatch_busy_notice_respects_cooldown_and_skips_send():
 
     try:
         with patch("src.matrix.task_manager._active_letta_tasks", {("!room:test.com", "agent-1"): active_task}), patch(
-            "src.matrix.task_manager._still_processing_last_sent", {"!room:test.com": 100.0}
-        ), patch("src.matrix.task_manager._STILL_PROCESSING_COOLDOWN", 60.0), patch(
-            "src.matrix.task_manager.time.monotonic", return_value=120.0
-        ), patch("src.matrix.task_manager.send_as_agent", new_callable=AsyncMock) as mock_send:
+            "src.matrix.task_manager.send_as_agent", new_callable=AsyncMock
+        ) as mock_send:
             handled = await _dispatch_letta_task(
                 room=room,
                 event=event,
@@ -84,7 +83,10 @@ async def test_dispatch_busy_notice_respects_cooldown_and_skips_send():
             )
 
         assert handled is True
-        mock_send.assert_not_awaited()
+        assert mock_send.await_count == 1
+        call_args = mock_send.await_args
+        assert "Queued" in call_args.args[1]
+        assert call_args.kwargs["msgtype"] == "m.notice"
     finally:
         active_task.cancel()
         try:
