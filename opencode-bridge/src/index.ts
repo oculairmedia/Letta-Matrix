@@ -17,6 +17,13 @@ import { createServer, IncomingMessage, ServerResponse } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { fetchAgentMappings } from "./agent-mappings.js";
 import { RegistrationDB, buildDatabaseUrlCandidates } from "./db.js";
+import { isAdmissibleForRoomDelivery } from "./sender-filter.js";
+import {
+  createBucket,
+  tryConsume,
+  type TokenBucket,
+  type TokenBucketConfig,
+} from "./rate-limiter.js";
 
 interface OpenCodeRegistration {
   id: string;
@@ -70,24 +77,23 @@ interface QueuedMessage {
 // WebSocket keepalive interval (ping every 30s to detect dead connections)
 const WS_PING_INTERVAL_MS = 30000;
 
-// Track message IDs we've sent to Matrix to prevent echo loops
-const sentOutboundMessageIds = new Set<string>();
-const OUTBOUND_CACHE_TTL_MS = 60000; // 1 minute
+// Matrix init retry backoff: 1s, 2s, 4s, ..., capped at 30s. Retries forever.
+const MATRIX_INIT_BASE_DELAY_MS = 1000;
+const MATRIX_INIT_MAX_DELAY_MS = 30000;
 
-function trackOutboundMessage(messageId: string): void {
-  sentOutboundMessageIds.add(messageId);
-  setTimeout(() => sentOutboundMessageIds.delete(messageId), OUTBOUND_CACHE_TTL_MS);
-  
-  // Cleanup if too many
-  if (sentOutboundMessageIds.size > 1000) {
-    const toDelete = Array.from(sentOutboundMessageIds).slice(0, 500);
-    toDelete.forEach(id => sentOutboundMessageIds.delete(id));
-  }
-}
+// Agent mappings init retry backoff: 1s, 2s, 4s, ..., capped at 60s. Retries until first success.
+// Required because agentBotMxids gates the Path 1 bot-sender drop; without it the feedback loop can re-open.
+const MAPPINGS_INIT_BASE_DELAY_MS = 1000;
+const MAPPINGS_INIT_MAX_DELAY_MS = 60000;
 
-function wasMessageSentByUs(messageId: string): boolean {
-  return sentOutboundMessageIds.has(messageId);
-}
+// Per-room token bucket for outbound Matrix posts. 20-msg burst, 5/sec sustained.
+// Hard cap so that any future routing bug can't turn into an unbounded flood.
+const OUTBOUND_RATE_CONFIG: TokenBucketConfig = { capacity: 20, refillPerSec: 5 };
+const OUTBOUND_DROP_LOG_WINDOW_MS = 5000;
+
+// Dedup window for incoming Matrix events. Protects against SDK redelivery
+// (rejoin / initial sync) so one logical message can't reach a plugin twice.
+const PROCESSED_EVENT_TTL_MS = 5 * 60 * 1000;
 
 const config = {
   matrix: {
@@ -110,7 +116,17 @@ let registrationDb: RegistrationDB | null = null;
 let matrixClient: sdk.MatrixClient | null = null;
 let agentMappings: Record<string, AgentMapping> = {};
 let agentMappingsByRoom: Map<string, AgentMapping> = new Map();
+let agentBotMxids: Set<string> = new Set();
 let agentMappingsLastFetched = 0;
+let matrixInitAttempt = 0;
+let matrixInitScheduled = false;
+let matrixInitInFlight = false;
+let mappingsInitialized = false;
+let mappingsInitAttempt = 0;
+let mappingsInitScheduled = false;
+const outboundRoomBuckets = new Map<string, TokenBucket>();
+const outboundRoomDropStats = new Map<string, { dropped: number; lastLogMs: number }>();
+const processedEventTimestamps = new Map<string, number>();
 const AGENT_MAPPINGS_CACHE_TTL = 300000;
 
 const MATRIX_DOMAIN = process.env.MATRIX_DOMAIN || "matrix.oculair.ca";
@@ -145,14 +161,48 @@ function extractOpenCodeMentions(body: string): string[] {
   return [...new Set(matches)];
 }
 
-async function loadAgentMappings(): Promise<void> {
+async function loadAgentMappings(): Promise<boolean> {
   try {
     agentMappings = await fetchAgentMappings(config.matrixApi.baseUrl, fetch);
     agentMappingsByRoom = new Map(Object.values(agentMappings).map((m) => [m.room_id, m]));
+    agentBotMxids = new Set(
+      Object.values(agentMappings)
+        .map((m) => m.matrix_user_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+    );
     agentMappingsLastFetched = Date.now();
+    return true;
   } catch (err) {
     console.warn(`[Bridge] Failed to load agent mappings:`, err);
+    return false;
   }
+}
+
+function scheduleMappingsInit(delayMs: number): void {
+  if (mappingsInitScheduled || mappingsInitialized) return;
+  mappingsInitScheduled = true;
+  setTimeout(() => {
+    mappingsInitScheduled = false;
+    loadAgentMappings().then((ok) => {
+      if (ok) {
+        mappingsInitialized = true;
+        mappingsInitAttempt = 0;
+        console.log(
+          `[Bridge] Agent mappings loaded (${agentBotMxids.size} bot identities tracked)`,
+        );
+        return;
+      }
+      mappingsInitAttempt++;
+      const backoff = Math.min(
+        MAPPINGS_INIT_BASE_DELAY_MS * Math.pow(2, Math.max(0, mappingsInitAttempt - 1)),
+        MAPPINGS_INIT_MAX_DELAY_MS,
+      );
+      console.warn(
+        `[Bridge] Agent mappings init attempt ${mappingsInitAttempt} failed. Retrying in ${backoff}ms.`,
+      );
+      scheduleMappingsInit(backoff);
+    });
+  }, delayMs);
 }
 
 function getAgentForRoom(roomId: string): AgentMapping | undefined {
@@ -183,12 +233,37 @@ function cleanupStaleRegistrations(): void {
 
 const USER_DISPLAY_NAME = process.env.OPENCODE_USER_NAME || "Emmanuel";
 
+function getOutboundBucket(roomId: string, nowMs: number): TokenBucket {
+  let bucket = outboundRoomBuckets.get(roomId);
+  if (!bucket) {
+    bucket = createBucket(OUTBOUND_RATE_CONFIG, nowMs);
+    outboundRoomBuckets.set(roomId, bucket);
+  }
+  return bucket;
+}
+
+function recordOutboundDrop(roomId: string, nowMs: number): void {
+  let stats = outboundRoomDropStats.get(roomId);
+  if (!stats) {
+    stats = { dropped: 0, lastLogMs: nowMs };
+    outboundRoomDropStats.set(roomId, stats);
+  }
+  stats.dropped++;
+  if (nowMs - stats.lastLogMs >= OUTBOUND_DROP_LOG_WINDOW_MS) {
+    console.warn(
+      `[Bridge] Rate-limit dropped ${stats.dropped} outbound messages for room ${roomId} in the last ${nowMs - stats.lastLogMs}ms`,
+    );
+    stats.dropped = 0;
+    stats.lastLogMs = nowMs;
+  }
+}
+
 async function handleOutboundMessage(
   registration: OpenCodeRegistration,
   outbound: WsOutboundMessage
 ): Promise<void> {
   const roomId = registration.rooms[0] || "";
-  
+
   if (!roomId || !matrixClient) return;
 
   // Silently discard <no-reply/> responses — posting them to Matrix
@@ -197,9 +272,14 @@ async function handleOutboundMessage(
   if (trimmed === "<no-reply/>" || trimmed === "`<no-reply/>`") {
     return;
   }
-  
-  trackOutboundMessage(outbound.messageId);
-  
+
+  const now = Date.now();
+  const bucket = getOutboundBucket(roomId, now);
+  if (!tryConsume(bucket, OUTBOUND_RATE_CONFIG, now)) {
+    recordOutboundDrop(roomId, now);
+    return;
+  }
+
   let messageContent = outbound.content;
   if (outbound.role === "user") {
     messageContent = `**${USER_DISPLAY_NAME}:** ${outbound.content}`;
@@ -335,18 +415,32 @@ function drainMessageQueue(registration: OpenCodeRegistration): void {
   }
 }
 
-function isOpenCodeIdentity(mxid: string): boolean {
-  return mxid.includes(":matrix.oculair.ca") && (
-    mxid.startsWith("@oc_") || 
-    mxid.startsWith("@opencode_")
-  );
+function wasEventProcessed(eventId: string, nowMs: number): boolean {
+  if (!eventId) return false;
+  const ts = processedEventTimestamps.get(eventId);
+  if (ts === undefined) return false;
+  if (nowMs - ts > PROCESSED_EVENT_TTL_MS) {
+    processedEventTimestamps.delete(eventId);
+    return false;
+  }
+  return true;
+}
+
+function markEventProcessed(eventId: string, nowMs: number): void {
+  if (!eventId) return;
+  processedEventTimestamps.set(eventId, nowMs);
+  if (processedEventTimestamps.size > 5000) {
+    const cutoff = nowMs - PROCESSED_EVENT_TTL_MS;
+    for (const [key, timestamp] of processedEventTimestamps) {
+      if (timestamp < cutoff) processedEventTimestamps.delete(key);
+    }
+  }
 }
 
 async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Promise<void> {
-  // Removed noisy per-event log — only log forwarding outcomes
   if (event.getSender() === matrixClient?.getUserId()) return;
   if (event.getType() !== "m.room.message") return;
-  
+
   const content = event.getContent();
   if (content.msgtype !== "m.text" && content.msgtype !== "m.notice") return;
 
@@ -355,8 +449,12 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
   const body = content.body || "";
   const eventId = event.getId() || "";
 
-  // Skip outbound messages we sent ourselves (echo prevention)
-  if (wasMessageSentByUs(eventId)) return;
+  const now = Date.now();
+  if (wasEventProcessed(eventId, now)) {
+    console.log(`[Bridge] Duplicate event ${eventId} in room ${roomId} from ${senderMxid}, skipping`);
+    return;
+  }
+  markEventProcessed(eventId, now);
 
   const senderMember = room.getMember?.(senderMxid);
   const senderName = senderMember?.name || getAgentForRoom(roomId)?.agent_name || senderMxid;
@@ -364,16 +462,23 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
   // Path 1: Room-registered delivery (direct room → WebSocket mapping)
   const roomRegistration = roomToRegistration.get(roomId);
   if (roomRegistration) {
-    // Only skip messages from the room's OWN OpenCode identity (echo prevention)
     const roomOwnerIdentities = deriveMatrixIdentities(roomRegistration.directory);
-    if (roomOwnerIdentities.includes(senderMxid)) {
+    const admission = isAdmissibleForRoomDelivery({
+      senderMxid,
+      body,
+      roomOwnerIdentities,
+      agentBotMxids,
+      matrixDomain: MATRIX_DOMAIN,
+    });
+    if (!admission.admit) {
+      console.log(`[Bridge] Room-registered drop (${admission.reason}): room=${roomId} sender=${senderMxid}`);
       return;
     }
     const forwarded = forwardToOpenCode(roomRegistration, roomId, senderName, senderMxid, body, eventId);
     if (!forwarded) {
       queueMessage(roomRegistration, roomId, senderName, senderMxid, body, eventId);
     }
-    console.log(`[Bridge] Room-registered forward to ${roomRegistration.id}: ${forwarded ? 'SUCCESS' : 'QUEUED'} - "${body.substring(0, 80)}"`);
+    console.log(`[Bridge] Room-registered forward to ${roomRegistration.id}: ${forwarded ? 'SUCCESS' : 'QUEUED'} room=${roomId} event=${eventId} - "${body.substring(0, 80)}"`);
     return;
   }
 
@@ -388,10 +493,10 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
     const registration = identityToRegistration.get(mention);
     if (registration) {
       if (forwardToOpenCode(registration, roomId, senderName, senderMxid, body, eventId)) {
-        console.log(`[Bridge] Mention-based forward to ${registration.id} for ${mention}: SUCCESS`);
+        console.log(`[Bridge] Mention-based forward to ${registration.id} for ${mention}: SUCCESS room=${roomId} event=${eventId}`);
       } else {
         queueMessage(registration, roomId, senderName, senderMxid, body, eventId);
-        console.log(`[Bridge] Mention-based forward to ${registration.id} for ${mention}: QUEUED`);
+        console.log(`[Bridge] Mention-based forward to ${registration.id} for ${mention}: QUEUED room=${roomId} event=${eventId}`);
       }
       continue;
     }
@@ -422,58 +527,104 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
   }
 }
 
-async function initMatrix(): Promise<void> {
-  if (!config.matrix.accessToken) return;
+function computeMatrixInitBackoff(): number {
+  return Math.min(
+    MATRIX_INIT_BASE_DELAY_MS * Math.pow(2, Math.max(0, matrixInitAttempt - 1)),
+    MATRIX_INIT_MAX_DELAY_MS,
+  );
+}
 
-  // Resolve the actual user owning the access token via /whoami so the
-  // client identity can never drift from the token (previously hard-coded,
-  // which silently broke routing after token rotations / user renames).
-  let resolvedUserId: string;
-  try {
-    const whoamiRes = await fetch(
-      `${config.matrix.homeserverUrl.replace(/\/$/, "")}/_matrix/client/v3/account/whoami`,
-      { headers: { Authorization: `Bearer ${config.matrix.accessToken}` } },
-    );
-    if (!whoamiRes.ok) {
-      throw new Error(`whoami HTTP ${whoamiRes.status}`);
-    }
-    const whoami = (await whoamiRes.json()) as { user_id?: string };
-    if (!whoami.user_id) throw new Error("whoami response missing user_id");
-    resolvedUserId = whoami.user_id;
-    console.log(`[Bridge] Resolved Matrix identity via whoami: ${resolvedUserId}`);
-  } catch (err: any) {
-    console.error(
-      `[Bridge] Failed to resolve Matrix identity from access token: ${err?.message || err}. Aborting Matrix init.`,
-    );
+function scheduleMatrixInit(delayMs: number): void {
+  if (matrixInitScheduled || matrixInitInFlight) return;
+  matrixInitScheduled = true;
+  setTimeout(() => {
+    matrixInitScheduled = false;
+    initMatrix().catch((err) => {
+      console.error(`[Bridge] initMatrix threw unexpectedly:`, err);
+      scheduleMatrixInit(computeMatrixInitBackoff());
+    });
+  }, delayMs);
+}
+
+async function initMatrix(): Promise<void> {
+  if (!config.matrix.accessToken) {
+    console.warn("[Bridge] MATRIX_ACCESS_TOKEN not set — Matrix integration disabled");
     return;
   }
+  if (matrixClient) return;
+  if (matrixInitInFlight) return;
+  matrixInitInFlight = true;
+  matrixInitAttempt++;
 
-  matrixClient = sdk.createClient({
-    baseUrl: config.matrix.homeserverUrl,
-    accessToken: config.matrix.accessToken,
-    userId: resolvedUserId,
-  });
-
-  matrixClient.on(sdk.RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
-    if (toStartOfTimeline) return;
-    if (room) {
-      handleMatrixMessage(event, room).catch((err) => {
-        console.error(`[Bridge] Error handling Matrix message in ${room?.roomId}:`, err);
-      });
-    }
-  });
-
-  matrixClient.on(sdk.RoomMemberEvent.Membership, async (event, member) => {
-    if (member.membership === "invite" && member.userId === matrixClient?.getUserId()) {
-      try {
-        await matrixClient?.joinRoom(member.roomId);
-      } catch (err: any) {
-        console.warn(`[Bridge] Failed to auto-join room ${member.roomId}:`, err?.message || err);
+  try {
+    // Resolve the actual user owning the access token via /whoami so the
+    // client identity can never drift from the token (previously hard-coded,
+    // which silently broke routing after token rotations / user renames).
+    let resolvedUserId: string;
+    try {
+      const whoamiRes = await fetch(
+        `${config.matrix.homeserverUrl.replace(/\/$/, "")}/_matrix/client/v3/account/whoami`,
+        { headers: { Authorization: `Bearer ${config.matrix.accessToken}` } },
+      );
+      if (!whoamiRes.ok) {
+        throw new Error(`whoami HTTP ${whoamiRes.status}`);
       }
+      const whoami = (await whoamiRes.json()) as { user_id?: string };
+      if (!whoami.user_id) throw new Error("whoami response missing user_id");
+      resolvedUserId = whoami.user_id;
+      console.log(`[Bridge] Resolved Matrix identity via whoami: ${resolvedUserId}`);
+    } catch (err: any) {
+      const backoff = computeMatrixInitBackoff();
+      console.error(
+        `[Bridge] initMatrix attempt ${matrixInitAttempt} failed (whoami): ${err?.message || err}. Retrying in ${backoff}ms.`,
+      );
+      scheduleMatrixInit(backoff);
+      return;
     }
-  });
 
-  await matrixClient.startClient({ initialSyncLimit: 1 });
+    let client: sdk.MatrixClient;
+    try {
+      client = sdk.createClient({
+        baseUrl: config.matrix.homeserverUrl,
+        accessToken: config.matrix.accessToken,
+        userId: resolvedUserId,
+      });
+
+      client.on(sdk.RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
+        if (toStartOfTimeline) return;
+        if (room) {
+          handleMatrixMessage(event, room).catch((err) => {
+            console.error(`[Bridge] Error handling Matrix message in ${room?.roomId}:`, err);
+          });
+        }
+      });
+
+      client.on(sdk.RoomMemberEvent.Membership, async (_event, member) => {
+        if (member.membership === "invite" && member.userId === client.getUserId()) {
+          try {
+            await client.joinRoom(member.roomId);
+          } catch (err: any) {
+            console.warn(`[Bridge] Failed to auto-join room ${member.roomId}:`, err?.message || err);
+          }
+        }
+      });
+
+      await client.startClient({ initialSyncLimit: 1 });
+    } catch (err: any) {
+      const backoff = computeMatrixInitBackoff();
+      console.error(
+        `[Bridge] initMatrix attempt ${matrixInitAttempt} failed (startClient): ${err?.message || err}. Retrying in ${backoff}ms.`,
+      );
+      scheduleMatrixInit(backoff);
+      return;
+    }
+
+    matrixClient = client;
+    matrixInitAttempt = 0;
+    console.log(`[Bridge] Matrix client ready as ${resolvedUserId}`);
+  } finally {
+    matrixInitInFlight = false;
+  }
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1002,15 +1153,14 @@ async function main(): Promise<void> {
     }
   }
 
-  await loadAgentMappings();
-
   const server = createServer(handleRequest);
-  
+
   const wss = new WebSocketServer({ server, path: "/ws" });
   wss.on("connection", handleWebSocketConnection);
-  
+
   server.listen(config.bridge.port);
-  await initMatrix();
+  scheduleMappingsInit(0);
+  scheduleMatrixInit(0);
   setInterval(cleanupStaleRegistrations, 60000);
 }
 

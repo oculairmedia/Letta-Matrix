@@ -209,35 +209,6 @@ function getOrCreateMessageDir(sessionID: string): string {
   return directPath;
 }
 
-interface StoredMessage {
-  agent?: string;
-  model?: { providerID?: string; modelID?: string };
-}
-
-function findNearestMessageWithFields(messageDir: string): StoredMessage | null {
-  try {
-    const files = readdirSync(messageDir)
-      .filter((f) => f.endsWith(".json"))
-      .sort()
-      .reverse();
-
-    for (const file of files) {
-      try {
-        const content = readFileSync(path.join(messageDir, file), "utf-8");
-        const msg = JSON.parse(content) as StoredMessage;
-        if (msg.agent || (msg.model?.providerID && msg.model?.modelID)) {
-          return msg;
-        }
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
 function injectMessage(sessionID: string, text: string, cwd?: string): boolean {
   if (!text || text.trim().length === 0) {
     debugLog("[MatrixPlugin] Attempted to inject empty message, skipping");
@@ -245,21 +216,19 @@ function injectMessage(sessionID: string, text: string, cwd?: string): boolean {
   }
 
   const messageDir = getOrCreateMessageDir(sessionID);
-  const fallback = findNearestMessageWithFields(messageDir);
 
   const now = Date.now();
   const messageID = generateMessageId();
   const partID = generatePartId();
 
+  // Deliberately omit agent/model — OpenCode will resolve the session's active
+  // agent when rendering. Hard-coded defaults here previously leaked stale
+  // provider references (llmux/Opus 4.6) after opencode.json renames.
   const messageMeta: MessageMeta = {
     id: messageID,
     sessionID,
     role: "user",
     time: { created: now },
-    agent: fallback?.agent ?? "general",
-    model: fallback?.model?.providerID && fallback?.model?.modelID
-      ? { providerID: fallback.model.providerID, modelID: fallback.model.modelID }
-      : undefined,
     path: cwd ? { cwd, root: "/" } : undefined,
   };
 
@@ -499,9 +468,6 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     if (count === 0) return;
     debugLog(`injectPendingMessages (${trigger}): processing ${count} queued messages for session ${sessionId}`);
     
-    const messageDir = getOrCreateMessageDir(sessionId);
-    const prevMessage = findNearestMessageWithFields(messageDir);
-    
     // Combine all pending messages into one injection
     const combinedMessages = pendingMatrixMessages
       .filter(msg => !processedEventIds.has(msg.eventId))
@@ -532,12 +498,14 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
     }
     
     try {
-      debugLog(`Attempting session.prompt (${trigger}) with sessionId=${sessionId}, agent=${prevMessage?.agent || 'none'}`);
+      debugLog(`Attempting session.prompt (${trigger}) with sessionId=${sessionId}`);
       debugLog(`Combined message content: ${combinedMessages.substring(0, 200)}...`);
+      // No agent/model override — let OpenCode resolve the session's active agent.
+      // Inheriting from prior message history caused stale-provider errors after
+      // opencode.json provider renames (e.g. llmux → _llmux_DISABLED).
       await client.session.prompt({
         path: { id: sessionId },
         body: {
-          agent: prevMessage?.agent,
           parts: [{ type: "text", text: combinedMessages }],
         },
         query: { directory: baseDir },
