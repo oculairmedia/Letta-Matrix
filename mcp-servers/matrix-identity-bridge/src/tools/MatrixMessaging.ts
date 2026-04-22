@@ -183,6 +183,9 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
   // should NOT trigger Claude Code identity - that's for actual Claude Code sessions.
   const effectiveSource = callerContext.sourceOverride === 'claude-code' ? 'claude-code' : 
     (callerContext.source === 'claude-code' ? 'opencode' : callerContext.source);
+  const identityCallerName = callerContext.source === 'claude-code' && callerContext.sourceOverride !== 'claude-code'
+    ? input.caller_name
+    : callerName;
 
   switch (input.operation) {
       // === MESSAGE OPERATIONS ===
@@ -214,7 +217,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
           identity = await resolveCallerIdentity(
             ctx,
             callerDirectory,
-            callerName,
+            identityCallerName,
             effectiveSource
           );
           if (effectiveSource === 'claude-code') {
@@ -443,7 +446,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const resolvedIdentityId = await resolveCallerIdentityId(
           ctx,
           callerDirectory,
-          callerName,
+          identityCallerName,
           effectiveSource,
           input.identity_id
         );
@@ -456,7 +459,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const resolvedIdentityId = await resolveCallerIdentityId(
           ctx,
           callerDirectory,
-          callerName,
+          identityCallerName,
           effectiveSource,
           input.identity_id
         );
@@ -469,7 +472,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const resolvedIdentityId = await resolveCallerIdentityId(
           ctx,
           callerDirectory,
-          callerName,
+          identityCallerName,
           effectiveSource,
           input.identity_id
         );
@@ -494,7 +497,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const resolvedIdentityId = await resolveCallerIdentityId(
           ctx,
           callerDirectory,
-          callerName,
+          identityCallerName,
           effectiveSource,
           input.identity_id
         );
@@ -506,7 +509,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const identity = await resolveCallerIdentity(
           ctx,
           callerDirectory,
-          callerName,
+          identityCallerName,
           effectiveSource,
           input.identity_id
         );
@@ -526,7 +529,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const identity = await resolveCallerIdentity(
           ctx,
           callerDirectory,
-          callerName,
+          identityCallerName,
           effectiveSource,
           input.identity_id
         );
@@ -541,7 +544,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
         const identity = await resolveCallerIdentity(
           ctx,
           callerDirectory,
-          callerName,
+          identityCallerName,
           effectiveSource,
           input.identity_id
         );
@@ -800,7 +803,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
             console.log(`[MatrixMessaging] talk_to_agent: Using Letta agent identity ${identityId} -> ${callerIdentity.mxid}`);
           } else if (callerDirectory) {
             // OpenCode/Claude Code caller
-            callerIdentity = await resolveCallerIdentity(ctx, callerDirectory, callerName, effectiveSource);
+            callerIdentity = await resolveCallerIdentity(ctx, callerDirectory, identityCallerName, effectiveSource);
             callerIdentitySource = effectiveSource === 'claude-code' ? 'explicit' : 'opencode';
             console.log(`[MatrixMessaging] talk_to_agent: Using ${effectiveSource} identity: ${callerIdentity.mxid}`);
           } else {
@@ -1263,7 +1266,7 @@ const executeOperation = async (input: Input, ctx: ToolContext, callerContext: C
             if (!identity) throw new Error(`Failed to get identity for calling agent: ${callingAgentId}`);
             return identity;
           } else if (callerDirectory) {
-            return await resolveCallerIdentity(ctx, callerDirectory, callerName, effectiveSource);
+            return await resolveCallerIdentity(ctx, callerDirectory, identityCallerName, effectiveSource);
           } else {
             return await ctx.openCodeService.getOrCreateDefaultIdentity();
           }

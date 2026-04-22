@@ -88,7 +88,12 @@
       "Bash(npm --prefix /opt/stacks/matrix-tuwunel-deploy/opencode-bridge test)",
       "Bash(git *)",
       "Bash(bash /opt/stacks/matrix-tuwunel-deploy/.opencode/plugin/build.sh)",
-      "Bash(bd note *)"
+      "Bash(bd note *)",
+      "Bash(npm view *)",
+      "Bash(bun install *)",
+      "Bash(bunx tsc *)",
+      "Bash(npm --prefix /opt/stacks/matrix-tuwunel-deploy/mcp-servers/matrix-identity-bridge run type-check)",
+      "Bash(npm --prefix /opt/stacks/matrix-tuwunel-deploy/mcp-servers/matrix-identity-bridge test)"
     ],
     "deny": []
   }

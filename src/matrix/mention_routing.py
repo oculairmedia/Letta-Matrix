@@ -133,9 +133,24 @@ def extract_agent_mentions(body: str) -> List[Tuple[str, str, str]]:
     return list(found_agents.values())
 
 
-def extract_opencode_mentions(body: str) -> List[str]:
-    clean_body = strip_reply_fallback(body)
+def extract_opencode_mentions(body: str, content: Optional[dict] = None) -> List[str]:
+    # Pills (Element et al.) render @-mentions using the target's displayname in
+    # `body`, not the MXID, so body-only regex misses them whenever the OC
+    # session's displayname doesn't happen to equal its localpart. The MSC 3952
+    # m.mentions.user_ids field always carries the real MXID — harvest it first,
+    # then merge with body matches for clients that don't emit pills.
     found: set[str] = set()
+
+    if content:
+        mentions = content.get("m.mentions") or {}
+        if isinstance(mentions, dict):
+            user_ids = mentions.get("user_ids") or []
+            if isinstance(user_ids, list):
+                for mxid in user_ids:
+                    if isinstance(mxid, str) and OC_MXID_PATTERN.fullmatch(mxid):
+                        found.add(mxid)
+
+    clean_body = strip_reply_fallback(body)
     for match in OC_MXID_PATTERN.finditer(clean_body):
         found.add(match.group(0))
     return list(found)
@@ -334,15 +349,8 @@ async def handle_agent_mention_routing(
     if not admin_client:
         return
 
-    oc_mentions = extract_opencode_mentions(body)
+    oc_mentions = extract_opencode_mentions(body, content)
     for oc_mxid in oc_mentions:
-        # Skip if OpenCode identity is already a member of this room —
-        # they receive the agent's response directly (e.g. talk_to_agent flow).
-        # Forwarding would cause duplicate delivery.
-        if hasattr(room, 'users') and oc_mxid in room.users:
-            logger.debug(f"Skipping OpenCode relay for {oc_mxid} — already a member of {room.room_id}")
-            continue
-
         resolved = await resolve_opencode_room(oc_mxid)
         if not resolved:
             logger.debug(f"No active OpenCode instance for {oc_mxid}")

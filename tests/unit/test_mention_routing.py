@@ -234,6 +234,83 @@ class TestExtractAgentMentions:
 
 
 # =============================================================================
+# Tests for extract_opencode_mentions()
+# =============================================================================
+
+class TestExtractOpenCodeMentions:
+    """Tests for extract_opencode_mentions() — body regex + m.mentions pill harvest"""
+
+    def test_extract_mxid_from_body(self):
+        from src.matrix.mention_routing import extract_opencode_mentions
+
+        body = "hey @oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca look at this"
+        mentions = extract_opencode_mentions(body)
+
+        assert mentions == ["@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"]
+
+    def test_extract_from_pill_when_body_only_has_displayname(self):
+        """Pill mention: body carries the displayname, MXID lives in m.mentions.user_ids."""
+        from src.matrix.mention_routing import extract_opencode_mentions
+
+        body = "@OpenCode: Matrix Tuwunel Deploy please check this"
+        content = {
+            "m.mentions": {
+                "user_ids": ["@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"]
+            }
+        }
+
+        mentions = extract_opencode_mentions(body, content)
+
+        assert mentions == ["@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"]
+
+    def test_pill_and_body_are_deduplicated(self):
+        from src.matrix.mention_routing import extract_opencode_mentions
+
+        mxid = "@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"
+        body = f"hi {mxid} here"
+        content = {"m.mentions": {"user_ids": [mxid]}}
+
+        mentions = extract_opencode_mentions(body, content)
+
+        assert mentions == [mxid]
+
+    def test_non_opencode_user_ids_are_ignored(self):
+        """Only MXIDs matching the oc_* pattern should be returned."""
+        from src.matrix.mention_routing import extract_opencode_mentions
+
+        body = "plain text"
+        content = {
+            "m.mentions": {
+                "user_ids": [
+                    "@agent_597b5756_2915_4560_ba6b_91005f085166:matrix.oculair.ca",
+                    "@someuser:matrix.oculair.ca",
+                ]
+            }
+        }
+
+        mentions = extract_opencode_mentions(body, content)
+
+        assert mentions == []
+
+    def test_no_content_is_backward_compatible(self):
+        from src.matrix.mention_routing import extract_opencode_mentions
+
+        body = "@oc_foo_v2:matrix.oculair.ca hi"
+
+        assert extract_opencode_mentions(body) == ["@oc_foo_v2:matrix.oculair.ca"]
+        assert extract_opencode_mentions(body, None) == ["@oc_foo_v2:matrix.oculair.ca"]
+
+    def test_malformed_mentions_field_is_ignored(self):
+        from src.matrix.mention_routing import extract_opencode_mentions
+
+        body = "nothing here"
+        # user_ids is a string, not a list — should not crash, just return []
+        content = {"m.mentions": {"user_ids": "not-a-list"}}
+
+        assert extract_opencode_mentions(body, content) == []
+
+
+# =============================================================================
 # Tests for strip_reply_fallback()
 # =============================================================================
 
@@ -734,10 +811,9 @@ class TestOpenCodeRelaySkip:
         return event
     
     @pytest.mark.asyncio
-    async def test_skips_opencode_relay_when_identity_in_room(
+    async def test_forwards_opencode_relay_when_identity_in_room_but_relay_room_differs(
         self, mock_room_with_users, mock_event_with_oc_mention, mock_config, mock_logger, mock_mapping_service
     ):
-        """Test that relay is skipped when OpenCode MXID is already in room.users"""
         from src.matrix.mention_routing import handle_agent_mention_routing
         
         # Add OpenCode identity to room users
@@ -762,10 +838,8 @@ class TestOpenCodeRelaySkip:
                 admin_client=admin_client,
             )
             
-            # forward_to_opencode_room should NOT be called
-            mock_forward_oc.assert_not_called()
-            # resolve_opencode_room should NOT be called either (early skip)
-            mock_resolve_oc.assert_not_called()
+            mock_forward_oc.assert_called_once()
+            mock_resolve_oc.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_forwards_opencode_relay_when_identity_not_in_room(
@@ -805,7 +879,6 @@ class TestOpenCodeRelaySkip:
     async def test_skips_relay_but_still_forwards_agent_mentions(
         self, mock_room_with_users, mock_event_with_agent_and_oc_mention, mock_config, mock_logger, mock_mapping_service
     ):
-        """Test that agent forwarding happens but relay is skipped when OpenCode in room"""
         from src.matrix.mention_routing import handle_agent_mention_routing
         
         # Add OpenCode identity to room users
@@ -832,11 +905,78 @@ class TestOpenCodeRelaySkip:
                 admin_client=admin_client,
             )
             
-            # Agent forwarding SHOULD happen (Meridian mention)
             mock_forward_agent.assert_called_once()
-            # OpenCode relay should NOT happen (already in room)
+            mock_forward_oc.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_opencode_relay_when_resolved_room_matches_source_room(
+        self, mock_room_with_users, mock_event_with_oc_mention, mock_config, mock_logger, mock_mapping_service
+    ):
+        from src.matrix.mention_routing import handle_agent_mention_routing
+
+        oc_mxid = "@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"
+        mock_room_with_users.users[oc_mxid] = Mock()
+        admin_client = AsyncMock()
+
+        with patch('src.matrix.mention_routing.forward_to_opencode_room') as mock_forward_oc, \
+             patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
+
+            mock_resolve_oc.return_value = (mock_room_with_users.room_id, "/opt/stacks/test-project")
+
+            await handle_agent_mention_routing(
+                room=mock_room_with_users,
+                event=mock_event_with_oc_mention,
+                sender_mxid=mock_event_with_oc_mention.sender,
+                sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
+                config=mock_config,
+                logger=mock_logger,
+                admin_client=admin_client,
+            )
+
+            mock_resolve_oc.assert_called_once()
             mock_forward_oc.assert_not_called()
     
+    @pytest.mark.asyncio
+    async def test_forwards_opencode_relay_from_pill_when_body_lacks_mxid(
+        self, mock_room_with_users, mock_config, mock_logger, mock_mapping_service
+    ):
+        """Letta pill event: body carries displayname only, MXID is in m.mentions.user_ids.
+
+        This reproduces the displayname-rename routing break: without pill support the
+        extractor returns [] and the forward never fires.
+        """
+        from src.matrix.mention_routing import handle_agent_mention_routing
+
+        oc_mxid = "@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca"
+        event = Mock()
+        event.body = "@OpenCode: Matrix Tuwunel Deploy please take a look"
+        event.sender = "@agent_870d3dfb_319f_4c52_91f1_72ab46d944a7:matrix.oculair.ca"
+        event.event_id = "$pill_only_123"
+        event.source = {"content": {"m.mentions": {"user_ids": [oc_mxid]}}}
+
+        admin_client = AsyncMock()
+
+        with patch('src.matrix.mention_routing.forward_to_opencode_room') as mock_forward_oc, \
+             patch('src.matrix.mention_routing.resolve_opencode_room') as mock_resolve_oc:
+
+            mock_resolve_oc.return_value = ("!relay_room:matrix.oculair.ca", "/opt/stacks/matrix-tuwunel-deploy")
+            mock_forward_oc.return_value = "$forwarded"
+
+            await handle_agent_mention_routing(
+                room=mock_room_with_users,
+                event=event,
+                sender_mxid=event.sender,
+                sender_agent_id="agent-870d3dfb-319f-4c52-91f1-72ab46d944a7",
+                sender_agent_name="Huly - matrix-tuwunel-deploy",
+                config=mock_config,
+                logger=mock_logger,
+                admin_client=admin_client,
+            )
+
+            mock_resolve_oc.assert_called_once_with(oc_mxid)
+            mock_forward_oc.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_forwards_relay_when_room_has_no_users_attr(
         self, mock_room_no_users_attr, mock_event_with_oc_mention, mock_config, mock_logger, mock_mapping_service

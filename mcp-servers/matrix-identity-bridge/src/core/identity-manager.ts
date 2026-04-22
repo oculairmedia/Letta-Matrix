@@ -528,9 +528,6 @@ export class IdentityManager {
       throw new Error(`Identity not found: ${id}`);
     }
 
-    const token = await this.getToken();
-    const url = `${this.homeserverUrl}/_synapse/admin/v2/users/${identity.mxid}`;
-
     const body: Partial<MatrixUserCreateRequest> = {};
     if (displayName !== undefined) {
       body.displayname = displayName;
@@ -541,57 +538,72 @@ export class IdentityManager {
       identity.avatarUrl = avatarUrl;
     }
 
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      const shouldFallback = response.status === 404 || errorText.includes('M_UNRECOGNIZED');
-
-      if (shouldFallback && identity.accessToken) {
-        const profileHeaders = {
-          'Authorization': `Bearer ${identity.accessToken}`,
-          'Content-Type': 'application/json'
-        };
-
-        if (displayName !== undefined) {
-          const displayResponse = await fetch(
-            `${this.homeserverUrl}/_matrix/client/v3/profile/${identity.mxid}/displayname`,
-            {
-              method: 'PUT',
-              headers: profileHeaders,
-              body: JSON.stringify({ displayname: displayName })
-            }
-          );
-          if (!displayResponse.ok) {
-            const displayError = await displayResponse.text();
-            throw new Error(`Failed to update display name: ${displayResponse.status} ${displayError}`);
-          }
-        }
-
-        if (avatarUrl !== undefined) {
-          const avatarResponse = await fetch(
-            `${this.homeserverUrl}/_matrix/client/v3/profile/${identity.mxid}/avatar_url`,
-            {
-              method: 'PUT',
-              headers: profileHeaders,
-              body: JSON.stringify({ avatar_url: avatarUrl })
-            }
-          );
-          if (!avatarResponse.ok) {
-            const avatarError = await avatarResponse.text();
-            throw new Error(`Failed to update avatar: ${avatarResponse.status} ${avatarError}`);
-          }
-        }
-      } else {
-        throw new Error(`Failed to update user: ${response.status} ${errorText}`);
+    const applyProfileFallback = async (): Promise<void> => {
+      if (!identity.accessToken) {
+        throw new Error('Failed to update identity: no access token available for profile fallback');
       }
+
+      const profileHeaders = {
+        'Authorization': `Bearer ${identity.accessToken}`,
+        'Content-Type': 'application/json'
+      };
+
+      if (displayName !== undefined) {
+        const displayResponse = await fetch(
+          `${this.homeserverUrl}/_matrix/client/v3/profile/${identity.mxid}/displayname`,
+          {
+            method: 'PUT',
+            headers: profileHeaders,
+            body: JSON.stringify({ displayname: displayName })
+          }
+        );
+        if (!displayResponse.ok) {
+          const displayError = await displayResponse.text();
+          throw new Error(`Failed to update display name: ${displayResponse.status} ${displayError}`);
+        }
+      }
+
+      if (avatarUrl !== undefined) {
+        const avatarResponse = await fetch(
+          `${this.homeserverUrl}/_matrix/client/v3/profile/${identity.mxid}/avatar_url`,
+          {
+            method: 'PUT',
+            headers: profileHeaders,
+            body: JSON.stringify({ avatar_url: avatarUrl })
+          }
+        );
+        if (!avatarResponse.ok) {
+          const avatarError = await avatarResponse.text();
+          throw new Error(`Failed to update avatar: ${avatarResponse.status} ${avatarError}`);
+        }
+      }
+    };
+
+    try {
+      const token = await this.getToken();
+      const url = `${this.homeserverUrl}/_synapse/admin/v2/users/${identity.mxid}`;
+
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        const shouldFallback = response.status === 401 || response.status === 403 || response.status === 404 || errorText.includes('M_UNRECOGNIZED');
+
+        if (!shouldFallback) {
+          throw new Error(`Failed to update user: ${response.status} ${errorText}`);
+        }
+
+        await applyProfileFallback();
+      }
+    } catch (error) {
+      await applyProfileFallback();
     }
 
     await this.storage.saveIdentity(identity);
