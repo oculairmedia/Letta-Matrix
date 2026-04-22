@@ -1,15 +1,23 @@
 """Unit tests for src/matrix/file_handler.py - image and document upload handling."""
 
 import base64
+import io
 import os
 import tempfile
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 
 import pytest
+from PIL import Image
 
 from src.matrix.file_download import FileMetadata
 from src.matrix.document_parser import DocumentParseResult
+
+
+def _write_tiny_image(path: str, fmt: str = "PNG") -> None:
+    # _compress_to_budget calls Image.open on the file, so tests need real
+    # pixel data — a PNG signature alone isn't enough.
+    Image.new("RGB", (2, 2), (255, 0, 0)).save(path, format=fmt)
 
 
 # ---------------------------------------------------------------------------
@@ -63,8 +71,8 @@ async def test_handle_image_upload_encodes_base64_and_returns_multimodal(
     
     # Create a temporary image file
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp.write(b"\x89PNG\r\n\x1a\nfake-png-data")
         tmp_path = tmp.name
+    _write_tiny_image(tmp_path, "PNG")
     
     try:
         handler = LettaFileHandler(
@@ -99,15 +107,18 @@ async def test_handle_image_upload_encodes_base64_and_returns_multimodal(
         assert result[0]["type"] == "text"
         assert "Image Upload: test.png" in result[0]["text"]
         
-        # Check image part
+        # Check image part — _compress_to_budget transcodes (PNG only when
+        # the source has alpha; otherwise flattens to JPEG), so the test
+        # can't assert the original mime or exact bytes.
         assert result[1]["type"] == "image"
         assert result[1]["source"]["type"] == "base64"
-        assert result[1]["source"]["media_type"] == "image/png"
-        
-        # Verify base64 encoding is correct
-        expected_b64 = base64.standard_b64encode(b"\x89PNG\r\n\x1a\nfake-png-data").decode("utf-8")
-        assert result[1]["source"]["data"] == expected_b64
-        
+        assert result[1]["source"]["media_type"] in ("image/png", "image/jpeg")
+
+        decoded = base64.standard_b64decode(result[1]["source"]["data"])
+        assert len(decoded) > 0
+        with Image.open(io.BytesIO(decoded)) as round_tripped:
+            round_tripped.verify()
+
         # Verify notification was sent
         mock_notify_callback.assert_awaited_once()
         call_args = mock_notify_callback.await_args
@@ -126,8 +137,8 @@ async def test_handle_image_upload_includes_caption_in_message(
     from src.matrix.file_handler import LettaFileHandler
     
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-        tmp.write(b"fake-jpg-data")
         tmp_path = tmp.name
+    _write_tiny_image(tmp_path, "JPEG")
     
     try:
         handler = LettaFileHandler(
@@ -170,8 +181,8 @@ async def test_handle_image_upload_wraps_opencode_sender_routing(
     from src.matrix.file_handler import LettaFileHandler
     
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp.write(b"fake-image")
         tmp_path = tmp.name
+    _write_tiny_image(tmp_path, "PNG")
     
     try:
         handler = LettaFileHandler(
