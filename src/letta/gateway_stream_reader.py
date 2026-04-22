@@ -201,8 +201,12 @@ def _parse_stream_event(
         metadata["tool_name"] = raw.get("tool_name", "unknown")
         if raw.get("tool_call_id"):
             metadata["tool_call_id"] = raw["tool_call_id"]
-        if raw.get("arguments"):
-            metadata["arguments"] = raw["arguments"]
+        # WS gateway sends tool args as "tool_input" (dict); legacy SDK sends
+        # "arguments" (JSON string). Accept both so _extract_tool_description
+        # can render tool details (e.g., "🔧 Bash [1] — git status").
+        tool_args = raw.get("tool_input") or raw.get("arguments")
+        if tool_args:
+            metadata["arguments"] = tool_args
         logger.info(
             "[GW-STREAM] TOOL_CALL raw=%s",
             {k: (v[:200] if isinstance(v, str) and len(v) > 200 else v) for k, v in raw.items()},
