@@ -93,7 +93,8 @@
       "Bash(bun install *)",
       "Bash(bunx tsc *)",
       "Bash(npm --prefix /opt/stacks/matrix-tuwunel-deploy/mcp-servers/matrix-identity-bridge run type-check)",
-      "Bash(npm --prefix /opt/stacks/matrix-tuwunel-deploy/mcp-servers/matrix-identity-bridge test)"
+      "Bash(npm --prefix /opt/stacks/matrix-tuwunel-deploy/mcp-servers/matrix-identity-bridge test)",
+      "Bash(npx tsc *)"
     ],
     "deny": []
   }

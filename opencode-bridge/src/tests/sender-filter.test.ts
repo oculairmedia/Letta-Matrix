@@ -5,6 +5,7 @@ import {
   isAdmissibleForRoomDelivery,
   isKnownBotSender,
   isOpenCodeIdentity,
+  mentionUserIdsInclude,
 } from "../sender-filter.js";
 
 const DOMAIN = "matrix.oculair.ca";
@@ -92,6 +93,53 @@ test("admits a peer @oc_* identity that explicitly mentions the room owner", () 
   const r = isAdmissibleForRoomDelivery({
     senderMxid: "@oc_matrix_tuwunel_deploy:matrix.oculair.ca",
     body: "hey @oc_letta_mobile_v2:matrix.oculair.ca can you take over?",
+    roomOwnerIdentities: ROOM_OWNER,
+    agentBotMxids: AGENT_BOTS,
+    matrixDomain: DOMAIN,
+  });
+  assert.equal(r.admit, true);
+});
+
+test("mentionUserIdsInclude is case-insensitive and handles empty inputs", () => {
+  assert.equal(mentionUserIdsInclude(["@OC_Letta_Mobile_v2:matrix.oculair.ca"], ROOM_OWNER), true);
+  assert.equal(mentionUserIdsInclude(["@someone_else:matrix.oculair.ca"], ROOM_OWNER), false);
+  assert.equal(mentionUserIdsInclude([], ROOM_OWNER), false);
+  assert.equal(mentionUserIdsInclude(undefined, ROOM_OWNER), false);
+  assert.equal(mentionUserIdsInclude(["@oc_letta_mobile:matrix.oculair.ca"], []), false);
+});
+
+test("admits an agent bot that pill-mentions the room owner (body has displayname only)", () => {
+  // Reproduces the displayname-rename drop: pill clients put the displayname in
+  // body, so bodyMentionsAny returns false. The MXID must come from m.mentions.user_ids.
+  const r = isAdmissibleForRoomDelivery({
+    senderMxid: "@lettapm_agent:matrix.oculair.ca",
+    body: "@Letta Mobile please handle this",
+    mentionUserIds: ["@oc_letta_mobile_v2:matrix.oculair.ca"],
+    roomOwnerIdentities: ROOM_OWNER,
+    agentBotMxids: AGENT_BOTS,
+    matrixDomain: DOMAIN,
+  });
+  assert.equal(r.admit, true);
+});
+
+test("still drops an agent bot when neither body nor pills mention the room owner", () => {
+  const r = isAdmissibleForRoomDelivery({
+    senderMxid: "@lettapm_agent:matrix.oculair.ca",
+    body: "just some chatter with @Someone Else",
+    mentionUserIds: ["@oc_other_project_v2:matrix.oculair.ca"],
+    roomOwnerIdentities: ROOM_OWNER,
+    agentBotMxids: AGENT_BOTS,
+    matrixDomain: DOMAIN,
+  });
+  assert.equal(r.admit, false);
+  assert.match(r.reason, /bot sender.*without explicit mention/);
+});
+
+test("admits a peer @oc_* identity via pill-only mention", () => {
+  const r = isAdmissibleForRoomDelivery({
+    senderMxid: "@oc_matrix_tuwunel_deploy:matrix.oculair.ca",
+    body: "hey @Letta Mobile can you take over?",
+    mentionUserIds: ["@oc_letta_mobile_v2:matrix.oculair.ca"],
     roomOwnerIdentities: ROOM_OWNER,
     agentBotMxids: AGENT_BOTS,
     matrixDomain: DOMAIN,

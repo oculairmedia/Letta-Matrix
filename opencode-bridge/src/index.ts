@@ -143,22 +143,39 @@ function deriveMatrixIdentities(directory: string): string[] {
   ];
 }
 
-function extractOpenCodeMentions(body: string): string[] {
+const OC_MXID_SHAPE = /^@oc_[a-z0-9_]+(_v2)?:[a-z0-9.-]+$/i;
+
+function extractOpenCodeMentions(body: string, mentionUserIds?: readonly string[]): string[] {
+  // Pill clients write the target's displayname into body and the real MXID
+  // into m.mentions.user_ids (MSC 3952). Body regex alone misses them whenever
+  // the OC session's displayname doesn't equal its localpart.
+  const found = new Set<string>();
+
+  if (mentionUserIds && mentionUserIds.length > 0) {
+    for (const mxid of mentionUserIds) {
+      if (typeof mxid === "string" && OC_MXID_SHAPE.test(mxid)) {
+        found.add(mxid);
+      }
+    }
+  }
+
   const lines = body.split('\n');
   let actualMessage = body;
-  
-  if (lines[0].startsWith('> ')) {
-    const firstNonQuoteIdx = lines.findIndex((line, idx) => 
+
+  if (lines[0]?.startsWith('> ')) {
+    const firstNonQuoteIdx = lines.findIndex((line, idx) =>
       idx > 0 && line === '' && lines[idx - 1].startsWith('>')
     );
     if (firstNonQuoteIdx >= 0 && firstNonQuoteIdx < lines.length - 1) {
       actualMessage = lines.slice(firstNonQuoteIdx + 1).join('\n');
     }
   }
-  
+
   const mentionRegex = /@oc_[a-z0-9_]+(_v2)?:[a-z0-9._-]+/gi;
-  const matches = actualMessage.match(mentionRegex) || [];
-  return [...new Set(matches)];
+  for (const match of actualMessage.match(mentionRegex) || []) {
+    found.add(match);
+  }
+  return [...found];
 }
 
 async function loadAgentMappings(): Promise<boolean> {
@@ -448,6 +465,10 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
   const senderMxid = event.getSender() || "unknown";
   const body = content.body || "";
   const eventId = event.getId() || "";
+  const rawMentions = (content as { "m.mentions"?: { user_ids?: unknown } })["m.mentions"]?.user_ids;
+  const mentionUserIds: string[] = Array.isArray(rawMentions)
+    ? rawMentions.filter((id): id is string => typeof id === "string")
+    : [];
 
   const now = Date.now();
   if (wasEventProcessed(eventId, now)) {
@@ -466,6 +487,7 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
     const admission = isAdmissibleForRoomDelivery({
       senderMxid,
       body,
+      mentionUserIds,
       roomOwnerIdentities,
       agentBotMxids,
       matrixDomain: MATRIX_DOMAIN,
@@ -482,8 +504,8 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
     return;
   }
 
-  // Path 2: Mention-based delivery (@oc_* mentions in message body)
-  const mentions = extractOpenCodeMentions(body);
+  // Path 2: Mention-based delivery (@oc_* mentions in body or m.mentions pills)
+  const mentions = extractOpenCodeMentions(body, mentionUserIds);
   if (mentions.length === 0) return;
 
   for (const mention of mentions) {
