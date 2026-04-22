@@ -209,7 +209,7 @@ function getOrCreateMessageDir(sessionID: string): string {
   return directPath;
 }
 
-function injectMessage(sessionID: string, text: string, cwd?: string): boolean {
+function injectMessage(sessionID: string, text: string, cwd?: string, agent?: string): boolean {
   if (!text || text.trim().length === 0) {
     debugLog("[MatrixPlugin] Attempted to inject empty message, skipping");
     return false;
@@ -221,14 +221,16 @@ function injectMessage(sessionID: string, text: string, cwd?: string): boolean {
   const messageID = generateMessageId();
   const partID = generatePartId();
 
-  // Deliberately omit agent/model — OpenCode will resolve the session's active
-  // agent when rendering. Hard-coded defaults here previously leaked stale
-  // provider references (llmux/Opus 4.6) after opencode.json renames.
+  // Deliberately omit `model` — hard-coded model values leaked stale provider
+  // references after opencode.json renames (llmux → _llmux_DISABLED). `agent`
+  // is safe to pass and keeps injected Matrix messages pinned to the user's
+  // currently-active OC agent instead of OC's fallback.
   const messageMeta: MessageMeta = {
     id: messageID,
     sessionID,
     role: "user",
     time: { created: now },
+    agent: agent && agent.trim() ? agent : undefined,
     path: cwd ? { cwd, root: "/" } : undefined,
   };
 
@@ -267,6 +269,37 @@ function getSessionUpdatedAtMs(session: any): number {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function readActiveAgentFromHistory(sessionID: string): string | undefined {
+  // Scan the session's message files for the most recent one carrying an
+  // explicit `agent` field. OC writes this on assistant turns, so the latest
+  // hit reflects whichever agent the session last ran under — which is what
+  // the user sees as "active" in the TUI.
+  try {
+    const messageDir = getOrCreateMessageDir(sessionID);
+    if (!existsSync(messageDir)) return undefined;
+    let bestAgent: string | undefined;
+    let bestCreated = -Infinity;
+    for (const file of readdirSync(messageDir)) {
+      if (!file.endsWith(".json")) continue;
+      try {
+        const raw = readFileSync(path.join(messageDir, file), "utf-8");
+        const parsed = JSON.parse(raw) as { agent?: unknown; time?: { created?: unknown } };
+        const agent = typeof parsed.agent === "string" ? parsed.agent.trim() : "";
+        const created = typeof parsed.time?.created === "number" ? parsed.time.created : 0;
+        if (agent && created > bestCreated) {
+          bestAgent = agent;
+          bestCreated = created;
+        }
+      } catch {
+        // skip unreadable/malformed files
+      }
+    }
+    return bestAgent;
+  } catch {
+    return undefined;
+  }
 }
 
 async function getActiveSessionId(client: any, targetDirectory: string): Promise<string | null> {
@@ -446,6 +479,19 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   let wsReconnectTimeout: NodeJS.Timeout | null = null;
   let shuttingDown = false;
   const pendingMessages = new Map<string, { content: string; sentLength: number; timer: NodeJS.Timeout | null }>();
+  // Hot cache of the session's current active agent, populated from each
+  // chat.message hook (which carries input.agent). Used to pin injected
+  // Matrix messages to whatever agent the user currently has selected, so
+  // OC doesn't fall back to its default (e.g. sisyphus) on inject.
+  const sessionActiveAgent = new Map<string, string>();
+
+  const getActiveAgentForSession = (sessionID: string): string | undefined => {
+    const cached = sessionActiveAgent.get(sessionID);
+    if (cached) return cached;
+    const fromHistory = readActiveAgentFromHistory(sessionID);
+    if (fromHistory) sessionActiveAgent.set(sessionID, fromHistory);
+    return fromHistory;
+  };
   // (STREAM_SETTLE_MS removed — scheduleOutboundSend was dead code, outbound messages use sendOutboundMessage directly)
   
   // Queue for incoming Matrix messages - inject on session.idle
@@ -497,24 +543,34 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       toRemove.forEach(id => processedEventIds.delete(id));
     }
     
+    const activeAgent = getActiveAgentForSession(sessionId);
+    // Pin to the session's currently-active agent so injected Matrix messages
+    // don't flip OC to its default fallback (e.g. sisyphus). Deliberately do
+    // NOT set `model` — that's what caused stale-provider errors after
+    // opencode.json provider renames (llmux → _llmux_DISABLED).
+    const body: { parts: { type: "text"; text: string }[]; agent?: string } = {
+      parts: [{ type: "text", text: combinedMessages }],
+    };
+    if (activeAgent) {
+      body.agent = activeAgent;
+      debugLog(`Pinning inject to active agent: ${activeAgent}`);
+    } else {
+      debugLog(`No active agent known for session ${sessionId} — letting OC resolve default`);
+    }
+
     try {
       debugLog(`Attempting session.prompt (${trigger}) with sessionId=${sessionId}`);
       debugLog(`Combined message content: ${combinedMessages.substring(0, 200)}...`);
-      // No agent/model override — let OpenCode resolve the session's active agent.
-      // Inheriting from prior message history caused stale-provider errors after
-      // opencode.json provider renames (e.g. llmux → _llmux_DISABLED).
       await client.session.prompt({
         path: { id: sessionId },
-        body: {
-          parts: [{ type: "text", text: combinedMessages }],
-        },
+        body,
         query: { directory: baseDir },
       });
       debugLog(`SUCCESS (${trigger}): Injected queued messages via session.prompt`);
     } catch (e: any) {
       debugLog(`FAILED (${trigger}): session.prompt error: ${e?.message || e}`);
       // Fallback to file-based injection
-      const fallbackResult = injectMessage(sessionId, combinedMessages, baseDir);
+      const fallbackResult = injectMessage(sessionId, combinedMessages, baseDir, activeAgent);
       debugLog(`Fallback file-based injection result (${trigger}): ${fallbackResult}`);
     }
   };
@@ -740,6 +796,15 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   
   return {
     "chat.message": async (input: any, output: any) => {
+      // Capture the session's currently-active agent on every turn. This is
+      // the hot source of truth — when the user switches with `/hephaestus`
+      // etc., the next chat.message fires with the new input.agent.
+      const agentHint = typeof input?.agent === "string" ? input.agent.trim() : "";
+      const sessionIdHint = typeof input?.sessionID === "string" ? input.sessionID : "";
+      if (agentHint && sessionIdHint) {
+        sessionActiveAgent.set(sessionIdHint, agentHint);
+      }
+
       const userMsg = input?.message;
       if (!userMsg) return;
       
