@@ -484,12 +484,25 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
   // Matrix messages to whatever agent the user currently has selected, so
   // OC doesn't fall back to its default (e.g. sisyphus) on inject.
   const sessionActiveAgent = new Map<string, string>();
+  const SESSION_AGENT_CACHE_MAX = 50;
+
+  const cacheActiveAgent = (sessionID: string, agent: string): void => {
+    // Bump-to-end on re-set so Map iteration order tracks recency; when we
+    // blow the cap, drop the least-recently-touched entry.
+    if (sessionActiveAgent.has(sessionID)) sessionActiveAgent.delete(sessionID);
+    sessionActiveAgent.set(sessionID, agent);
+    while (sessionActiveAgent.size > SESSION_AGENT_CACHE_MAX) {
+      const oldest = sessionActiveAgent.keys().next().value;
+      if (!oldest) break;
+      sessionActiveAgent.delete(oldest);
+    }
+  };
 
   const getActiveAgentForSession = (sessionID: string): string | undefined => {
     const cached = sessionActiveAgent.get(sessionID);
     if (cached) return cached;
     const fromHistory = readActiveAgentFromHistory(sessionID);
-    if (fromHistory) sessionActiveAgent.set(sessionID, fromHistory);
+    if (fromHistory) cacheActiveAgent(sessionID, fromHistory);
     return fromHistory;
   };
   // (STREAM_SETTLE_MS removed — scheduleOutboundSend was dead code, outbound messages use sendOutboundMessage directly)
@@ -558,6 +571,16 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       debugLog(`No active agent known for session ${sessionId} — letting OC resolve default`);
     }
 
+    const isAgentRejection = (err: any): boolean => {
+      // 400 "agent not found" shape varies across OC versions — match by
+      // status + mention of "agent" so a rename/deletion in oh-my-openagent
+      // doesn't strand the session. Anything else falls through to the
+      // file-based fallback below.
+      const status = err?.status ?? err?.response?.status ?? err?.cause?.status;
+      const msg = (err?.message || err?.body?.error?.message || "").toString().toLowerCase();
+      return status === 400 && msg.includes("agent");
+    };
+
     try {
       debugLog(`Attempting session.prompt (${trigger}) with sessionId=${sessionId}`);
       debugLog(`Combined message content: ${combinedMessages.substring(0, 200)}...`);
@@ -568,9 +591,30 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       });
       debugLog(`SUCCESS (${trigger}): Injected queued messages via session.prompt`);
     } catch (e: any) {
-      debugLog(`FAILED (${trigger}): session.prompt error: ${e?.message || e}`);
-      // Fallback to file-based injection
-      const fallbackResult = injectMessage(sessionId, combinedMessages, baseDir, activeAgent);
+      if (body.agent && isAgentRejection(e)) {
+        // Stale agent pin — alias likely removed from oh-my-openagent.json
+        // since we cached it. Drop the cache entry and retry unpinned.
+        debugLog(`Agent '${body.agent}' rejected by server; clearing cache and retrying without pin`);
+        sessionActiveAgent.delete(sessionId);
+        const { agent: _drop, ...bodyNoAgent } = body;
+        try {
+          await client.session.prompt({
+            path: { id: sessionId },
+            body: bodyNoAgent,
+            query: { directory: baseDir },
+          });
+          debugLog(`SUCCESS (${trigger} retry): Injected queued messages without agent pin`);
+          return;
+        } catch (retryErr: any) {
+          debugLog(`RETRY FAILED (${trigger}): ${retryErr?.message || retryErr}`);
+        }
+      } else {
+        debugLog(`FAILED (${trigger}): session.prompt error: ${e?.message || e}`);
+      }
+      // Last resort: file-based injection (pass agent only if we still
+      // believe it's valid — after a rejection we omit it here too).
+      const agentForFallback = body.agent && !isAgentRejection(e) ? activeAgent : undefined;
+      const fallbackResult = injectMessage(sessionId, combinedMessages, baseDir, agentForFallback);
       debugLog(`Fallback file-based injection result (${trigger}): ${fallbackResult}`);
     }
   };
@@ -802,10 +846,13 @@ export const MatrixContextInjector: Plugin = async ({ client, directory, worktre
       const agentHint = typeof input?.agent === "string" ? input.agent.trim() : "";
       const sessionIdHint = typeof input?.sessionID === "string" ? input.sessionID : "";
       if (agentHint && sessionIdHint) {
-        sessionActiveAgent.set(sessionIdHint, agentHint);
+        cacheActiveAgent(sessionIdHint, agentHint);
       }
 
-      const userMsg = input?.message;
+      // Per @opencode-ai/plugin types, `message` lives on `output`, but older
+      // runtime versions have surfaced it on `input`. Check both so we don't
+      // silently drop turns after an SDK bump.
+      const userMsg = output?.message ?? input?.message;
       if (!userMsg) return;
       
       let content: string | null = null;
