@@ -128,7 +128,7 @@ class MatrixRoomManager(
                 data = await response.json()
                 room_ids = data.get("joined_rooms", [])
 
-            expected_name = f"{agent_name} - Letta Agent Chat"
+            expected_name = agent_name
             for room_id in room_ids:
                 state_url = f"{self.homeserver_url}/_matrix/client/r0/rooms/{room_id}/state/m.room.name"
                 async with session.get(state_url, headers=headers) as state_response:
@@ -217,7 +217,7 @@ class MatrixRoomManager(
             ]
 
             room_data = {
-                "name": f"{mapping.agent_name} - Letta Agent Chat",
+                "name": mapping.agent_name,
                 "topic": self._build_agent_room_topic(mapping.agent_name),
                 "preset": "trusted_private_chat",
                 "invite": invites,

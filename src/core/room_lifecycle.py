@@ -31,13 +31,13 @@ class RoomLifecycleMixin:
             }
 
             room_name_data = {
-                "name": f"{new_name} - Letta Agent Chat"
+                "name": new_name
             }
 
             session = await self._get_session()
             async with session.put(url, headers=headers, json=room_name_data, timeout=DEFAULT_TIMEOUT) as response:
                 if response.status == 200:
-                    logger.info(f"Successfully updated room name for {room_id} to '{new_name} - Letta Agent Chat'")
+                    logger.info(f"Successfully updated room name for {room_id} to '{new_name}'")
                     return True
                 else:
                     error_text = await response.text()
