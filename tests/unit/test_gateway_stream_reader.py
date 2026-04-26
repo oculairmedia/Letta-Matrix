@@ -296,3 +296,212 @@ class TestCollectViaGateway:
 
         result = await collect_via_gateway(mock_client, "agent-1", "msg")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Partial-JSON tool_call snapshot dedup
+# ---------------------------------------------------------------------------
+
+
+class TestPartialJsonToolCallDedup:
+    """
+    The lettabot WS gateway emits N progressive tool_call snapshots per
+    tool_call_id when partial-JSON streaming is enabled
+    (LETTABOT_PARTIAL_JSON_TOOL_CALL=on). Each running snapshot carries
+    progressively more args; the terminal one is tagged status='completed'.
+
+    Per the wire contract in lettabot/docs/architecture/bot-stream-coalescer.md,
+    "newer snapshot → strictly more information → safe to drop older". Clients
+    must dedup by tool_call_id. This reader must yield exactly ONE TOOL_CALL
+    event per logical call, and the tool-loop counter must increment exactly
+    once per id.
+    """
+
+    def test_parse_propagates_status_field(self):
+        raw = {
+            "type": "stream",
+            "event": "tool_call",
+            "tool_name": "bash",
+            "tool_call_id": "tc-1",
+            "tool_input": {"command": "ls"},
+            "status": "running",
+        }
+        event = _parse_stream_event(raw, include_reasoning=False)
+        assert event is not None
+        assert event.metadata["tool_call_status"] == "running"
+
+    def test_parse_omits_status_when_absent(self):
+        """Legacy single-emit path: no status field → no tool_call_status."""
+        raw = {
+            "type": "stream",
+            "event": "tool_call",
+            "tool_name": "bash",
+            "tool_call_id": "tc-1",
+        }
+        event = _parse_stream_event(raw, include_reasoning=False)
+        assert event is not None
+        assert "tool_call_status" not in event.metadata
+
+    @pytest.mark.asyncio
+    async def test_running_snapshots_suppressed_completed_yielded(self):
+        """20 running snapshots + 1 completed → exactly 1 TOOL_CALL event."""
+        raw_events = [
+            {
+                "type": "stream",
+                "event": "tool_call",
+                "tool_name": "bash",
+                "tool_call_id": "tc-1",
+                "tool_input": {"command": partial},
+                "status": "running",
+            }
+            for partial in [
+                "", "g", "gi", "git", "git ", "git s",
+                "git st", "git sta", "git stat", "git statu",
+            ]
+        ] + [
+            {
+                "type": "stream",
+                "event": "tool_call",
+                "tool_name": "bash",
+                "tool_call_id": "tc-1",
+                "tool_input": {"command": "git status"},
+                "status": "completed",
+            },
+            {"type": "result"},
+        ]
+
+        async def fake_stream(**kwargs):
+            for e in raw_events:
+                yield e
+
+        mock_client = MagicMock()
+        mock_client.send_message_streaming = fake_stream
+
+        events = []
+        async for ev in stream_via_gateway(mock_client, "agent-1", "msg"):
+            events.append(ev)
+
+        tool_events = [e for e in events if e.type == StreamEventType.TOOL_CALL]
+        assert len(tool_events) == 1, f"expected 1 tool_call, got {len(tool_events)}"
+        assert tool_events[0].metadata["arguments"] == {"command": "git status"}
+        assert tool_events[0].metadata["tool_call_status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_legacy_single_emit_still_yielded(self):
+        """No status field (legacy gateway) → frame yielded as before."""
+        raw_events = [
+            {
+                "type": "stream",
+                "event": "tool_call",
+                "tool_name": "bash",
+                "tool_call_id": "tc-1",
+                "arguments": '{"command": "ls"}',
+            },
+            {"type": "result"},
+        ]
+
+        async def fake_stream(**kwargs):
+            for e in raw_events:
+                yield e
+
+        mock_client = MagicMock()
+        mock_client.send_message_streaming = fake_stream
+
+        events = []
+        async for ev in stream_via_gateway(mock_client, "agent-1", "msg"):
+            events.append(ev)
+
+        tool_events = [e for e in events if e.type == StreamEventType.TOOL_CALL]
+        assert len(tool_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_running_snapshots_dont_inflate_loop_counter(self):
+        """
+        Loop counter should count logical calls, not snapshots. With
+        max_tool_calls=3 and 50 running snapshots across 3 ids + 3 completed,
+        we should NOT trip the loop guard.
+        """
+        raw_events = []
+        for tc_idx in range(3):
+            tc_id = f"tc-{tc_idx}"
+            for _ in range(15):
+                raw_events.append({
+                    "type": "stream",
+                    "event": "tool_call",
+                    "tool_name": "bash",
+                    "tool_call_id": tc_id,
+                    "tool_input": {},
+                    "status": "running",
+                })
+            raw_events.append({
+                "type": "stream",
+                "event": "tool_call",
+                "tool_name": "bash",
+                "tool_call_id": tc_id,
+                "tool_input": {"command": f"cmd-{tc_idx}"},
+                "status": "completed",
+            })
+        raw_events.append({"type": "result"})
+
+        async def fake_stream(**kwargs):
+            for e in raw_events:
+                yield e
+
+        mock_client = MagicMock()
+        mock_client.send_message_streaming = fake_stream
+
+        events = []
+        async for ev in stream_via_gateway(
+            mock_client, "agent-1", "msg", max_tool_calls=3
+        ):
+            events.append(ev)
+
+        error_events = [e for e in events if e.type == StreamEventType.ERROR]
+        tool_events = [e for e in events if e.type == StreamEventType.TOOL_CALL]
+        assert error_events == [], "loop guard tripped on snapshots, not logical calls"
+        assert len(tool_events) == 3
+
+    @pytest.mark.asyncio
+    async def test_completed_snapshot_flushes_pending_assistant(self):
+        """
+        Same flush semantics as before: assistant content before a tool call
+        gets flushed when the (now: completed) tool_call is seen.
+        """
+        raw_events = [
+            {"type": "stream", "event": "assistant", "content": "Let me ", "uuid": "m1"},
+            {"type": "stream", "event": "assistant", "content": "check.", "uuid": "m1"},
+            {
+                "type": "stream",
+                "event": "tool_call",
+                "tool_name": "search",
+                "tool_call_id": "tc-1",
+                "tool_input": {},
+                "status": "running",
+            },
+            {
+                "type": "stream",
+                "event": "tool_call",
+                "tool_name": "search",
+                "tool_call_id": "tc-1",
+                "tool_input": {"q": "x"},
+                "status": "completed",
+            },
+            {"type": "result"},
+        ]
+
+        async def fake_stream(**kwargs):
+            for e in raw_events:
+                yield e
+
+        mock_client = MagicMock()
+        mock_client.send_message_streaming = fake_stream
+
+        events = []
+        async for ev in stream_via_gateway(mock_client, "agent-1", "search"):
+            events.append(ev)
+
+        types = [e.type for e in events]
+        # Assistant should be flushed before tool call
+        assert types.index(StreamEventType.ASSISTANT) < types.index(StreamEventType.TOOL_CALL)
+        assistant_ev = next(e for e in events if e.type == StreamEventType.ASSISTANT)
+        assert assistant_ev.content == "Let me check."

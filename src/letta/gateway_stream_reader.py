@@ -41,6 +41,17 @@ async def stream_via_gateway(
     assistant_chunks: list[str] = []
     assistant_metadata: Dict[str, Any] = {}
     current_assistant_uuid: Optional[str] = None
+    # Partial-JSON tool_call dedup: the WS gateway emits N progressive
+    # snapshots per tool_call_id (status='running' while args stream in,
+    # then a terminal status='completed'). Per the wire contract in
+    # lettabot/docs/architecture/bot-stream-coalescer.md, "newer snapshot
+    # → strictly more information → safe to drop older". We track ids
+    # we've already seen and only yield on:
+    #   - status == 'completed' (terminal — args fully accumulated), OR
+    #   - status absent (legacy single-emit path; pre-partial-JSON gateways)
+    # Running snapshots are buffered (we keep the latest per id) so the
+    # tool loop counter increments exactly once per logical tool call.
+    seen_tool_call_ids: set[str] = set()
     gateway_message = json.dumps(message) if isinstance(message, list) else message
 
     def _flush_assistant():
@@ -67,6 +78,30 @@ async def stream_via_gateway(
             continue
 
         if event.type == StreamEventType.TOOL_CALL:
+            # Partial-JSON snapshot dedup. See seen_tool_call_ids comment.
+            tc_status = event.metadata.get("tool_call_status")
+            tc_id = event.metadata.get("tool_call_id")
+            if tc_status == "running":
+                # Suppress intermediate snapshots; the 'completed' frame
+                # carries the fully-accumulated args. Render-side gets a
+                # single bubble per logical tool call.
+                logger.debug(
+                    "[GW-STREAM] Suppressing running tool_call snapshot id=%s",
+                    tc_id,
+                )
+                continue
+            # tc_status == 'completed' OR status absent (legacy gateway)
+            if tc_id and tc_id in seen_tool_call_ids:
+                # Defensive: same id seen twice with non-running status
+                # (shouldn't happen per gateway contract, but log if it does).
+                logger.warning(
+                    "[GW-STREAM] Duplicate completed tool_call snapshot id=%s; dropping",
+                    tc_id,
+                )
+                continue
+            if tc_id:
+                seen_tool_call_ids.add(tc_id)
+
             # Flush any pending assistant content before tool activity
             # (mirrors bot.ts type-change finalize, line 580)
             flushed = _flush_assistant()
@@ -201,6 +236,12 @@ def _parse_stream_event(
         metadata["tool_name"] = raw.get("tool_name", "unknown")
         if raw.get("tool_call_id"):
             metadata["tool_call_id"] = raw["tool_call_id"]
+        # Partial-JSON streaming: the gateway tags each progressive
+        # snapshot with status='running' and the terminal frame with
+        # status='completed'. Field is absent for legacy single-emit
+        # gateways. Pass it through so stream_via_gateway can dedup.
+        if raw.get("status"):
+            metadata["tool_call_status"] = raw["status"]
         # WS gateway sends tool args as "tool_input" (dict); legacy SDK sends
         # "arguments" (JSON string). Accept both so _extract_tool_description
         # can render tool details (e.g., "🔧 Bash [1] — git status").
