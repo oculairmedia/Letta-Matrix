@@ -41,16 +41,16 @@ async def stream_via_gateway(
     assistant_chunks: list[str] = []
     assistant_metadata: Dict[str, Any] = {}
     current_assistant_uuid: Optional[str] = None
-    # Partial-JSON tool_call dedup: the WS gateway emits N progressive
-    # snapshots per tool_call_id (status='running' while args stream in,
-    # then a terminal status='completed'). Per the wire contract in
-    # lettabot/docs/architecture/bot-stream-coalescer.md, "newer snapshot
-    # → strictly more information → safe to drop older". We track ids
-    # we've already seen and only yield on:
-    #   - status == 'completed' (terminal — args fully accumulated), OR
-    #   - status absent (legacy single-emit path; pre-partial-JSON gateways)
-    # Running snapshots are buffered (we keep the latest per id) so the
-    # tool loop counter increments exactly once per logical tool call.
+    # Tool_call dedup — defense in depth across two lettabot wire contracts:
+    #   - Modern (uww.6+, default): gateway drops status='running' server-side;
+    #     we receive exactly one frame per tool_call_id with status='completed'
+    #     (or no status field if LETTABOT_PARTIAL_JSON_ENABLED=0).
+    #   - Older or progressive opt-in (?progressive_tool_calls=1 on WS URL):
+    #     gateway emits N 'running' snapshots then a terminal 'completed'.
+    # We suppress 'running' and yield on 'completed' or absent → one StreamEvent
+    # per logical tool call regardless of which contract is on the wire, and
+    # tool_call_count increments exactly once per id. seen_tool_call_ids guards
+    # against duplicate completed frames (shouldn't happen, cheap insurance).
     seen_tool_call_ids: set[str] = set()
     gateway_message = json.dumps(message) if isinstance(message, list) else message
 
