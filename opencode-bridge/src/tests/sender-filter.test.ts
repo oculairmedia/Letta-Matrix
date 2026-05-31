@@ -5,6 +5,7 @@ import {
   isAdmissibleForRoomDelivery,
   isKnownBotSender,
   isOpenCodeIdentity,
+  isOwnOpenCodeSender,
   mentionUserIdsInclude,
 } from "../sender-filter.js";
 
@@ -15,6 +16,7 @@ const AGENT_BOTS = new Set<string>(["@lettapm_agent:matrix.oculair.ca"]);
 test("isOpenCodeIdentity matches @oc_ and @opencode_ on the configured domain", () => {
   assert.equal(isOpenCodeIdentity("@oc_foo:matrix.oculair.ca", DOMAIN), true);
   assert.equal(isOpenCodeIdentity("@opencode_bar:matrix.oculair.ca", DOMAIN), true);
+  assert.equal(isOpenCodeIdentity("@OC_Foo:Matrix.Oculair.Ca", "Matrix.Oculair.Ca"), true);
   assert.equal(isOpenCodeIdentity("@user:matrix.oculair.ca", DOMAIN), false);
   assert.equal(isOpenCodeIdentity("@oc_foo:other.example", DOMAIN), false);
 });
@@ -23,6 +25,28 @@ test("isKnownBotSender combines opencode identities and configured agent bots", 
   assert.equal(isKnownBotSender("@oc_any:matrix.oculair.ca", AGENT_BOTS, DOMAIN), true);
   assert.equal(isKnownBotSender("@lettapm_agent:matrix.oculair.ca", AGENT_BOTS, DOMAIN), true);
   assert.equal(isKnownBotSender("@alice:matrix.oculair.ca", AGENT_BOTS, DOMAIN), false);
+});
+
+test("isOwnOpenCodeSender matches any identity variant for the target registration", () => {
+  assert.equal(
+    isOwnOpenCodeSender("@oc_vibesync_v2:matrix.oculair.ca", [
+      "@oc_vibesync:matrix.oculair.ca",
+      "@oc_vibesync_v2:matrix.oculair.ca",
+    ]),
+    true,
+  );
+  assert.equal(
+    isOwnOpenCodeSender("@OC_VibeSync_V2:matrix.oculair.ca", [
+      "@oc_vibesync_v2:matrix.oculair.ca",
+    ]),
+    true,
+  );
+  assert.equal(
+    isOwnOpenCodeSender("@oc_matrix_tuwunel_deploy_v2:matrix.oculair.ca", [
+      "@oc_vibesync_v2:matrix.oculair.ca",
+    ]),
+    false,
+  );
 });
 
 test("bodyMentionsAny is case-insensitive and handles empty inputs", () => {

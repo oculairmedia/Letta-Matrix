@@ -17,7 +17,9 @@ import { createServer, IncomingMessage, ServerResponse } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { fetchAgentMappings } from "./agent-mappings.js";
 import { RegistrationDB, buildDatabaseUrlCandidates } from "./db.js";
-import { isAdmissibleForRoomDelivery } from "./sender-filter.js";
+import { formatMatrixMessageForOpenCode } from "./message-format.js";
+import { selectMemberFallbackTarget } from "./member-fallback.js";
+import { isAdmissibleForRoomDelivery, isOwnOpenCodeSender } from "./sender-filter.js";
 import {
   createBucket,
   tryConsume,
@@ -95,6 +97,11 @@ const OUTBOUND_DROP_LOG_WINDOW_MS = 5000;
 // (rejoin / initial sync) so one logical message can't reach a plugin twice.
 const PROCESSED_EVENT_TTL_MS = 5 * 60 * 1000;
 
+// Dedup window for semantically identical deliveries to the same OpenCode
+// registration. This catches cross-route duplicates where the same reply is
+// visible once through a PM mention room and again through the session room.
+const DELIVERED_MESSAGE_TTL_MS = 15 * 1000;
+
 const config = {
   matrix: {
     homeserverUrl: process.env.MATRIX_HOMESERVER_URL || "https://matrix.oculair.ca",
@@ -124,9 +131,11 @@ let matrixInitInFlight = false;
 let mappingsInitialized = false;
 let mappingsInitAttempt = 0;
 let mappingsInitScheduled = false;
+let matrixClientReady = false;
 const outboundRoomBuckets = new Map<string, TokenBucket>();
 const outboundRoomDropStats = new Map<string, { dropped: number; lastLogMs: number }>();
 const processedEventTimestamps = new Map<string, number>();
+const deliveredMessageTimestamps = new Map<string, number>();
 const AGENT_MAPPINGS_CACHE_TTL = 300000;
 
 const MATRIX_DOMAIN = process.env.MATRIX_DOMAIN || "matrix.oculair.ca";
@@ -175,7 +184,44 @@ function extractOpenCodeMentions(body: string, mentionUserIds?: readonly string[
   for (const match of actualMessage.match(mentionRegex) || []) {
     found.add(match);
   }
+
+  // Humans often type or copy the localpart/display handle without the homeserver
+  // (for example `@oc_matrix_synapse_deployment_v2`). Treat those as Matrix
+  // mentions on this homeserver so PMs and plain-text references still route.
+  const bareMentionRegex = /@oc_[a-z0-9_]+(_v2)?\b/gi;
+  for (const match of actualMessage.match(bareMentionRegex) || []) {
+    found.add(`${match}:${MATRIX_DOMAIN}`);
+  }
   return [...found];
+}
+
+function getRoomOpenCodeRegistrations(room: sdk.Room): Array<{ mxid: string; registration: OpenCodeRegistration }> {
+  const matches: Array<{ mxid: string; registration: OpenCodeRegistration }> = [];
+  const seen = new Set<string>();
+
+  for (const member of room.getJoinedMembers?.() || []) {
+    const mxid = member.userId;
+    if (!mxid || seen.has(mxid)) continue;
+    const registration = identityToRegistration.get(mxid);
+    if (registration) {
+      seen.add(mxid);
+      matches.push({ mxid, registration });
+    }
+  }
+
+  return matches;
+}
+
+function getRegistrationIdentityMxids(registration: OpenCodeRegistration): string[] {
+  const identities = new Set<string>(deriveMatrixIdentities(registration.directory));
+  for (const [mxid, indexedRegistration] of identityToRegistration.entries()) {
+    if (indexedRegistration === registration) identities.add(mxid);
+  }
+  return [...identities];
+}
+
+function isRegistrationSelfSender(registration: OpenCodeRegistration, senderMxid: string): boolean {
+  return isOwnOpenCodeSender(senderMxid, getRegistrationIdentityMxids(registration));
 }
 
 async function loadAgentMappings(): Promise<boolean> {
@@ -360,6 +406,22 @@ function forwardToOpenCode(
   body: string,
   eventId: string
 ): boolean {
+  const now = Date.now();
+  if (isRegistrationSelfSender(registration, senderMxid)) {
+    console.log(
+      `[Bridge] Dropping outbound echo for ${registration.id}: sender=${senderMxid} room=${roomId} event=${eventId}`,
+    );
+    return true;
+  }
+
+  const semanticKey = deliveredMessageKey(registration, body);
+  if (wasRecentlyDelivered(semanticKey, now)) {
+    console.log(
+      `[Bridge] Duplicate semantic delivery to ${registration.id}, skipping room=${roomId} event=${eventId}`,
+    );
+    return true;
+  }
+
   if (!registration.ws || registration.ws.readyState !== WebSocket.OPEN) {
     console.warn(`[Bridge] Cannot forward to ${registration.id}: WebSocket ${!registration.ws ? 'is null' : `readyState=${registration.ws.readyState}`}`);
     return false;
@@ -370,13 +432,14 @@ function forwardToOpenCode(
     sender,
     senderMxid,
     roomId,
-    body,
+    body: formatMatrixMessageForOpenCode({ sender, senderMxid, body }),
     eventId,
   };
 
   try {
     registration.ws.send(JSON.stringify(message));
-    registration.lastSeen = Date.now();
+    markRecentlyDelivered(semanticKey, now);
+    registration.lastSeen = now;
     return true;
   } catch (err) {
     console.error(`[Bridge] Failed to forward to WebSocket for ${registration.id}:`, err);
@@ -393,7 +456,24 @@ function queueMessage(
   eventId: string
 ): void {
   const now = Date.now();
+  if (isRegistrationSelfSender(registration, senderMxid)) {
+    console.log(
+      `[Bridge] Not queueing outbound echo for ${registration.id}: sender=${senderMxid} room=${roomId} event=${eventId}`,
+    );
+    return;
+  }
+
+  const semanticKey = deliveredMessageKey(registration, body);
   registration.messageQueue = registration.messageQueue.filter(m => now - m.queuedAt < QUEUE_MESSAGE_TTL_MS);
+  const alreadyQueued = registration.messageQueue.some(
+    (message) => deliveredMessageKey(registration, message.body) === semanticKey,
+  );
+  if (wasRecentlyDelivered(semanticKey, now) || alreadyQueued) {
+    console.log(
+      `[Bridge] Duplicate semantic queue for ${registration.id}, skipping room=${roomId} event=${eventId}`,
+    );
+    return;
+  }
 
   if (registration.messageQueue.length >= MAX_QUEUE_SIZE) {
     console.warn(`[Bridge] Queue full for ${registration.id} (${MAX_QUEUE_SIZE} messages), dropping oldest`);
@@ -454,6 +534,37 @@ function markEventProcessed(eventId: string, nowMs: number): void {
   }
 }
 
+function normalizeForDeliveryDedupe(body: string): string {
+  return body
+    .replace(/@oc_[a-z0-9_]+(?:_v2)?(?::[a-z0-9.-]+)?/gi, "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function deliveredMessageKey(registration: OpenCodeRegistration, body: string): string {
+  return `${registration.id}\u0000${normalizeForDeliveryDedupe(body)}`;
+}
+
+function wasRecentlyDelivered(key: string, nowMs: number): boolean {
+  const ts = deliveredMessageTimestamps.get(key);
+  if (ts === undefined) return false;
+  if (nowMs - ts > DELIVERED_MESSAGE_TTL_MS) {
+    deliveredMessageTimestamps.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function markRecentlyDelivered(key: string, nowMs: number): void {
+  deliveredMessageTimestamps.set(key, nowMs);
+  if (deliveredMessageTimestamps.size > 5000) {
+    const cutoff = nowMs - DELIVERED_MESSAGE_TTL_MS;
+    for (const [entryKey, timestamp] of deliveredMessageTimestamps) {
+      if (timestamp < cutoff) deliveredMessageTimestamps.delete(entryKey);
+    }
+  }
+}
+
 async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Promise<void> {
   if (event.getSender() === matrixClient?.getUserId()) return;
   if (event.getType() !== "m.room.message") return;
@@ -506,7 +617,49 @@ async function handleMatrixMessage(event: sdk.MatrixEvent, room: sdk.Room): Prom
 
   // Path 2: Mention-based delivery (@oc_* mentions in body or m.mentions pills)
   const mentions = extractOpenCodeMentions(body, mentionUserIds);
-  if (mentions.length === 0) return;
+  if (mentions.length === 0) {
+    const roomIdentityMatches = getRoomOpenCodeRegistrations(room)
+      .filter(({ mxid }) => mxid !== senderMxid);
+
+    const fallbackDecision = selectMemberFallbackTarget({
+      senderMxid,
+      body,
+      mentionUserIds,
+      candidates: roomIdentityMatches.map(({ mxid, registration }) => ({
+        mxid,
+        roomOwnerIdentities: deriveMatrixIdentities(registration.directory),
+      })),
+      agentBotMxids,
+      matrixDomain: MATRIX_DOMAIN,
+    });
+
+    if (fallbackDecision.kind === "drop") {
+      console.log(`[Bridge] Member-based drop (${fallbackDecision.reason}): room=${roomId} sender=${senderMxid} target=${fallbackDecision.target.mxid}`);
+      return;
+    }
+
+    if (fallbackDecision.kind === "forward") {
+      const match = roomIdentityMatches.find(({ mxid }) => mxid === fallbackDecision.target.mxid);
+      if (!match) {
+        console.warn(`[Bridge] Member-based target disappeared during routing: room=${roomId} sender=${senderMxid} target=${fallbackDecision.target.mxid}`);
+        return;
+      }
+
+      const { mxid, registration } = match;
+      if (forwardToOpenCode(registration, roomId, senderName, senderMxid, body, eventId)) {
+        console.log(`[Bridge] Member-based forward to ${registration.id} for ${mxid}: SUCCESS room=${roomId} event=${eventId}`);
+      } else {
+        queueMessage(registration, roomId, senderName, senderMxid, body, eventId);
+        console.log(`[Bridge] Member-based forward to ${registration.id} for ${mxid}: QUEUED room=${roomId} event=${eventId}`);
+      }
+      return;
+    }
+
+    if (fallbackDecision.kind === "ambiguous") {
+      console.log(`[Bridge] Member-based routing ambiguous in room=${roomId}: ${fallbackDecision.candidates.map(m => m.mxid).join(', ')}`);
+    }
+    return;
+  }
 
   for (const mention of mentions) {
     // Don't forward a mention to the sender themselves (echo prevention)
@@ -642,6 +795,7 @@ async function initMatrix(): Promise<void> {
     }
 
     matrixClient = client;
+    matrixClientReady = true;
     matrixInitAttempt = 0;
     console.log(`[Bridge] Matrix client ready as ${resolvedUserId}`);
   } finally {
@@ -669,7 +823,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       registrations: registrations.size,
       connectedPlugins: Array.from(registrations.values()).filter(r => r.status === 'connected').length,
       degradedPlugins: Array.from(registrations.values()).filter(r => r.status === 'degraded').length,
-      matrixConnected: matrixClient?.isLoggedIn() || false,
+      matrixConnected: matrixClientReady,
     }));
     return;
   }
