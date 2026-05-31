@@ -416,11 +416,12 @@ function drainMessageQueue(registration: OpenCodeRegistration): void {
   console.log(`[Bridge] Draining ${validMessages.length} queued messages for ${registration.id}`);
 
   let delivered = 0;
-  for (const msg of validMessages) {
+  for (let i = 0; i < validMessages.length; i++) {
+    const msg = validMessages[i];
     if (forwardToOpenCode(registration, msg.roomId, msg.sender, msg.senderMxid, msg.body, msg.eventId)) {
       delivered++;
     } else {
-      const remaining = validMessages.slice(validMessages.indexOf(msg));
+      const remaining = validMessages.slice(i);
       registration.messageQueue = remaining;
       console.warn(`[Bridge] WS dropped during drain for ${registration.id}, re-queued ${remaining.length} messages`);
       break;
