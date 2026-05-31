@@ -1,6 +1,8 @@
 export function isOpenCodeIdentity(mxid: string, matrixDomain: string): boolean {
-  if (!mxid.endsWith(`:${matrixDomain}`)) return false;
-  return mxid.startsWith("@oc_") || mxid.startsWith("@opencode_");
+  const normalizedMxid = mxid.toLowerCase();
+  const normalizedDomain = matrixDomain.toLowerCase();
+  if (!normalizedMxid.endsWith(`:${normalizedDomain}`)) return false;
+  return normalizedMxid.startsWith("@oc_") || normalizedMxid.startsWith("@opencode_");
 }
 
 export function isKnownBotSender(
@@ -9,6 +11,14 @@ export function isKnownBotSender(
   matrixDomain: string
 ): boolean {
   return isOpenCodeIdentity(mxid, matrixDomain) || agentBotMxids.has(mxid);
+}
+
+export function isOwnOpenCodeSender(
+  senderMxid: string,
+  targetIdentityMxids: ReadonlyArray<string>
+): boolean {
+  const normalizedSender = senderMxid.toLowerCase();
+  return targetIdentityMxids.some((mxid) => mxid.toLowerCase() === normalizedSender);
 }
 
 export function bodyMentionsAny(body: string, mxids: ReadonlyArray<string>): boolean {
